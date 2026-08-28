@@ -1,0 +1,32 @@
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+client_secret*.json
+*credentials*.json
+*token*.json
+*_tokens.*
+
+# Local/generated study data
+vocab.json
+generated_vocab.json
+progress.json
+dictionary_cache.json
+vocab_sync_tokens.local.json
+*.backup.json
+*.local.json
+
+# Development/runtime files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp

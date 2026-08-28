@@ -1,0 +1,23718 @@
+/* ============================================================
+   STORAGE & STATE
+   ============================================================ */
+const LS = {
+  VOCAB: "ielts_vocab_source_v1",
+  PROGRESS: "ielts_vocab_progress_v1",
+  DICT: "ielts_vocab_dictionary_cache_v1",
+  KNOWN: "ielts_vocab_known_v1",
+  VIEW: "ielts_vocab_view_v1",
+  COLLAPSED: "ielts_vocab_collapsed_v1",
+  REVIEW: "ielts_vocab_review_v1",
+  PRACTICE_HISTORY: "ielts_vocab_practice_history_v1",
+  PRACTICE_LAST_CFG: "ielts_vocab_practice_last_cfg_v1",
+  EASY_MODE: "ielts_vocab_easy_mode_v1",
+  EASY_DICT: "ielts_vocab_easy_dict_cache_v1",
+  GOAL: "ielts_vocab_goal_v1",
+  DAILY_RECORD: "ielts_vocab_daily_record_v1",
+  CLOUD_USER_EMAIL: "ielts_vocab_cloud_email_v1",
+  CLOUD_LAST_SYNC_AT: "ielts_vocab_cloud_last_sync_v1",
+  CLOUD_DATA_UPDATED_AT: "ielts_vocab_cloud_data_updated_v1",
+  CLOUD_FIRST_LAUNCH_DONE: "ielts_vocab_cloud_first_launch_v1",
+  CLOUD_PENDING_SYNC: "ielts_vocab_cloud_pending_sync_v1",
+  DICT_SOURCE: "ielts_vocab_dict_source_v1",
+  ZH_TRANSLATION_MODE: "ielts_vocab_zh_translation_mode_v1",
+  MODE_INTRO_DONE: "ielts_vocab_mode_intro_done_v1",
+  MODE_INTRO_UPDATED_AT: "ielts_vocab_mode_intro_updated_at_v1"
+};
+
+// --- Console noise filter (opt-out) -----------------------------------------
+// The legacy login/goal/recovery modules emit a lot of benign, repetitive
+// status logs. This hides only those specific known-harmless lines so the
+// console stays readable. It NEVER suppresses console.warn or console.error,
+// and you can see everything again by running:
+//   localStorage.setItem("ielts_vocab_verbose_logs","1")
+(function(){
+  try { if (localStorage.getItem("ielts_vocab_verbose_logs") === "1") return; } catch (e) { return; }
+  var DROP = [
+    "[Recovery2]",
+    "[New Sync Step 4.6] old",
+    "[Cloud Sync] original Settings Cloud Sync refreshed",
+    "[Cloud Sync] patched Settings div row",
+    "[Cloud Sync] stable login UI",
+    "[Goal] final guard",
+    "[Mode Intro]"
+  ];
+  var orig = console.log.bind(console);
+  console.log = function(){
+    try {
+      var first = arguments.length ? String(arguments[0]) : "";
+      for (var i = 0; i < DROP.length; i++) { if (first.indexOf(DROP[i]) >= 0) return; }
+    } catch (e) {}
+    return orig.apply(console, arguments);
+  };
+})();
+
+let words = [];
+let progress = {};
+let dictCache = {};
+let known = {};
+let needsReview = {};
+let collapsedSections = {};
+let currentSheetListKeys = [];
+let newlyCreatedApiCards = {};
+let viewMode = "list"; // grid | list
+let wordsColumnDefaultApplied = false;
+
+let currentLevel = "__all";
+let currentCategory = "__all";
+let currentQuick = null; // np | lr | kn | null
+let searchTerm = "";
+
+let currentLevelFilter = "__all";
+let currentTopHeaderFilter = "__all";
+let currentBoxedBoldFilter = "__all";
+let currentBoldTitleFilter = "__all";
+let currentStatusFilter = "__all";
+let filterPanelOpen = false;
+let searchModeOpen = false;
+let shuffleActive = false;
+let shuffledWordKeys = [];
+
+let sheetTouchStartX = 0;
+let sheetTouchStartY = 0;
+
+var currentWord = null;
+let sheetChain = [];
+let sheetTab = "meaning";
+
+let game = null; // {mode, queue, idx, correct, streak, pool, summary}
+
+const $ = (id) => document.getElementById(id);
+const normalizeKey = (w) => String(w || "").trim().toLowerCase().replace(/\s+/g, " ");
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]));
+const pct = (c, a) => a ? Math.round((c / a) * 100) : null;
+const defaultProgress = () => ({ matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } });
+
+function safeLocalSet(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (err) {
+    console.warn("localStorage write failed:", key, err);
+    if (err && (err.name === "QuotaExceededError" || String(err).includes("quota"))) {
+      evictDictCache(LS.DICT, dictCache, 0.3);
+      evictDictCache(LS.EASY_DICT, window.easyDictCache, 0.3);
+      try { localStorage.setItem(key, value); return true; }
+      catch (err2) { console.warn("localStorage retry failed:", key, err2); }
+    }
+    return false;
+  }
+}
+
+function evictDictCache(lsKey, cacheObj, fraction) {
+  if (!cacheObj || typeof cacheObj !== "object") return;
+  const keys = Object.keys(cacheObj);
+  if (!keys.length) return;
+  const toRemove = Math.max(1, Math.ceil(keys.length * fraction));
+  for (let i = 0; i < toRemove; i++) delete cacheObj[keys[i]];
+  try { localStorage.setItem(lsKey, JSON.stringify(cacheObj)); }
+  catch (e2) {
+    Object.keys(cacheObj).forEach(k => delete cacheObj[k]);
+    try { localStorage.removeItem(lsKey); } catch {}
+  }
+}
+
+function saveAll() {
+  words = cleanLoadedVocabularyItems(words);
+
+  // Do NOT save the full vocabulary list to localStorage.
+  // vocab.json is loaded on startup; storing all words causes QuotaExceededError.
+  try { localStorage.removeItem(LS.VOCAB); } catch {}
+
+  // Keep localStorage small on iPhone: save only meaningful progress records.
+  // Dictionary entries are re-fetchable, so never persist dictCache/easyDictCache.
+  const compactProgress = typeof compactProgressForStorage === "function"
+    ? compactProgressForStorage(progress)
+    : progress;
+  progress = compactProgress || {};
+
+  safeLocalSet(LS.PROGRESS, JSON.stringify(progress));
+  safeLocalSet(LS.KNOWN, JSON.stringify(known));
+  safeLocalSet(LS.REVIEW, JSON.stringify(needsReview));
+
+  // Keep dictionary entries in memory for the current page session only.
+  // Do not write them to localStorage.
+  try { localStorage.removeItem(LS.DICT); } catch {}
+  try { localStorage.removeItem(LS.EASY_DICT); } catch {}
+}
+function saveReview() { localStorage.setItem(LS.REVIEW, JSON.stringify(needsReview)); }
+function saveKnown() { localStorage.setItem(LS.KNOWN, JSON.stringify(known)); }
+function saveCollapsed() { localStorage.setItem(LS.COLLAPSED, JSON.stringify(collapsedSections)); }
+
+function loadState() {
+  try { words = JSON.parse(localStorage.getItem(LS.VOCAB) || "[]"); } catch { words = []; }
+  try { progress = JSON.parse(localStorage.getItem(LS.PROGRESS) || "{}"); } catch { progress = {}; }
+  try { dictCache = JSON.parse(localStorage.getItem(LS.DICT) || "{}"); } catch { dictCache = {}; }
+  try { known = JSON.parse(localStorage.getItem(LS.KNOWN) || "{}"); } catch { known = {}; }
+  try { collapsedSections = JSON.parse(localStorage.getItem(LS.COLLAPSED) || "{}"); } catch { collapsedSections = {}; }
+  try { needsReview = JSON.parse(localStorage.getItem(LS.REVIEW) || "{}"); } catch { needsReview = {}; }
+  // Default Words view should be the column/list layout selected by the
+  // header layout button. Users can still toggle to card grid during a session.
+  viewMode = "list";
+  try { localStorage.setItem(LS.VIEW, "list"); } catch {}
+  words = cleanLoadedVocabularyItems(words);
+}
+
+/* ============================================================
+   VOCAB SOURCE PARSING (preserved from original)
+   ============================================================ */
+function extractWords(source) {
+  const map = new Map();
+
+  function addItem(item, meta) {
+    const term = item?.term || item?.word || item?.headword || item?.key || "";
+    const key = normalizeKey(term);
+    if (!key) return null;
+
+    const level = cleanVocabLabel(meta.level || item.level || "");
+    const topHeader = cleanVocabLabel(meta.topHeader || meta.top_header || item.top_header || item.topHeader || "");
+    const boxedBoldTitle = cleanVocabLabel(meta.boxedBoldTitle || meta.boxed_bold_title || item.boxed_bold_title || item.boxedBoldTitle || "");
+    const boldTitle = cleanVocabLabel(meta.boldTitle || meta.bold_title || item.bold_title || item.boldTitle || "");
+    const suggestedCombinedTitle = cleanVocabLabel(
+      meta.suggestedCombinedTitle ||
+      meta.suggested_combined_title ||
+      item.suggested_combined_title ||
+      item.suggestedCombinedTitle ||
+      (Array.isArray(item.suggested_combined_title_path) ? item.suggested_combined_title_path[2] : "") ||
+      (Array.isArray(item.suggestedCombinedTitlePath) ? item.suggestedCombinedTitlePath[2] : "") ||
+      ""
+    );
+
+    let sectionTitle = cleanVocabLabel(
+      meta.sectionTitle ||
+      item.section ||
+      item.title ||
+      item.bold_title ||
+      item.boxed_bold_title ||
+      item.original_section_title ||
+      ""
+    );
+
+    if (!sectionTitle) {
+      sectionTitle = cleanVocabLabel(item.bold_title || item.boxed_bold_title || item.title || "Uncategorised") || "Uncategorised";
+    }
+    const pdfPageNumber = meta.pdfPageNumber || item.page || null;
+    const imageLabel = meta.imageLabel || item.image_label || "";
+
+    const isRelated = !!(item.related_to_previous_term || item.is_derivative_or_related_form);
+    const rootKey = meta.currentRootKey || key;
+    const familyId = [level, imageLabel, sectionTitle, rootKey].filter(Boolean).join("::");
+
+    if (!map.has(key)) {
+      map.set(key, {
+        key,
+        word: term.trim(),
+        grammarLabels: [],
+        rawTexts: [],
+        sourceExamples: [],
+        categories: [],
+        familyIds: [],
+        relatedKeys: [],
+        levels: [],
+        topHeaders: [],
+        boxedBoldTitles: [],
+        boldTitles: [],
+        suggestedCombinedTitles: [],
+        isDerivativeOrRelatedForm: !!item.is_derivative_or_related_form,
+        specialStatus: item.specialStatus,
+        sourceEntryType: item.sourceEntryType,
+        sourceFromKey: normalizeKey(item.sourceFromKey || item.insertAfterKey || ""),
+        sourceFromWord: item.sourceFromWord || "",
+        insertAfterKey: normalizeKey(item.insertAfterKey || item.sourceFromKey || "")
+      });
+    }
+
+    const rec = map.get(key);
+    if (item.specialStatus) rec.specialStatus = item.specialStatus;
+    if (item.sourceEntryType) rec.sourceEntryType = item.sourceEntryType;
+    if (item.sourceFromKey || item.insertAfterKey) rec.sourceFromKey = normalizeKey(item.sourceFromKey || item.insertAfterKey || "");
+    if (item.sourceFromWord) rec.sourceFromWord = item.sourceFromWord;
+    if (item.insertAfterKey || item.sourceFromKey) rec.insertAfterKey = normalizeKey(item.insertAfterKey || item.sourceFromKey || "");
+    if (level && !rec.levels.includes(level)) rec.levels.push(level);
+    if (topHeader && !rec.topHeaders.includes(topHeader)) rec.topHeaders.push(topHeader);
+    if (boxedBoldTitle && !rec.boxedBoldTitles.includes(boxedBoldTitle)) rec.boxedBoldTitles.push(boxedBoldTitle);
+    if (boldTitle && !rec.boldTitles.includes(boldTitle)) rec.boldTitles.push(boldTitle);
+    if (suggestedCombinedTitle && !rec.suggestedCombinedTitles.includes(suggestedCombinedTitle)) rec.suggestedCombinedTitles.push(suggestedCombinedTitle);
+    for (const g of (item.grammar_labels || [])) if (!rec.grammarLabels.includes(g)) rec.grammarLabels.push(g);
+    if (item.raw_text && !rec.rawTexts.includes(item.raw_text)) rec.rawTexts.push(item.raw_text);
+
+    const possibleExamples = [];
+    if (Array.isArray(item.examples)) possibleExamples.push(...item.examples);
+    if (Array.isArray(item.example_sentences)) possibleExamples.push(...item.example_sentences);
+    if (typeof item.example === "string") possibleExamples.push(item.example);
+    if (typeof item.sentence === "string") possibleExamples.push(item.sentence);
+    for (const ex of possibleExamples) {
+      const clean = String(ex || "").trim();
+      if (clean && !rec.sourceExamples.includes(clean)) rec.sourceExamples.push(clean);
+    }
+
+    if (familyId && !rec.familyIds.includes(familyId)) rec.familyIds.push(familyId);
+
+    const cat = { level, topHeader, boxedBoldTitle, boldTitle, suggestedCombinedTitle, sectionTitle, pdfPageNumber, imageLabel };
+    if (!rec.categories.some(c =>
+      c.level === cat.level &&
+      c.topHeader === cat.topHeader &&
+      c.suggestedCombinedTitle === cat.suggestedCombinedTitle
+    )) rec.categories.push(cat);
+
+    return { key, isRelated };
+  }
+
+  function walkImages(images, level = "") {
+    for (const img of (Array.isArray(images) ? images : [])) {
+      const topHeader = img.top_header || "";
+      const pdfPageNumber = img.pdf_page_number || null;
+      const imageLabel = img.image_label || "";
+      for (const sec of (Array.isArray(img.sections) ? img.sections : [])) {
+        const sectionTitle = sec.title || "Uncategorised";
+        const boxedBoldTitle = sec.boxed_bold_title || sec.boxedBoldTitle || "";
+        const boldTitle = sec.bold_title || sec.boldTitle || "";
+        let currentRootKey = null;
+        for (const item of (Array.isArray(sec.vocabulary) ? sec.vocabulary : [])) {
+          const key = normalizeKey(item?.term || "");
+          if (!key) continue;
+          const isRelated = !!(item.related_to_previous_term || item.is_derivative_or_related_form);
+          if (!isRelated || !currentRootKey) currentRootKey = key;
+          addItem(item, { level, topHeader, boxedBoldTitle, boldTitle, sectionTitle, pdfPageNumber, imageLabel, currentRootKey });
+        }
+      }
+    }
+  }
+
+  // Schema 1: original OCR JSON: { images: [...] }
+  if (Array.isArray(source?.images)) {
+    walkImages(source.images, source.level || "");
+  }
+
+  // Schema 2: combined three-level JSON: { levels: [{ level, data: { images: [...] } }] }
+  if (Array.isArray(source?.levels)) {
+    for (const levelBlock of source.levels) {
+      const levelName = levelBlock.level || levelBlock.name || "";
+      const data = levelBlock.data || levelBlock;
+      if (Array.isArray(data?.images)) walkImages(data.images, levelName);
+      if (Array.isArray(data?.items)) {
+        for (const item of data.items) addItem(item, { level: item.level || levelName });
+      }
+    }
+  }
+
+  // Schema 3: flattened webapp-friendly JSON: { items: [{ level, term, ... }] }
+  if (Array.isArray(source?.items)) {
+    for (const item of source.items) addItem(item, { level: item.level || "" });
+  }
+
+  const list = [...map.values()].sort((a, b) => a.word.localeCompare(b.word));
+  const familyMap = new Map();
+  for (const w of list) {
+    for (const fid of (w.familyIds || [])) {
+      if (!familyMap.has(fid)) familyMap.set(fid, []);
+      familyMap.get(fid).push(w.key);
+    }
+  }
+  for (const w of list) {
+    const related = new Set();
+    for (const fid of (w.familyIds || [])) {
+      for (const k of familyMap.get(fid) || []) {
+        if (k !== w.key) related.add(k);
+      }
+    }
+    w.relatedKeys = [...related].sort((a, b) => {
+      const wa = map.get(a)?.word || a, wb = map.get(b)?.word || b;
+      return wa.localeCompare(wb);
+    });
+  }
+  return cleanLoadedVocabularyItems(list);
+}
+function mergeWordLists(existing, latest) {
+  existing = cleanLoadedVocabularyItems(existing || []);
+  latest = cleanLoadedVocabularyItems(latest || []);
+
+  const map = new Map(existing.map(w => [w.key, cleanWordCategories(w)]));
+
+  for (const w of latest) {
+    cleanWordCategories(w);
+
+    if (!map.has(w.key)) {
+      map.set(w.key, w);
+      continue;
+    }
+
+    const old = map.get(w.key);
+
+    // Keep progress/dictionary-related runtime fields from old word.
+    const preserved = {
+      isTemporaryPreview: old.isTemporaryPreview,
+      sourceFromKey: old.sourceFromKey,
+      sourceFromWord: old.sourceFromWord,
+      specialStatus: old.specialStatus,
+      sourceEntryType: old.sourceEntryType,
+      insertAfterKey: old.insertAfterKey
+    };
+
+    // Replace source metadata from latest vocab.json so old CONTINUATION filters cannot survive.
+    Object.assign(old, w);
+
+    for (const [k, v] of Object.entries(preserved)) {
+      if (v !== undefined && old[k] === undefined) old[k] = v;
+    }
+
+    cleanWordCategories(old);
+    map.set(w.key, old);
+  }
+
+  return cleanLoadedVocabularyItems([...map.values()])
+    .sort((a, b) => a.word.localeCompare(b.word));
+}
+
+function ensureProgressRecords() {
+  // Do not create default progress records for every vocabulary item.
+  // Empty/default progress was the main reason exported/synced JSON became huge.
+  // Practice code creates a progress bucket only when a word is actually practiced.
+  if (!progress || typeof progress !== "object") progress = {};
+  if (typeof compactProgressForStorage === "function") {
+    progress = compactProgressForStorage(progress);
+  }
+}
+
+/* ============================================================
+   BOOTSTRAP
+   ============================================================ */
+async function bootstrap() {
+  loadState();
+  try {
+    const res = await fetch("vocab.json?ts=" + Date.now());
+    if (res.ok) {
+      const json = await res.json();
+      const latest = extractWords(json);
+      words = mergeWordLists([], latest);
+    }
+  } catch (e) {
+    console.warn("Could not load vocab.json:", e);
+  }
+
+  try {
+    const genRes = await fetch("/api/generated-vocab?ts=" + Date.now());
+    if (genRes.ok) {
+      const genJson = await genRes.json();
+      const generated = extractWords({ items: (genJson.items || []) });
+      words = mergeWordLists(words, generated);
+      words = cleanLoadedVocabularyItems(words);
+      applyGeneratedOrdering(genJson.items || []);
+    }
+  } catch (e) {
+    console.warn("Could not load generated vocabulary:", e);
+  }
+  ensureProgressRecords();
+  saveAll();
+  setView(viewMode, true);
+  renderAll();
+  setupSheetGestures();
+  setupAutoAdvance();
+  updateWordsStickyHeight();
+  setTimeout(() => $("boot").classList.add("hide"), 200);
+  updateGreeting();
+}
+
+function updateGreeting() {
+  const el = $("greetTime");
+  if (!el) return;
+  const h = new Date().getHours();
+  const g = h < 5 ? "Burning the midnight oil" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  el.textContent = g;
+}
+
+/* ============================================================
+   HELPERS
+   ============================================================ */
+function gramClass(label) {
+  const l = String(label || "").toLowerCase();
+  if (l.startsWith("adj")) return "gram-adj";
+  if (l.startsWith("adv")) return "gram-adv";
+  if (l.startsWith("v") && !l.startsWith("vi")) return "gram-verb";
+  if (l.startsWith("verb")) return "gram-verb";
+  if (l.startsWith("n")) return "gram-noun";
+  return "gram-other";
+}
+
+const CAT_COLORS = ["#5EEAD4", "#EC4899", "#FACC15", "#A78BFA", "#FB7185", "#84CC16", "#C4B5FD", "#F472B6", "#FCD34D", "#8B5CF6", "#2DD4BF", "#FDA4AF"];
+function categoryColor(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return CAT_COLORS[h % CAT_COLORS.length];
+}
+const CAT_EMOJI = { environment: "🌱", education: "🎓", health: "🏥", work: "💼", law: "⚖️", crime: "🔒", media: "📰", technology: "💻", food: "🍎", travel: "✈️", money: "💰", art: "🎨", sport: "⚽", science: "🔬", politics: "🏛️", culture: "🌍" };
+function categoryEmoji(name) {
+  const k = String(name || "").toLowerCase();
+  for (const key in CAT_EMOJI) if (k.includes(key)) return CAT_EMOJI[key];
+  return "📁";
+}
+
+
+const BAD_VOCAB_LABELS = new Set([
+  "CONTINUATION",
+  "Continuation",
+  "Key to grammatical labels",
+  "Labels used in word lists"
+]);
+
+function cleanVocabLabel(v) {
+  const s = String(v || "").trim();
+  return BAD_VOCAB_LABELS.has(s) ? "" : s;
+}
+
+function isBadVocabRecordLike(obj) {
+  if (!obj) return false;
+  const vals = [
+    obj.section,
+    obj.title,
+    obj.original_section_title,
+    obj.boxed_bold_title,
+    obj.bold_title,
+    obj.sectionTitle,
+    obj.topHeader
+  ].map(v => String(v || "").trim());
+  return vals.some(v => BAD_VOCAB_LABELS.has(v));
+}
+
+function cleanWordCategories(w) {
+  if (!w || !Array.isArray(w.categories)) return w;
+  w.categories = w.categories
+    .filter(c => !isBadVocabRecordLike(c))
+    .map(c => ({
+      ...c,
+      level: cleanVocabLabel(c.level) || c.level || "",
+      topHeader: cleanVocabLabel(c.topHeader),
+      sectionTitle: cleanVocabLabel(c.sectionTitle)
+    }))
+    .filter(c => c.level || c.topHeader || c.sectionTitle);
+  return w;
+}
+
+function cleanLoadedVocabularyItems(items) {
+  return (Array.isArray(items) ? items : [])
+    .filter(w => !isBadVocabRecordLike(w))
+    .map(w => cleanWordCategories(w));
+}
+
+
+function categoryLabelOf(w) {
+  cleanWordCategories(w);
+  return (w.categories || [])
+    .map(c => {
+      const level = cleanVocabLabel(c.level);
+      const topHeader = cleanVocabLabel(c.topHeader);
+      const sectionTitle = cleanVocabLabel(c.sectionTitle);
+      const parts = [level, topHeader, sectionTitle].filter(Boolean);
+      return parts.length ? parts.join(" / ") : "";
+    })
+    .filter(Boolean);
+}
+function allCategories() {
+  const set = new Set();
+  for (const w of words) for (const c of categoryLabelOf(w)) set.add(c);
+  return [...set].sort();
+}
+function wordInCategory(w, sel) {
+  if (!sel || sel === "__all") return true;
+  return categoryLabelOf(w).includes(sel);
+}
+function allLevels() {
+  const wanted = ["Entry", "Improver", "Advanced"];
+  const set = new Set();
+  for (const w of words) for (const l of (w.levels || [])) if (l) set.add(l);
+  const ordered = wanted.filter(l => set.has(l));
+  for (const l of [...set].sort()) if (!ordered.includes(l)) ordered.push(l);
+  return ordered;
+}
+function wordInLevel(w, sel) {
+  if (!sel || sel === "__all") return true;
+  return (w.levels || []).includes(sel);
+}
+function filteredWords() { return words.filter(wordPasses); }
+function wordAttempts(w) {
+  const r = progress[w.key]; if (!r) return 0;
+  return (r.matching?.attempts || 0) + (r.spelling?.attempts || 0);
+}
+
+function arrify(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.filter(x => x != null && String(x).trim() !== "").map(x => String(x).trim());
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+function uniqueStrings(values) {
+  const out = [];
+  const seen = new Set();
+  for (const v of values || []) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const k = s.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+
+/* ============================================================
+   Words header adjust v3
+   - readable filter labels
+   - flat normal word cards, no awkward long category tab
+   - sticky header
+   - swipe grid cards left/right
+   ============================================================ */
+
+function whLooksBadFilterValue(v) {
+  const s = String(v || "").trim();
+  if (!s) return true;
+  if (/^\d+$/.test(s)) return true;
+  if (/^\d+\s+\d+$/.test(s)) return true;
+  if (/^page\s*\d+$/i.test(s)) return true;
+  if (/^col\d+$/i.test(s)) return true;
+  if (/^(left|right|col1|col2)$/i.test(s)) return true;
+  if (s.length > 80) return true;
+  return false;
+}
+
+function whArr(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(whArr);
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+function whClean(vals) {
+  const out = [];
+  const seen = new Set();
+  for (const v of vals || []) {
+    const s = String(v || "").trim();
+    if (whLooksBadFilterValue(s)) continue;
+    const k = normalizeKey(s);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function whAllLabels(w) {
+  const vals = [];
+  const add = v => vals.push(...whArr(v));
+  add(w.level); add(w.levels); add(w.sourceName); add(w.source_name);
+  add(w.top_header); add(w.topHeader); add(w.boxed_bold_title); add(w.boxedBoldTitle);
+  add(w.bold_title); add(w.boldTitle); add(w.section); add(w.title);
+  add(w.title_path); add(w.titlePath);
+  for (const c of (w.categories || [])) {
+    add(c.level); add(c.sourceName); add(c.source_name);
+    add(c.topHeader); add(c.top_header);
+    add(c.boxedBoldTitle); add(c.boxed_bold_title); add(c.parentTitle);
+    add(c.boldTitle); add(c.bold_title); add(c.sectionTitle); add(c.title); add(c.section);
+    add(c.title_path); add(c.titlePath);
+  }
+  for (const x of (categoryLabelOf(w) || [])) add(x);
+  return vals;
+}
+
+function whSplitPath(s) {
+  return String(s || "").replace(/\s*\/\s*/g, " / ").split(/\s+\/\s+|[>｜|]+/).map(x => x.trim()).filter(Boolean);
+}
+
+function whLevel(w) {
+  const text = whAllLabels(w).join(" / ");
+  if (/\bentry\b/i.test(text)) return "Entry";
+  if (/\bimprover\b/i.test(text)) return "Improver";
+  if (/\badvanced\b/i.test(text)) return "Advanced";
+  return "";
+}
+
+function whBestPath(w) {
+  let best = [];
+  for (const lab of whAllLabels(w)) {
+    const parts = whSplitPath(lab).filter(x => !whLooksBadFilterValue(x));
+    if (parts.length > best.length) best = parts;
+  }
+  const lvl = whLevel(w);
+  if (lvl && (!best.length || !/^(entry|improver|advanced)$/i.test(best[0]))) best.unshift(lvl);
+  return best;
+}
+
+function wordMetaValues(w, field) {
+  const parts = whBestPath(w);
+  let vals = [];
+  if (field === "level") vals = whLevel(w) ? [whLevel(w)] : [];
+  if (field === "topHeader") vals = parts[1] ? [parts[1]] : [];
+  if (field === "boxedBoldTitle") vals = parts[2] ? [parts[2]] : [];
+  if (field === "boldTitle") vals = parts[3] ? [parts[3]] : [];
+
+  if (!vals.length) {
+    if (field === "topHeader") {
+      vals = whAllLabels(w).filter(x => /^(academic study|arts|multi-discipline|sciences|social sciences)$/i.test(x));
+    } else if (field === "boxedBoldTitle" || field === "boldTitle") {
+      vals = whAllLabels(w).filter(x => !/^(entry|improver|advanced|academic study|arts|multi-discipline|sciences|social sciences)$/i.test(x));
+    }
+  }
+  return whClean(vals);
+}
+
+function wordMatchesMeta(w, field, selected) {
+  if (!selected || selected === "__all") return true;
+  return wordMetaValues(w, field).map(normalizeKey).includes(normalizeKey(selected));
+}
+
+function filterOptionCounts(field) {
+  const map = new Map();
+  for (const w of words) {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) continue;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) continue;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+    if (field === "status") {
+      const s = wordStatus(w);
+      map.set(s, (map.get(s) || 0) + 1);
+    } else {
+      for (const val of wordMetaValues(w, field)) {
+        if (!whLooksBadFilterValue(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+  }
+  return [...map.entries()].sort((a, b) => {
+    const order = { Entry: 0, Improver: 1, Advanced: 2 };
+    if (field === "level") return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function whCleanSectionName(w) {
+  const p = whBestPath(w);
+  return p[1] || p[0] || "Words";
+}
+
+
+function whKeyFromCard(card) {
+  if (!card) return "";
+  const direct = card.getAttribute("data-key") || card.dataset?.key;
+  if (direct) return direct;
+  const clickable = card.closest("[onclick*='showWord']") || card.querySelector("[onclick*='showWord']") || card;
+  const onclick = clickable.getAttribute ? (clickable.getAttribute("onclick") || "") : "";
+  const m = onclick.match(/showWord\(['"]([^'"]+)['"]\)/);
+  return m ? m[1] : "";
+}
+
+function whSwipeFeedback(text, type) {
+  let fb = $("swipeFeedback");
+  if (!fb) {
+    fb = document.createElement("div");
+    fb.id = "swipeFeedback";
+    fb.className = "swipe-feedback";
+    document.body.appendChild(fb);
+  }
+  fb.textContent = text;
+  fb.className = "swipe-feedback show " + (type || "");
+  clearTimeout(fb._t);
+  fb._t = setTimeout(() => fb.classList.remove("show"), 520);
+}
+
+function whMarkSwipe(key, isKnown) {
+  if (!key) return;
+  if (isKnown) {
+    known[key] = true;
+    whSwipeFeedback("Known ✓", "known");
+  } else {
+    delete known[key];
+    const w = words.find(x => x.key === key);
+    if (w) {
+      progress[w.key] = progress[w.key] || { correct: 0, wrong: 0, attempts: 0 };
+      progress[w.key].wrong = (progress[w.key].wrong || 0) + 1;
+      progress[w.key].attempts = (progress[w.key].attempts || 0) + 1;
+    }
+    whSwipeFeedback("Not yet", "unknown");
+  }
+  saveAll();
+  renderWordList();
+}
+
+
+
+function wordMetaValues(w, field) {
+  const parts = whBestPath(w);
+  let vals = [];
+  if (field === "level") vals = whLevel(w) ? [whLevel(w)] : [];
+  if (field === "topHeader") vals = parts[1] ? [parts[1]] : [];
+  if (field === "boxedBoldTitle") vals = parts[2] ? [parts[2]] : [];
+  if (field === "boldTitle") vals = parts[3] ? [parts[3]] : [];
+
+  if (!vals.length) {
+    if (field === "topHeader") {
+      vals = whAllLabels(w).filter(x => /^(academic study|arts|multi-discipline|sciences|social sciences)$/i.test(x));
+    } else if (field === "boxedBoldTitle" || field === "boldTitle") {
+      vals = whAllLabels(w).filter(x => !/^(entry|improver|advanced|academic study|arts|multi-discipline|sciences|social sciences)$/i.test(x));
+    }
+  }
+  return whClean(vals);
+}
+
+function wordMatchesMeta(w, field, selected) {
+  if (!selected || selected === "__all") return true;
+  return wordMetaValues(w, field).map(normalizeKey).includes(normalizeKey(selected));
+}
+
+function wordStatus(w) {
+  // Four-state model (test):
+  //   not_practiced — no attempts in either skill
+  //   learning      — has attempts but neither skill Known
+  //   known         — exactly ONE skill Known (partial)
+  //   mastered      — BOTH skills Known
+  const m = (typeof meaningStatus === "function") ? meaningStatus(w) : (known[w.key] ? "known" : (wordAttempts(w) === 0 ? "not_practiced" : "learning"));
+  const s = (typeof spellingStatus === "function") ? spellingStatus(w) : (known[w.key] ? "known" : (wordAttempts(w) === 0 ? "not_practiced" : "learning"));
+  if (m === "known" && s === "known") return "mastered";
+  if (m === "known" || s === "known") return "known";
+  if (m === "not_practiced" && s === "not_practiced") return "not_practiced";
+  return "learning";
+}
+
+// Per-skill status helpers (real defs are installed by the per-skill module
+// at the end of this file; these provide a safe fallback before init).
+function meaningStatus(w) {
+  if (typeof window.__skillStateReady === "boolean" && window.__skillStateReady) {
+    return window.__meaningStatus(w);
+  }
+  if (known[w.key]) return "known";
+  const r = progress[w.key];
+  const att = (r?.matching?.attempts || 0) + (r?.wordToMeaning?.attempts || 0) + (r?.meaningToWord?.attempts || 0);
+  if (att === 0) return "not_practiced";
+  return "learning";
+}
+function spellingStatus(w) {
+  if (typeof window.__skillStateReady === "boolean" && window.__skillStateReady) {
+    return window.__spellingStatus(w);
+  }
+  if (known[w.key]) return "known";
+  const att = progress[w.key]?.spelling?.attempts || 0;
+  if (att === 0) return "not_practiced";
+  return "learning";
+}
+
+function searchTextForWord(w) {
+  const parts = [
+    w.word, w.key,
+    ...(w.grammarLabels || []),
+    ...(w.rawTexts || []),
+    ...(w.sourceExamples || []),
+    ...wordMetaValues(w, "level"),
+    ...wordMetaValues(w, "topHeader"),
+    ...wordMetaValues(w, "boxedBoldTitle"),
+    ...wordMetaValues(w, "boldTitle"),
+    ...categoryLabelOf(w)
+  ];
+  const d = dictCache[w.key];
+  if (d) {
+    parts.push(d.headword, d.hw, d.functionalLabel, ...(d.functionalLabels || []), ...(d.definitions || []), ...(d.shortDefinitions || []), ...(d.examples || []));
+    for (const ent of [...(d.mainEntries || []), ...(d.relatedBaseEntries || []), ...(d.otherEntries || [])]) {
+      parts.push(ent.headword, ent.hw, ent.functionalLabel, ...(ent.shortDefinitions || []));
+      for (const m of (ent.meanings || [])) {
+        parts.push(m.label, m.verbDivider);
+        for (const seg of (m.definitionSegments || [])) {
+          parts.push(seg.definition);
+          for (const ex of (seg.examples || [])) parts.push(ex.text, ex.author);
+        }
+      }
+    }
+  }
+  return normalizeKey(parts.filter(Boolean).join(" "));
+}
+
+function filterOptionCounts(field) {
+  const map = new Map();
+  for (const w of words) {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) continue;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) continue;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+    if (field === "status") {
+      const s = wordStatus(w);
+      map.set(s, (map.get(s) || 0) + 1);
+    } else {
+      for (const val of wordMetaValues(w, field)) {
+        if (!whLooksBadFilterValue(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+  }
+  return [...map.entries()].sort((a, b) => {
+    const order = { Entry: 0, Improver: 1, Advanced: 2 };
+    if (field === "level") return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function currentFilteredWords() {
+  let list = words.filter(wordPasses);
+  if (shuffleActive) {
+    if (!shuffledWordKeys.length) buildShuffleOrder(list);
+    const rank = new Map(shuffledWordKeys.map((k, i) => [k, i]));
+    list = [...list].sort((a, b) => (rank.get(a.key) ?? 999999) - (rank.get(b.key) ?? 999999));
+  }
+  return list;
+}
+
+function buildShuffleOrder(list = words.filter(wordPasses)) {
+  shuffledWordKeys = list.map(w => w.key);
+  for (let i = shuffledWordKeys.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffledWordKeys[i], shuffledWordKeys[j]] = [shuffledWordKeys[j], shuffledWordKeys[i]];
+  }
+}
+
+function setWordFilter(field, value) {
+  if (field === "level") {
+    currentLevelFilter = value;
+    currentTopHeaderFilter = "__all";
+    currentBoxedBoldFilter = "__all";
+    currentBoldTitleFilter = "__all";
+  } else if (field === "topHeader") {
+    currentTopHeaderFilter = value;
+    currentBoxedBoldFilter = "__all";
+    currentBoldTitleFilter = "__all";
+  } else if (field === "boxedBoldTitle") {
+    currentBoxedBoldFilter = value;
+    currentBoldTitleFilter = "__all";
+  } else if (field === "boldTitle") {
+    currentBoldTitleFilter = value;
+  } else if (field === "status") {
+    currentStatusFilter = value;
+    currentQuick = value === "not_practiced" ? "np" : value === "learning" ? "lr" : value === "known" ? "kn" : null;
+  }
+  shuffledWordKeys = [];
+  renderFilterPanel();
+  renderWords();
+}
+
+function filterChipHtml(field, value, label, count, active) {
+  return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('${field}', '${escapeHtml(value).replace(/'/g, "\\'")}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+}
+
+function filterGroupHtml(title, field, selected, options) {
+  let html = `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">`;
+  const total = words.filter(w => {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) return false;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) return false;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) return false;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+    return true;
+  }).length;
+  html += filterChipHtml(field, "__all", "All", total, selected === "__all");
+  for (const opt of options) {
+    const val = opt[0], label = opt[1] ?? opt[0], count = opt[2] ?? opt[1] ?? 0;
+    html += filterChipHtml(field, val, label, count, selected === val);
+  }
+  html += `</div></div>`;
+  return html;
+}
+
+function renderFilterPanel() {
+  const body = $("filterPanelBody");
+  if (!body) return;
+  const statusOptions = [
+    ["not_practiced", "Not practiced", words.filter(w => wordStatus(w) === "not_practiced").length],
+    ["learning", "Learning", words.filter(w => wordStatus(w) === "learning").length],
+    ["known", "Known", words.filter(w => wordStatus(w) === "known").length]
+  ];
+  body.innerHTML =
+    filterGroupHtml("Level", "level", currentLevelFilter, filterOptionCounts("level")) +
+    filterGroupHtml("Top header", "topHeader", currentTopHeaderFilter, filterOptionCounts("topHeader")) +
+    filterGroupHtml("Boxed bold title", "boxedBoldTitle", currentBoxedBoldFilter, filterOptionCounts("boxedBoldTitle")) +
+    filterGroupHtml("Bold title", "boldTitle", currentBoldTitleFilter, filterOptionCounts("boldTitle")) +
+    filterGroupHtml("Practice status", "status", currentStatusFilter, statusOptions);
+}
+
+function updateHeaderButtons() {
+  const header = $("wordsHeader");
+  if (header) {
+    header.classList.toggle("searching", searchModeOpen);
+    header.classList.toggle("has-filters", hasActiveWordFilters());
+  }
+  const filterBtn = $("filterBtn");
+  if (filterBtn) filterBtn.classList.toggle("active", hasActiveWordFilters() || filterPanelOpen);
+  const searchBtn = $("searchToggleBtn");
+  if (searchBtn) {
+    searchBtn.classList.toggle("active", searchModeOpen);
+    searchBtn.textContent = searchModeOpen ? "✕" : "🔍";
+  }
+  const layoutBtn = $("layoutToggleBtn");
+  if (layoutBtn) {
+    layoutBtn.classList.toggle("active", viewMode === "list");
+    layoutBtn.textContent = viewMode === "grid" ? "▦" : "☰";
+  }
+  const shuffleBtn = $("shuffleBtn");
+  if (shuffleBtn) shuffleBtn.classList.toggle("active", shuffleActive);
+
+  const summary = $("activeFilterSummary");
+  if (summary) {
+    const chips = [];
+    if (currentLevelFilter !== "__all") chips.push(currentLevelFilter);
+    if (currentTopHeaderFilter !== "__all") chips.push(currentTopHeaderFilter);
+    if (currentBoxedBoldFilter !== "__all") chips.push(currentBoxedBoldFilter);
+    if (currentBoldTitleFilter !== "__all") chips.push(currentBoldTitleFilter);
+    if (currentStatusFilter !== "__all") chips.push(currentStatusFilter.replace("_", " "));
+    if (shuffleActive) chips.push("shuffled");
+    if (searchTerm) chips.push(`search: ${searchTerm}`);
+    summary.classList.toggle("show", chips.length > 0);
+    summary.innerHTML = chips.slice(0, 6).map(x => `<span class="summary-chip">${escapeHtml(x)}</span>`).join("");
+  }
+}
+
+function hasActiveWordFilters() {
+  return currentLevelFilter !== "__all" || currentTopHeaderFilter !== "__all" || currentBoxedBoldFilter !== "__all" || currentBoldTitleFilter !== "__all" || currentStatusFilter !== "__all";
+}
+
+function toggleFilterPanel() {
+  filterPanelOpen = !filterPanelOpen;
+  renderFilterPanel();
+  $("filterPanel")?.classList.toggle("show", filterPanelOpen);
+  $("filterPanelBackdrop")?.classList.toggle("show", filterPanelOpen);
+  document.body.classList.toggle("filter-panel-open", filterPanelOpen);
+  document.documentElement.classList.toggle("filter-panel-open", filterPanelOpen);
+  updateHeaderButtons();
+}
+
+function closeFilterPanel() {
+  filterPanelOpen = false;
+  $("filterPanel")?.classList.remove("show");
+  $("filterPanelBackdrop")?.classList.remove("show");
+  document.body.classList.remove("filter-panel-open");
+  document.documentElement.classList.remove("filter-panel-open");
+  updateHeaderButtons();
+}
+
+function resetWordFilters() {
+  currentLevelFilter = "__all";
+  currentTopHeaderFilter = "__all";
+  currentBoxedBoldFilter = "__all";
+  currentBoldTitleFilter = "__all";
+  currentStatusFilter = "__all";
+  currentQuick = null;
+  shuffledWordKeys = [];
+  renderFilterPanel();
+  renderWords();
+}
+
+function toggleSearchMode() {
+  searchModeOpen = !searchModeOpen;
+  if (!searchModeOpen) clearSearch();
+  updateHeaderButtons();
+  setTimeout(updateWordsStickyHeight, 0);
+  if (searchModeOpen) setTimeout(() => $("searchInput")?.focus(), 60);
+}
+
+function toggleLayoutMode() {
+  setView(viewMode === "grid" ? "list" : "grid");
+}
+
+function toggleShuffleMode() {
+  if (shuffleActive) {
+    shuffleActive = false;
+    shuffledWordKeys = [];
+  } else {
+    shuffleActive = true;
+    buildShuffleOrder(words.filter(wordPasses));
+  }
+  renderWords();
+}
+
+function wordPasses(w) {
+  if (currentQuick === "kn" && !known[w.key]) return false;
+  if (currentQuick === "np" && wordAttempts(w) > 0) return false;
+  if (currentQuick === "lr" && (wordAttempts(w) === 0 || known[w.key])) return false;
+
+  if (currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+  if (!wordMatchesMeta(w, "level", currentLevelFilter)) return false;
+  if (!wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
+  if (!wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) return false;
+  if (!wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) return false;
+
+  if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
+  if (!wordInCategory(w, currentCategory)) return false;
+  return true;
+}
+function aggregateRecords(type, list = words) {
+  let attempts = 0, correct = 0;
+  for (const w of list) {
+    const r = progress[w.key]?.[type];
+    attempts += r?.attempts || 0;
+    correct += r?.correct || 0;
+  }
+  return { attempts, correct, accuracy: pct(correct, attempts) };
+}
+
+/* ============================================================
+   RENDER
+   ============================================================ */
+function renderAll() { renderHome(); renderWords(); renderPracticeAcc(); }
+
+function renderHome() {
+  // Home tab replaced by Goal tab. renderGoalTab() is defined in the Goal IIFE.
+  // Keep word-list cleanup here since some callers rely on it running.
+  if (typeof cleanLoadedVocabularyItems === "function") words = cleanLoadedVocabularyItems(words);
+  if (typeof hardCleanAllRuntimeVocabulary === "function") hardCleanAllRuntimeVocabulary();
+  if (typeof renderGoalTab === "function") renderGoalTab();
+}
+
+function renderWords() {
+  renderFilterPanel();
+  updateHeaderButtons();
+  renderWordList();
+}
+
+function renderLevelPills() {
+  const wrap = $("levelPills");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const levels = allLevels();
+  const makePill = (key, label, count, isActive) => {
+    const b = document.createElement("button");
+    b.className = "level-pill" + (isActive ? " active" : "");
+    b.textContent = label + " (" + count.toLocaleString() + ")";
+    b.onclick = () => { currentLevel = key; currentCategory = "__all"; renderCategoryPills(); renderLevelPills(); renderWordList(); updateWordsStickyHeight(); };
+    wrap.appendChild(b);
+  };
+  makePill("__all", "All levels", words.length, currentLevel === "__all");
+  for (const level of levels) makePill(level, level, words.filter(w => wordInLevel(w, level)).length, currentLevel === level);
+}
+
+function renderCategoryPills() {
+  words = cleanLoadedVocabularyItems(words); // renderCategoryPills__clean_marker
+  const wrap = $("catPills"); wrap.innerHTML = "";
+  const cats = [...new Set(words.filter(w => wordInLevel(w, currentLevel)).flatMap(w => categoryLabelOf(w)))].sort();
+  const total = words.filter(w => wordInLevel(w, currentLevel)).length;
+  const makePill = (key, label, count, isActive) => {
+    const b = document.createElement("button");
+    b.className = "pill" + (isActive ? " active" : "");
+    b.textContent = label + " (" + count.toLocaleString() + ")";
+    b.onclick = () => { currentCategory = key; renderWordList(); renderCategoryPills(); };
+    wrap.appendChild(b);
+  };
+  makePill("__all", "✨ All", total, currentCategory === "__all");
+  for (const cat of cats) {
+    const n = words.filter(w => wordInLevel(w, currentLevel) && wordInCategory(w, cat)).length;
+    const e = categoryEmoji(cat);
+    makePill(cat, e + " " + cat.split(" / ").pop(), n, currentCategory === cat);
+  }
+  document.querySelectorAll(".chip-row .chip").forEach(c => {
+    const activeMap = { np: "active-np", lr: "active-lr", kn: "active-kn", rv: "active-rv" };
+    c.className = "chip" + (currentQuick === c.dataset.quick ? " " + (activeMap[currentQuick] || "active-" + currentQuick) : "");
+  });
+}
+
+
+function gramChipsHtml(w, limit) {
+  const labels = (w.grammarLabels || []).slice(0, limit || 99);
+  return labels.map(g => `<span class="gram-chip ${gramClass(g)}">${escapeHtml(g)}</span>`).join("");
+}
+
+function practicePosLabel(w, entry) {
+  const labels = [];
+  const add = v => {
+    const s = String(v || "").trim();
+    if (s && !labels.some(x => x.toLowerCase() === s.toLowerCase())) labels.push(s);
+  };
+  (w?.grammarLabels || []).forEach(add);
+  (entry?.functionalLabels || []).forEach(add);
+  add(entry?.functionalLabel);
+  add(entry?.partOfSpeech);
+  return labels.slice(0, 3).join(", ");
+}
+
+function spellPromptLabelHtml(w, entry) {
+  const pos = practicePosLabel(w, entry);
+  return `Spell the word${pos ? ` · ${escapeHtml(pos)}` : ""}`;
+}
+
+function spellingQuestionLabelHtml(w, q, entry) {
+  const pos = String(q?.partOfSpeech || "").trim();
+  return `Spell the word${pos ? ` · ${escapeHtml(pos)}` : (practicePosLabel(w, entry) ? ` · ${escapeHtml(practicePosLabel(w, entry))}` : "")}`;
+}
+
+function dotFillCss(p) { return p == null ? 0 : Math.max(0, Math.min(100, p)); }
+
+function wordCardCompactHtml(w) {
+  const r = progress[w.key] || defaultProgress();
+  const m = pct(r.matching.correct, r.matching.attempts);
+  const s = pct(r.spelling.correct, r.spelling.attempts);
+  const kn = known[w.key];
+  const rv = needsReview[w.key];
+  return `<div class="word-card ${kn ? "known" : ""} ${rv ? "needs-review" : ""}" data-key="${escapeHtml(w.key)}">
+    ${rv ? '<span class="review-badge">🔁</span>' : ''}
+    <div>
+      <div class="w">${escapeHtml(w.word)}</div>
+      ${gramChipsHtml(w, 1)}
+    </div>
+    <div class="dots">
+      <span class="dot m" style="--f:${dotFillCss(m)}%"><i style="display:block;height:100%;width:${dotFillCss(m)}%;background:var(--pink);border-radius:999px"></i></span>
+      <span class="dot s"><i style="display:block;height:100%;width:${dotFillCss(s)}%;background:var(--yellow);border-radius:999px"></i></span>
+    </div>
+    <button class="card-speaker speaker-btn" data-key="${escapeHtml(w.key)}" title="Fetch and play pronunciation">🔊</button>
+  </div>`;
+}
+
+function wordCardListHtml(w, color) {
+  const r = progress[w.key] || defaultProgress();
+  const m = pct(r.matching.correct, r.matching.attempts);
+  const s = pct(r.spelling.correct, r.spelling.attempts);
+  const kn = known[w.key];
+  const rv = needsReview[w.key];
+  const entry = dictCache[w.key];
+  const def = entry?.definitions?.[0] || w.sourceExamples?.[0]?.slice(0, 80) || "Tap to fetch definition";
+  const pron = entry?.pronunciation ? `/${entry.pronunciation}/` : "";
+  const hasAudio = !!entry?.audioUrl;
+  return `<div class="word-row ${kn ? "known" : ""} ${rv ? "needs-review" : ""}" data-key="${escapeHtml(w.key)}" style="--cat-color:${color}">
+    <div class="left">
+      <div class="w">${escapeHtml(w.word)}</div>
+      ${pron ? `<div class="pron">${escapeHtml(pron)}</div>` : ""}
+      <div class="meta">${gramChipsHtml(w, 2)}</div>
+      <div class="def">${escapeHtml(def)}</div>
+    </div>
+    <div class="right">
+      <button class="speaker-btn" data-key="${escapeHtml(w.key)}" title="Fetch and play pronunciation">🔊</button>
+      <div class="acc-mini">
+        <div class="acc-line m">M ${m == null ? "—" : m + "%"} <span class="bar"><i style="width:${dotFillCss(m)}%"></i></span></div>
+        <div class="acc-line s">S ${s == null ? "—" : s + "%"} <span class="bar"><i style="width:${dotFillCss(s)}%"></i></span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderPracticeAcc() {
+  const m = aggregateRecords("matching"), s = aggregateRecords("spelling");
+  $("accMatch1").textContent = m.accuracy == null ? "Not yet practiced" : "Your accuracy · " + m.accuracy + "%";
+  $("accMatch2").textContent = m.accuracy == null ? "Not yet practiced" : "Your accuracy · " + m.accuracy + "%";
+  $("accMatch3").textContent = m.accuracy == null ? "Not yet practiced" : "Your accuracy · " + m.accuracy + "%";
+  $("accSpell").textContent = s.accuracy == null ? "Not yet practiced" : "Your accuracy · " + s.accuracy + "%";
+}
+
+function toggleSection(el) {
+  const sec = el.dataset.section;
+  collapsedSections[sec] = !collapsedSections[sec];
+  el.classList.toggle("collapsed");
+  saveCollapsed();
+}
+
+/* ============================================================
+   NAVIGATION & FILTERS
+   ============================================================ */
+function goto(page) {
+  document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.dataset.page === page));
+  document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.nav === page));
+  window.scrollTo(0, 0);
+  if (page === "home") renderHome();
+  if (page === "words") {
+    if (!wordsColumnDefaultApplied) {
+      viewMode = "list";
+      try { localStorage.setItem(LS.VIEW, "list"); } catch {}
+      wordsColumnDefaultApplied = true;
+    }
+    renderWords();
+    setTimeout(updateWordsStickyHeight, 0);
+  }
+  if (page === "practice") {
+    if (typeof window.preparePracticeHistoryHome === "function") window.preparePracticeHistoryHome("nav-practice");
+    if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+    else renderPracticeAcc();
+  }
+  setTimeout(updateWordsHeaderCompact, 0);
+}
+
+function setView(v, silent) {
+  viewMode = v === "list" ? "list" : "grid";
+  localStorage.setItem(LS.VIEW, viewMode);
+  const vGrid = $("vGrid"); if (vGrid) vGrid.classList.toggle("active", viewMode === "grid");
+  const vList = $("vList"); if (vList) vList.classList.toggle("active", viewMode === "list");
+  updateHeaderButtons();
+  if (!silent) renderWordList();
+}
+
+function toggleQuick(q) {
+  currentQuick = currentQuick === q ? null : q;
+  renderCategoryPills();
+  renderWordList();
+}
+
+function clearSearch() {
+  const input = $("searchInput");
+  if (input) input.value = "";
+  searchTerm = "";
+  const clear = $("searchClear");
+  if (clear) clear.classList.remove("show");
+  renderWordList();
+}
+
+const searchInputEl = $("searchInput");
+if (searchInputEl) {
+  searchInputEl.addEventListener("input", (e) => {
+    searchTerm = normalizeKey(e.target.value);
+    const clear = $("searchClear");
+    if (clear) clear.classList.toggle("show", !!searchTerm);
+    shuffledWordKeys = [];
+    renderWordList();
+  });
+}
+$("searchInput").addEventListener("blur", () => {
+  if (!searchTerm) $("wordsHeader")?.classList.remove("search-open");
+});
+window.addEventListener("scroll", updateWordsHeaderCompact, { passive: true });
+window.addEventListener("resize", updateWordsStickyHeight);
+
+/* ============================================================
+   BOTTOM SHEET
+   ============================================================ */
+function openSheet(key) {
+  currentSheetListKeys = filteredWords().map(w => w.key);
+  if (!currentSheetListKeys.includes(key)) currentSheetListKeys = words.map(w => w.key);
+  sheetChain = [key];
+  sheetTab = "meaning";
+  setSheetActiveTabButton("meaning");
+  showWord(key);
+  document.body.classList.add("sheet-open");
+  document.documentElement.classList.add("sheet-open");
+  $("backdrop").classList.add("show");
+  $("sheet").classList.add("show");
+  const _pwo = document.getElementById("progressWordOverlay");
+  if (_pwo && _pwo.classList.contains("show")) {
+    _pwo.classList.replace("show", "show-behind");
+  }
+}
+function closeSheet() {
+  _aaCancel();
+  document.body.classList.remove("sheet-open");
+  document.documentElement.classList.remove("sheet-open");
+  $("backdrop").classList.remove("show");
+  $("sheet").classList.remove("show");
+  sheetChain = [];
+  currentWord = null;
+  if (window.__progressOverlayState) {
+    const { groupName, field } = window.__progressOverlayState;
+    window.__progressOverlayState = null;
+    setTimeout(() => openProgressWordList(groupName, field), 80);
+  }
+}
+function navigateRelated(key) {
+  const idx = sheetChain.indexOf(key);
+  if (idx >= 0) sheetChain = sheetChain.slice(0, idx + 1);
+  else sheetChain.push(key);
+  showWord(key);
+}
+
+function openWordByText(text) {
+  const key = normalizeKey(text);
+  const local = words.find(x => x.key === key);
+  if (local) {
+    navigateRelated(local.key);
+    return;
+  }
+  toast("Not in your vocabulary list");
+}
+
+function crumbBack() {
+  if (sheetChain.length > 1) {
+    sheetChain.pop();
+    showWord(sheetChain[sheetChain.length - 1]);
+  } else closeSheet();
+}
+function crumbJump(idx) {
+  sheetChain = sheetChain.slice(0, idx + 1);
+  showWord(sheetChain[sheetChain.length - 1]);
+}
+
+function showWord(key) {
+  const w = words.find(x => x.key === key);
+  if (!w) return;
+  currentWord = w;
+  $("heroWord").textContent = w.word;
+
+  const entry = dictCache[w.key];
+  const formatHeroHw = hw => String(hw || "")
+    .replace(/\*/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\/|\/$/g, "")
+    .trim();
+  const heroIpa = entry?.pronunciation || "";
+  const heroHw = formatHeroHw(entry?.hw || entry?.headword || "");
+  $("heroPron").innerHTML = `
+    ${heroIpa ? `<div class="learner-ipa-line">/${escapeHtml(heroIpa)}/</div>` : ""}
+    ${heroHw ? `<div class="learner-hw-line">${escapeHtml(heroHw)}</div>` : ""}
+  `;
+
+  const labels = entry
+    ? ((entry.functionalLabels && entry.functionalLabels.length) ? entry.functionalLabels : [entry.functionalLabel].filter(Boolean))
+    : (w.grammarLabels || []);
+  $("heroChips").innerHTML = labels.length ? labels.map(g => `<span class="gram-chip ${gramClass(g)}">${escapeHtml(g)}</span>`).join("") : "";
+
+  // stats are rendered at bottom of each tab (tabBottomHtml), not in hero
+
+  $("audioBtn").disabled = !entry?.audioUrl;
+
+  // Inflections in hero
+  const heroInf = $("heroInflections");
+  if (heroInf) {
+    const allInf = [];
+    for (const ent of (entry?.mainEntries || [])) {
+      for (const inf of (ent.inflections || [])) {
+        if (inf.form && !allInf.includes(inf.form)) allInf.push(inf.form);
+      }
+    }
+    heroInf.textContent = allInf.slice(0, 6).join(" · ");
+  }
+
+  // Breadcrumb
+  const bc = $("breadcrumb");
+  if (sheetChain.length <= 1) bc.classList.add("hidden");
+  else {
+    bc.classList.remove("hidden");
+    $("crumbChain").innerHTML = sheetChain.map((k, i) => {
+      const w2 = words.find(x => x.key === k);
+      const name = w2 ? w2.word : k;
+      const isCurrent = i === sheetChain.length - 1;
+      const cls = isCurrent ? "crumb current" : "crumb";
+      const click = isCurrent ? "" : `onclick="crumbJump(${i})"`;
+      return `<span class="${cls}" ${click}>${escapeHtml(name)}</span>${i < sheetChain.length - 1 ? '<span class="crumb-sep">›</span>' : ""}`;
+    }).join("");
+  }
+
+  renderSheetTab();
+
+  // Always show the TOP of the card (the word title), not wherever the previous
+  // word was scrolled to. Reset repeatedly because async content (Chinese /
+  // related words) can otherwise shift the scroll back down.
+  const _sb = document.getElementById("sheetBody");
+  if (_sb) {
+    const toTop = () => { try { _sb.scrollTop = 0; } catch (e) {} };
+    toTop(); requestAnimationFrame(toTop);
+    setTimeout(toTop, 0); setTimeout(toTop, 90); setTimeout(toTop, 220);
+  }
+
+  // Mark this card as just-shown so the autoplay observer doesn't double-play.
+  window.__cardShownKey = w.key;
+  window.__cardShownAt = Date.now();
+  // Play the word's pronunciation immediately when its card appears (if cached).
+  // (On iOS this only succeeds inside the tap/advance gesture — the observer is a
+  // desktop fallback.)
+  if (entry && entry.audioUrl) {
+    try { playAudioFor(w.key, document.getElementById("audioBtn")); } catch (e) {}
+  }
+
+  // Auto-fetch if not cached
+  if (!entry) {
+    fetchDefinition(w).then(() => {
+      if (currentWord && currentWord.key === w.key) showWord(w.key);
+    }).catch(err => {
+      console.warn("Fetch failed:", err);
+    });
+  }
+
+  // Kick off background prefetch of the next few words so advance feels instant
+  prefetchUpcoming();
+}
+
+function showAdjacentWord(direction) {
+  if (!currentWord) return;
+  let keys = currentSheetListKeys && currentSheetListKeys.length ? currentSheetListKeys : filteredWords().map(w => w.key);
+  if (!keys.includes(currentWord.key)) keys = words.map(w => w.key);
+  const idx = keys.indexOf(currentWord.key);
+  if (idx < 0) return;
+  const nextIdx = idx + direction;
+  if (nextIdx < 0 || nextIdx >= keys.length) {
+    toast(direction > 0 ? "Last word" : "First word");
+    return;
+  }
+  const nextKey = keys[nextIdx];
+  sheetChain = [nextKey];
+  showWord(nextKey);
+}
+
+
+function updateWordsStickyHeight() {
+  const header = $("wordsHeader");
+  if (!header) return;
+  const height = Math.ceil(header.getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--section-stick-top", height + "px");
+  document.documentElement.style.setProperty("--words-header-height", height + "px");
+  if (!header.__wordsHeaderResizeObserver && typeof ResizeObserver !== "undefined") {
+    header.__wordsHeaderResizeObserver = new ResizeObserver(() => {
+      const h = Math.ceil(header.getBoundingClientRect().height);
+      document.documentElement.style.setProperty("--section-stick-top", h + "px");
+      document.documentElement.style.setProperty("--words-header-height", h + "px");
+    });
+    header.__wordsHeaderResizeObserver.observe(header);
+  }
+}
+
+function updateWordsHeaderCompact() {
+  const header = $("wordsHeader");
+  if (!header) return;
+  const isWordsPage = document.querySelector('.page[data-page="words"]')?.classList.contains("active");
+  const compact = isWordsPage && window.scrollY > 70;
+  header.classList.toggle("scrolled", isWordsPage && window.scrollY > 4);
+  header.classList.toggle("compact", compact);
+  if (!compact) header.classList.remove("search-open");
+  updateWordsStickyHeight();
+}
+
+function expandSearchFromCompact() {
+  const header = $("wordsHeader");
+  if (!header) return;
+  if (header.classList.contains("compact") && !header.classList.contains("search-open")) {
+    header.classList.add("search-open");
+    setTimeout(() => $("searchInput")?.focus(), 30);
+  }
+}
+
+
+function setSheetActiveTabButton(tabName) {
+  const sheet = document.getElementById("sheet");
+  const scope = sheet || document;
+  scope.querySelectorAll(".tab-row button").forEach(btn => {
+    const btnTab = btn.dataset ? btn.dataset.tab : btn.getAttribute("data-tab");
+    btn.classList.toggle("active", btnTab === tabName);
+  });
+}
+
+function setSheetTab(t) {
+  sheetTab = t;
+  setSheetActiveTabButton(t);
+  renderSheetTab();
+}
+
+function tabBottomHtml(w) {
+  const r = progress[w.key] || defaultProgress();
+  const m = pct(r.matching.correct, r.matching.attempts);
+  const s = pct(r.spelling.correct, r.spelling.attempts);
+  const mStr = m == null ? "—" : m + "%";
+  const sStr = s == null ? "—" : s + "%";
+  return `<div class="tab-bottom">
+    <div class="tab-stats"><span>💕 ${mStr}</span><span>✏️ ${sStr}</span></div>
+    <button class="tab-practice-btn" onclick="practiceCurrentWord()">🎮 Practice this word</button>
+    <div class="next-word-wrap">
+      <div class="next-word-hint" id="nextWordHint">Pull up to advance</div>
+      <button class="next-word-btn" id="nextWordRing" onclick="advanceToNextWord()" title="Next word ↓">
+        <span class="nw-arrow">↓</span><svg viewBox="0 0 58 58"><circle cx="29" cy="29" r="26"/></svg>
+      </button>
+    </div>
+  </div>`;
+}
+
+function renderSheetTab() {
+  hardCleanAllRuntimeVocabulary();
+  if (!currentWord) return;
+  const w = currentWord;
+  const entry = dictCache[w.key];
+  const c = $("tabContent");
+  c.innerHTML = "";
+  c.style.animation = "none"; void c.offsetHeight; c.style.animation = "";
+
+  if (sheetTab === "meaning") {
+    if (!entry) {
+      c.innerHTML = `<div class="shimmer tall"></div><div class="shimmer" style="width:80%"></div><div class="shimmer" style="width:60%"></div><div style="text-align:center;color:var(--muted);font-size:12px;margin-top:12px">Fetching dictionary entry…</div>` + tabBottomHtml(w);
+      return;
+    }
+    const mainEntries = entry.mainEntries || [];
+    if (!mainEntries.length) {
+      const defs = entry.definitions || [];
+      let html = defs.length
+        ? defs.map((d, i) => `<div class="meaning-item"><span class="sense-label">${i+1}</span><span class="meaning-def">${escapeHtml(d)}</span></div>`).join('')
+        : `<div class="empty-state" style="padding:20px 10px"><div class="emoji">📭</div><div class="t">No definition found</div></div>`;
+      c.innerHTML = html + tabBottomHtml(w);
+      return;
+    }
+    let html = '<div class="learner-def-panel collegiate-def-panel">';
+    mainEntries.forEach((ent, idx) => {
+      const cls = gramClass(ent.functionalLabel || '');
+      const fl = ent.functionalLabel || 'entry';
+      html += `<div class="learner-pos-block collegiate-pos-block">
+        <div class="learner-pos-head collegiate-pos-head">
+          <span class="gram-chip ${cls}">${escapeHtml(fl)}</span>
+        </div>
+        ${renderEntryDefinitions(ent)}
+      </div>`;
+    });
+    html += '</div>';
+    c.innerHTML = html + tabBottomHtml(w);
+
+  } else if (sheetTab === "related") {
+    if (!entry) {
+      c.innerHTML = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">🌿</div><div class="t">Fetching related entries…</div></div>` + tabBottomHtml(w);
+      return;
+    }
+    const localRelated = (w.relatedKeys || []).map(k => words.find(x => x.key === k)).filter(Boolean);
+    let html = '';
+    if (localRelated.length) {
+      html += `<div class="dict-block-title">In your word list</div>`;
+      html += `<div class="related-grid">` + localRelated.map(r =>
+        `<button class="related-pill" data-key="${escapeHtml(r.key)}" onclick="navigateRelated(this.dataset.key)">${escapeHtml(r.word)}</button>`
+      ).join('') + `</div>`;
+    }
+    // From the dictionary: runOns + relatedBaseEntries + otherEntries not already in word list
+    const dictItems = [
+      ...(entry.runOns || []).map(ro => ({
+        headword: ro.word, hw: ro.hw, functionalLabel: ro.functionalLabel,
+        shortDefinitions: [],
+        meanings: ro.examples && ro.examples.length ? [{label:'',definitionSegments:[{definition:'',examples:ro.examples}]}] : []
+      })),
+      ...(entry.relatedBaseEntries || []),
+      ...(entry.otherEntries || [])
+    ].filter(ent => {
+      const k = normalizeKey(ent.headword || ent.word || '');
+      return k && !words.find(x => x.key === k && !x.isTemporaryPreview);
+    });
+    if (dictItems.length) {
+      html += `<div class="dict-block-title">From the dictionary</div>`;
+      html += dictItems.map(ent => renderPreviewCard(ent)).join('');
+    }
+    if (!html) html = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">🌿</div><div class="t">No related entries</div><div class="d">No related forms found for this word.</div></div>`;
+    c.innerHTML = html + tabBottomHtml(w);
+
+  } else if (sheetTab === "synonyms") {
+    if (!entry) {
+      c.innerHTML = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">🔁</div><div class="t">Fetching synonym notes…</div></div>` + tabBottomHtml(w);
+      return;
+    }
+    const synNotes = entry.synonymDiscussions || [];
+    let html = '';
+    for (const sd of synNotes) {
+      const notes = sd.notes || [];
+      const examples = sd.examples || [];
+      // notes[0] = overview sentence + first-word explanation combined
+      if (notes[0]) {
+        html += `<div class="syn-overview">${escapeHtml(notes[0])}`;
+        if (examples[0]) html += `<br><span style="display:block;margin-top:6px;font-style:italic;color:var(--ink-soft)">"${escapeHtml(examples[0].text || '')}"</span>`;
+        html += `</div>`;
+      }
+      // notes[1..n] = per-synonym paragraphs; extract first word as title
+      for (let i = 1; i < notes.length; i++) {
+        const noteText = notes[i].trim();
+        const spaceIdx = noteText.indexOf(' ');
+        const synWord = spaceIdx > 0 ? noteText.slice(0, spaceIdx) : noteText;
+        const synExp = spaceIdx > 0 ? noteText.slice(spaceIdx + 1) : '';
+        const synEx = examples[i];
+        html += `<div class="syn-card">
+          <div class="syn-word">${escapeHtml(synWord)}</div>
+          <div class="syn-text">${escapeHtml(synExp)}</div>
+          ${synEx ? `<div class="syn-example">${escapeHtml(synEx.text || '')}${synEx.author ? `<span class="meaning-author">— ${escapeHtml(synEx.author)}</span>` : ''}</div>` : ''}
+        </div>`;
+      }
+      if ((sd.seeAlso || []).length) html += `<div class="syn-see-also">See also: ${sd.seeAlso.map(x => escapeHtml(x)).join(', ')}</div>`;
+    }
+    if (!html) html = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">🔁</div><div class="t">No synonym notes</div><div class="d">This entry does not include a synonym discussion.</div></div>`;
+    c.innerHTML = html + tabBottomHtml(w);
+  }
+}
+
+function renderEntryDefinitions(ent) {
+  const meanings = ent.meanings || [];
+  if (!meanings.length) {
+    return (ent.shortDefinitions || []).map((d, i) =>
+      `<div class="meaning-item"><span class="sense-label">${i+1}</span><span class="meaning-def">${escapeHtml(d)}</span></div>`
+    ).join('');
+  }
+  let html = '', lastDivider = '';
+  for (const m of meanings) {
+    if (m.verbDivider && m.verbDivider !== lastDivider) {
+      lastDivider = m.verbDivider;
+      html += `<div class="verb-divider"><span class="vd-label">${escapeHtml(lastDivider)}</span></div>`;
+    }
+    for (const seg of (m.definitionSegments || [])) {
+      html += `<div class="meaning-item">`;
+      if (m.label) html += `<span class="sense-label">${escapeHtml(m.label)}</span>`;
+      if (seg.definition) html += `<span class="meaning-def">${escapeHtml(seg.definition)}</span>`;
+      const exs = seg.examples || [];
+      if (exs.length) {
+        html += `<div class="meaning-examples">`;
+        html += exs.map(ex => {
+          const t = ex.text || String(ex);
+          const auth = ex.author || '';
+          return `<div class="meaning-example">${escapeHtml(t)}${auth ? `<span class="meaning-author">— ${escapeHtml(auth)}</span>` : ''}</div>`;
+        }).join('');
+        html += `</div>`;
+      }
+      html += `</div>`;
+    }
+  }
+  return html;
+}
+
+
+
+
+function renderExistingRelatedCard(w, defText = "", flText = "") {
+  const cached = dictCache[w.key] || {};
+  const label = flText || ((cached.functionalLabels && cached.functionalLabels.length) ? cached.functionalLabels.join(", ") : ((w.grammarLabels || []).join(", ") || "existing vocabulary card"));
+  const def = defText || (cached.definitions && cached.definitions[0]) || (cached.shortDefinitions && cached.shortDefinitions[0]) || (w.sourceExamples && w.sourceExamples[0]) || "";
+  return `<div class="preview-card in-list">
+    <div class="pc-top">
+      <div class="pc-left">
+        <div class="pc-word">${escapeHtml(w.word)}</div>
+        <div class="pc-fl">${escapeHtml(label)} · existing vocabulary card</div>
+      </div>
+      <button class="pc-open" data-key="${escapeHtml(w.key)}" onclick="openExistingRelatedCard(this.dataset.key)">Open</button>
+    </div>
+    ${def ? `<div class="pc-def">${escapeHtml(def)}</div>` : ""}
+  </div>`;
+}
+
+function renderPreviewCard(ent) {
+  const headword = ent.headword || ent.word || '';
+  const key = normalizeKey(headword);
+  const fl = ent.functionalLabel || '';
+  const def = (ent.shortDefinitions && ent.shortDefinitions[0]) || firstDefinition(ent) || '';
+  const sourceKey = currentWord ? currentWord.key : '';
+  const sourceWord = currentWord ? currentWord.word : '';
+
+  const isCreated = !!newlyCreatedApiCards[key];
+  const payload = { term: headword, functionalLabel: fl, grammar_labels: fl ? [fl] : [], sourceFromWord: sourceWord, sourceFromKey: sourceKey, sourceEntryType: 'relatedEntry', insertAfterKey: sourceKey };
+  const safePayload = encodeURIComponent(JSON.stringify(payload));
+  const actionBtn = isCreated
+    ? `<button class="pc-open" data-headword="${escapeHtml(headword)}" data-source="${escapeHtml(sourceKey)}" onclick="openApiPreview(this.dataset.headword, this.dataset.source)">Open</button>`
+    : `<button class="pc-add" data-payload="${safePayload}" onclick="createGeneratedVocabCard(this.dataset.payload)">+</button>`;
+
+  return `<div class="preview-card">
+    <div class="pc-top">
+      <div class="pc-left">
+        <div class="pc-word">${escapeHtml(headword)}</div>
+        ${fl ? `<div class="pc-fl">${escapeHtml(fl)}</div>` : ''}
+      </div>
+      ${actionBtn}
+    </div>
+    ${def ? `<div class="pc-def">${escapeHtml(def)}</div>` : ''}
+  </div>`;
+}
+
+async function createGeneratedVocabCard(encodedPayload) {
+  let payload;
+  try { payload = JSON.parse(decodeURIComponent(encodedPayload)); }
+  catch { toast("Cannot create card"); return; }
+
+  try {
+    const res = await fetch("/api/generated-vocab", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    const item = { ...payload, ...(data.item || {}) };
+    newlyCreatedApiCards[item.key || normalizeKey(item.term || item.word)] = true;
+    const newWords = extractWords({ items: [item] });
+    words = mergeWordLists(words, newWords);
+    applyCreatedCardMetadata(item);
+    applyGeneratedOrdering([item]);
+    ensureProgressRecords();
+    saveAll();
+    toast("Created vocabulary card");
+    renderAll();
+    renderSheetTab();
+  } catch (e) {
+    toast("Create failed: " + e.message);
+  }
+}
+
+async function openApiPreview(headword, sourceKey = "") {
+  const key = normalizeKey(headword);
+  const existing = words.find(x => x.key === key && !x.isTemporaryPreview);
+  if (existing) {
+    if (sourceKey && !existing.relatedKeys?.includes(sourceKey)) {
+      existing.relatedKeys = existing.relatedKeys || [];
+      existing.relatedKeys.unshift(sourceKey);
+      saveAll();
+    }
+    sheetTab = "meaning";
+    setSheetActiveTabButton("meaning");
+    sheetChain = [key];
+    showWord(key);
+    return;
+  }
+  if (!newlyCreatedApiCards[key]) { toast("Create the card first"); return; }
+  const source = sourceKey ? words.find(x => x.key === sourceKey) : currentWord;
+  const tempWord = { key, word: headword, grammarLabels: [], rawTexts: [], sourceExamples: [], categories: [{ level: "API Added", topHeader: "Merriam-Webster", sectionTitle: "Preview" }], familyIds: [], relatedKeys: source ? [source.key] : [], levels: ["API Added"], isDerivativeOrRelatedForm: false, isTemporaryPreview: false, sourceFromKey: source ? source.key : "", sourceFromWord: source ? source.word : "" };
+  words.push(tempWord);
+  ensureProgressRecords();
+  saveAll();
+  sheetTab = "meaning";
+  setSheetActiveTabButton("meaning");
+  sheetChain = [key];
+  showWord(key);
+}
+
+
+
+
+function openExistingRelatedCard(key) {
+  sheetTab = "meaning";
+  setSheetActiveTabButton("meaning");
+  navigateRelated(key);
+}
+
+const RELATED_CREATED_KEY = "ielts_vocab_related_created_words_v1";
+
+function loadRelatedCreatedWords() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(RELATED_CREATED_KEY) || "[]");
+    return Array.isArray(arr) ? arr.filter(x => x && (x.key || x.word)) : [];
+  } catch { return []; }
+}
+
+function saveRelatedCreatedWords(arr) {
+  const map = new Map();
+  for (const item of (Array.isArray(arr) ? arr : [])) {
+    const key = normalizeKey(item.key || item.word || item.term);
+    if (!key) continue;
+    map.set(key, {
+      key,
+      word: String(item.word || item.term || key).trim() || key,
+      sourceFromKey: normalizeKey(item.sourceFromKey || item.originKey || ""),
+      sourceFromWord: String(item.sourceFromWord || item.originWord || "").trim()
+    });
+  }
+  try { localStorage.setItem(RELATED_CREATED_KEY, JSON.stringify([...map.values()].sort((a, b) => a.word.localeCompare(b.word)))); } catch {}
+}
+
+function rememberRelatedCreatedWord(item) {
+  const key = normalizeKey(item.key || item.term || item.word);
+  if (!key) return;
+  const arr = loadRelatedCreatedWords();
+  arr.push({
+    key,
+    word: item.word || item.term || key,
+    sourceFromKey: normalizeKey(item.sourceFromKey || item.insertAfterKey || ""),
+    sourceFromWord: item.sourceFromWord || ""
+  });
+  saveRelatedCreatedWords(arr);
+}
+
+function isRelatedCreatedWord(w) {
+  if (!w) return false;
+  if (w.specialStatus === "created_from_related_entry" || w.sourceEntryType === "relatedEntry") return true;
+  const key = normalizeKey(w.key || w.word);
+  return !!key && loadRelatedCreatedWords().some(x => x.key === key);
+}
+
+function recreateRelatedCreatedWords(arr) {
+  const clean = [];
+  for (const item of (Array.isArray(arr) ? arr : [])) {
+    const key = normalizeKey(item.key || item.word || item.term);
+    if (!key) continue;
+    const word = String(item.word || item.term || key).trim() || key;
+    const sourceFromKey = normalizeKey(item.sourceFromKey || item.originKey || "");
+    const sourceFromWord = String(item.sourceFromWord || item.originWord || "").trim();
+    clean.push({ key, word, sourceFromKey, sourceFromWord });
+    if (!words.find(w => w.key === key)) {
+      words.push({
+        key,
+        word,
+        grammarLabels: [],
+        rawTexts: [],
+        sourceExamples: [],
+        categories: [{ level: "Related", topHeader: "Created from related", sectionTitle: sourceFromWord || "Related vocabulary" }],
+        familyIds: [],
+        relatedKeys: sourceFromKey ? [sourceFromKey] : [],
+        levels: ["Related"],
+        isDerivativeOrRelatedForm: false,
+        isTemporaryPreview: false,
+        specialStatus: "created_from_related_entry",
+        sourceEntryType: "relatedEntry",
+        sourceFromKey,
+        sourceFromWord,
+        insertAfterKey: sourceFromKey
+      });
+    }
+    const w = words.find(x => x.key === key);
+    if (w) {
+      w.specialStatus = "created_from_related_entry";
+      w.sourceEntryType = "relatedEntry";
+      w.sourceFromKey = sourceFromKey;
+      w.sourceFromWord = sourceFromWord;
+    }
+    const source = sourceFromKey ? words.find(x => x.key === sourceFromKey) : null;
+    if (source) {
+      source.relatedKeys = source.relatedKeys || [];
+      if (!source.relatedKeys.includes(key)) source.relatedKeys.push(key);
+    }
+  }
+  saveRelatedCreatedWords(clean);
+}
+
+function applyCreatedCardMetadata(item) {
+  const key = normalizeKey(item.key || item.term || item.word);
+  const sourceKey = normalizeKey(item.sourceFromKey || item.insertAfterKey || "");
+  const w = words.find(x => x.key === key);
+  if (!w) return;
+
+  w.specialStatus = item.specialStatus || "created_from_related_entry";
+  w.sourceEntryType = item.sourceEntryType || "relatedEntry";
+  w.sourceFromKey = sourceKey;
+  w.sourceFromWord = item.sourceFromWord || "";
+  w.insertAfterKey = item.insertAfterKey || sourceKey;
+  rememberRelatedCreatedWord({ ...item, key, word: w.word, sourceFromKey: sourceKey, sourceFromWord: w.sourceFromWord });
+
+  if (sourceKey) {
+    w.relatedKeys = w.relatedKeys || [];
+    if (!w.relatedKeys.includes(sourceKey)) w.relatedKeys.unshift(sourceKey);
+
+    const source = words.find(x => x.key === sourceKey);
+    if (source) {
+      source.relatedKeys = source.relatedKeys || [];
+      if (!source.relatedKeys.includes(key)) source.relatedKeys.push(key);
+    }
+  }
+}
+
+
+function applyGeneratedOrdering(generatedItems) {
+  if (!Array.isArray(generatedItems) || !generatedItems.length) return;
+  for (const item of generatedItems) {
+    applyCreatedCardMetadata(item);
+    const key = normalizeKey(item.key || item.term || item.word);
+    const after = normalizeKey(item.insertAfterKey || item.sourceFromKey || "");
+    if (!key || !after) continue;
+    const idx = words.findIndex(w => w.key === key);
+    const afterIdx = words.findIndex(w => w.key === after);
+    if (idx < 0 || afterIdx < 0 || idx === afterIdx + 1) continue;
+    const [w] = words.splice(idx, 1);
+    const newAfterIdx = words.findIndex(x => x.key === after);
+    words.splice(newAfterIdx + 1, 0, w);
+  }
+}
+
+function toggleKnown() {
+  if (!currentWord) return;
+  known[currentWord.key] = !known[currentWord.key];
+  if (!known[currentWord.key]) delete known[currentWord.key];
+  saveKnown();
+  toast(known[currentWord.key] ? "✓ Marked as known" : "Unmarked");
+  renderWordList();
+  renderHome();
+}
+
+/* ============================================================
+   AUDIO & FETCH
+   ============================================================ */
+let currentAudio = null;
+function playAudio() {
+  if (!currentWord) return;
+  playAudioFor(currentWord.key, $("audioBtn"));
+}
+async function playAudioFor(key, sourceBtn) {
+  const w = words.find(x => x.key === key);
+  if (!w) return;
+  let entry = dictCache[key];
+  const btn = sourceBtn || (currentWord && currentWord.key === key ? $("audioBtn") : null);
+  if (!entry) {
+    try {
+      if (btn) btn.classList.add("playing");
+      toast("Fetching pronunciation…");
+      entry = await fetchDefinition(w);
+      renderWordList();
+      if (currentWord && currentWord.key === key) showWord(key);
+    } catch (err) {
+      console.warn("Pronunciation fetch failed:", err);
+      if (btn) btn.classList.remove("playing");
+      toast("Could not fetch pronunciation");
+      return;
+    }
+  }
+  if (!entry?.audioUrl) {
+    if (btn) btn.classList.remove("playing");
+    toast("No audio available");
+    return;
+  }
+  if (currentAudio) { try { currentAudio.pause(); } catch (e) { } }
+  currentAudio = new Audio(entry.audioUrl);
+  const activeBtn = btn || $("audioBtn");
+  if (activeBtn) activeBtn.classList.add("playing");
+  currentAudio.addEventListener("ended", () => activeBtn && activeBtn.classList.remove("playing"));
+  currentAudio.addEventListener("error", () => { if (activeBtn) activeBtn.classList.remove("playing"); toast("Audio failed"); });
+  currentAudio.play().catch(() => activeBtn && activeBtn.classList.remove("playing"));
+}
+
+async function fetchDefinition(w) {
+  const url = `/api/define?word=${encodeURIComponent(w.word)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    let msg = "HTTP " + res.status;
+    try { msg = (await res.json()).detail || msg; } catch { }
+    throw new Error(msg);
+  }
+  const entry = await res.json();
+  dictCache[w.key] = entry;
+  saveAll();
+  return entry;
+}
+
+/* ============================================================
+   GAMES
+   ============================================================ */
+const SESSION_LEN = 10;
+function cachedWords() { return words.filter(w => dictCache[w.key] && (dictCache[w.key].definitions || []).length); }
+function sample(arr, n) { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a.slice(0, n); }
+
+function startGame(mode, customPool) {
+  const pool = customPool || (mode === "spelling" ? words : cachedWords());
+  if ((mode === "spelling" ? pool.length < 1 : pool.length < 4)) {
+    toast(mode === "spelling" ? "No words available" : "Open a few words first to cache definitions");
+    return;
+  }
+  game = { mode, pool, queue: sample(pool, Math.min(SESSION_LEN, pool.length)), idx: 0, correct: 0, streak: 0, bestStreak: 0 };
+  $("gameOverlay").classList.add("show");
+  renderGame();
+}
+
+function exitGame() {
+  $("gameOverlay").classList.remove("show");
+  game = null;
+  renderAll();
+}
+
+function renderGame() {
+  if (!game) return;
+  const dots = $("progressDots");
+  dots.innerHTML = "";
+  for (let i = 0; i < game.queue.length; i++) {
+    const d = document.createElement("div");
+    d.className = "pdot" + (i < game.idx ? " done" : i === game.idx ? " current" : "");
+    dots.appendChild(d);
+  }
+  $("gameStreak").textContent = "🔥" + game.streak;
+  if (game.idx >= game.queue.length) return renderSummary();
+  const w = game.queue[game.idx];
+  if (game.mode === "wordToMeaning" || game.mode === "meaningToWord") renderMC(w);
+  else if (game.mode === "matching") renderMatch();
+  else if (game.mode === "spelling") renderSpell(w);
+}
+
+
+/* ============================================================
+   PATCH: Practice pronunciation + spelling hint helpers
+   ============================================================ */
+
+function practicePlayPronunciation(key, sourceBtn) {
+  if (!key) return;
+  try {
+    if (typeof playAudioFor === "function") {
+      playAudioFor(key, sourceBtn || null);
+    } else {
+      const w = words.find(x => x.key === key);
+      if (w && typeof speechSynthesis !== "undefined") {
+        const utterance = new SpeechSynthesisUtterance(w.word);
+        utterance.lang = "en-US";
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utterance);
+      }
+    }
+  } catch (err) {
+    console.warn("Practice pronunciation failed:", err);
+  }
+}
+
+function practiceDefinitionForWord(w) {
+  const entry = dictCache[w.key] || {};
+  return (
+    entry.definitions?.[0] ||
+    entry.shortDefinitions?.[0] ||
+    entry.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
+    "No definition is available yet. Open this word card once to fetch its dictionary data."
+  );
+}
+
+
+
+/* ============================================================
+   SAFE PATCH: Practice helpers
+   ============================================================ */
+
+function practicePlayPronunciation(key, sourceBtn) {
+  if (!key) return;
+  try {
+    if (typeof playAudioFor === "function") {
+      playAudioFor(key, sourceBtn || null);
+    } else {
+      const w = words.find(x => x.key === key);
+      if (w && typeof speechSynthesis !== "undefined") {
+        const utterance = new SpeechSynthesisUtterance(w.word);
+        utterance.lang = "en-US";
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utterance);
+      }
+    }
+  } catch (err) {
+    console.warn("Practice pronunciation failed:", err);
+  }
+}
+
+function practiceDefinitionForWord(w) {
+  const entry = dictCache[w.key] || {};
+  return (
+    entry.definitions?.[0] ||
+    entry.shortDefinitions?.[0] ||
+    entry.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
+    w.def ||
+    "No definition is available yet. Open this word card once to fetch its dictionary data."
+  );
+}
+
+
+
+/* ============================================================
+   REPAIR: Practice pronunciation + spelling cloze helpers
+   ============================================================ */
+
+function practicePlayPronunciationAndThen(key, sourceBtn, done) {
+  let finished = false;
+
+  function finish() {
+    if (finished) return;
+    finished = true;
+    if (typeof done === "function") done();
+  }
+
+  if (!key) {
+    finish();
+    return;
+  }
+
+  try {
+    const w = words.find(x => x.key === key);
+    const entry = dictCache[key] || {};
+
+    const audioUrl =
+      entry.audio ||
+      entry.audioUrl ||
+      entry.pronunciationAudio ||
+      entry.usAudio ||
+      entry.ukAudio ||
+      entry.phonetics?.find?.(p => p.audio)?.audio ||
+      "";
+
+    if (audioUrl) {
+      const audio = new Audio(audioUrl);
+      audio.onended = finish;
+      audio.onerror = finish;
+      audio.play().catch(() => finish());
+      return;
+    }
+
+    if (typeof playAudioFor === "function") {
+      playAudioFor(key, sourceBtn || null);
+      const wordLength = w?.word ? String(w.word).length : 8;
+      setTimeout(finish, Math.min(1900, Math.max(850, wordLength * 130)));
+      return;
+    }
+
+    if (w && typeof speechSynthesis !== "undefined") {
+      const utterance = new SpeechSynthesisUtterance(w.word);
+      utterance.lang = "en-US";
+      utterance.onend = finish;
+      utterance.onerror = finish;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(utterance);
+      setTimeout(finish, Math.min(2300, Math.max(950, String(w.word).length * 150)));
+      return;
+    }
+
+    finish();
+  } catch (err) {
+    console.warn("Practice pronunciation completion failed:", err);
+    finish();
+  }
+}
+
+function collectExampleSentencesFromEntry(entry) {
+  const out = [];
+
+  function pushExample(x) {
+    if (!x) return;
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (s) out.push(s);
+      return;
+    }
+    if (typeof x.text === "string" && x.text.trim()) out.push(x.text.trim());
+    if (typeof x.sentence === "string" && x.sentence.trim()) out.push(x.sentence.trim());
+  }
+
+  if (!entry) return out;
+
+  if (Array.isArray(entry.examples)) entry.examples.forEach(pushExample);
+  if (Array.isArray(entry.example_sentences)) entry.example_sentences.forEach(pushExample);
+
+  const groups = [
+    ...(entry.mainEntries || []),
+    ...(entry.relatedBaseEntries || []),
+    ...(entry.otherEntries || [])
+  ];
+
+  for (const ent of groups) {
+    if (Array.isArray(ent.examples)) ent.examples.forEach(pushExample);
+
+    for (const meaning of (ent.meanings || [])) {
+      for (const seg of (meaning.definitionSegments || [])) {
+        if (Array.isArray(seg.examples)) seg.examples.forEach(pushExample);
+      }
+    }
+  }
+
+  return [...new Set(out)];
+}
+
+function spellingQuestionCandidatesFromEntry(entry) {
+  const out = [];
+  const seen = new Set();
+  const add = (text, partOfSpeech) => {
+    const s = typeof text === "string" ? text.trim() : "";
+    if (!s || seen.has(s)) return;
+    seen.add(s);
+    out.push({ text: s, partOfSpeech: String(partOfSpeech || "").trim() });
+  };
+  if (!entry) return out;
+
+  add(entry.examples?.[0], entry.functionalLabel || entry.partOfSpeech || "");
+  const groups = [
+    ...(entry.mainEntries || []),
+    ...(entry.relatedBaseEntries || []),
+    ...(entry.otherEntries || [])
+  ];
+  for (const ent of groups) {
+    const pos = ent.functionalLabel || ent.partOfSpeech || ent.fl || "";
+    (ent.examples || []).forEach(ex => add(typeof ex === "string" ? ex : (ex?.text || ex?.sentence), pos));
+    for (const meaning of (ent.meanings || [])) {
+      for (const seg of (meaning.definitionSegments || [])) {
+        (seg.examples || []).forEach(ex => add(typeof ex === "string" ? ex : (ex?.text || ex?.sentence), pos));
+      }
+    }
+  }
+  return out;
+}
+
+function spellingSurfaceForms(base) {
+  const b = String(base || "").trim();
+  const lower = b.toLowerCase();
+  const forms = [b];
+
+  if (lower.endsWith("e")) {
+    forms.push(b + "d");
+    forms.push(b.slice(0, -1) + "ing");
+  } else {
+    forms.push(b + "ed");
+    forms.push(b + "ing");
+  }
+
+  forms.push(b + "s");
+  forms.push(b + "es");
+
+  return [...new Set(forms)].sort((a, b) => b.length - a.length);
+}
+
+function makeClozeDisplay(surface, base) {
+  const s = String(surface || "");
+  const b = String(base || "");
+  if (!s || !b) return "";
+
+  const lowerSurface = s.toLowerCase();
+  const lowerBase = b.toLowerCase();
+
+  let suffix = "";
+
+  if (lowerSurface.startsWith(lowerBase)) {
+    suffix = s.slice(b.length);
+  } else if (lowerBase.endsWith("e") && lowerSurface.startsWith(lowerBase.slice(0, -1))) {
+    suffix = s.slice(lowerBase.slice(0, -1).length);
+  }
+
+  const first = s[0] || "";
+  const blankCount = Math.max(1, b.length - 1);
+  const blanks = Array(blankCount).fill("_").join(" ");
+
+  return `${first}${blanks}${suffix}`;
+}
+
+function buildSpellingQuestionFromEntry(w, entry) {
+  const word = String(w.word || "").trim();
+  const examples = collectExampleSentencesFromEntry(entry);
+  const exampleCandidates = spellingQuestionCandidatesFromEntry(entry);
+  const forms = spellingSurfaceForms(word);
+
+  for (const item of (exampleCandidates.length ? exampleCandidates : examples.map(text => ({ text, partOfSpeech: "" })))) {
+    const ex = item.text || "";
+    for (const form of forms) {
+      const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`\\b${escaped}\\b`, "i");
+      if (re.test(ex)) {
+        const matched = ex.match(re)?.[0] || form;
+        const cloze = makeClozeDisplay(matched, word);
+        return {
+          prompt: ex.replace(re, cloze),
+          source: "api-example",
+          partOfSpeech: item.partOfSpeech || ""
+        };
+      }
+    }
+  }
+
+  const definition =
+    entry?.definitions?.[0] ||
+    entry?.shortDefinitions?.[0] ||
+    entry?.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
+    w.def ||
+    "";
+  const definitionPos =
+    entry?.mainEntries?.[0]?.functionalLabel ||
+    entry?.mainEntries?.[0]?.partOfSpeech ||
+    entry?.functionalLabel ||
+    entry?.partOfSpeech ||
+    "";
+
+  return {
+    prompt: definition ? `${definition}\n\nType the base word.` : `${word.length} letters. Type the base word.`,
+    source: definition ? "definition" : "",
+    partOfSpeech: definition ? definitionPos : ""
+  };
+}
+
+function practiceDefinitionForWord(w) {
+  const entry = dictCache[w.key] || {};
+  return (
+    entry.definitions?.[0] ||
+    entry.shortDefinitions?.[0] ||
+    entry.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
+    w.def ||
+    "No definition is available yet. Open this word card once to fetch its dictionary data."
+  );
+}
+
+
+function renderMC(w) {
+  const others = sample(game.pool.filter(x => x.key !== w.key), 3);
+  const options = sample([w, ...others], 4);
+  const isWordToMeaning = game.mode === "wordToMeaning";
+  const prompt = isWordToMeaning ? w.word : (dictCache[w.key].definitions || [])[0];
+  const promptLabel = isWordToMeaning ? "Choose the meaning" : "Choose the word";
+  const optHtml = options.map(o => {
+    const text = isWordToMeaning ? (dictCache[o.key].definitions || [])[0] : o.word;
+    return `<button class="game-option" data-key="${escapeHtml(o.key)}">${escapeHtml(text || "")}</button>`;
+  }).join("");
+  $("gameBody").innerHTML = `<div class="game-prompt-label">${promptLabel}</div><div class="game-prompt ${isWordToMeaning ? "" : "small"}">${escapeHtml(prompt || "")}</div><div class="game-options">${optHtml}</div>`;
+  $("gameBody").querySelectorAll(".game-option").forEach(b => b.onclick = () => answerMC(b.dataset.key, w.key));
+}
+
+function answerMC(picked, correctKey) {
+  const ok = picked === correctKey;
+  const r = progress[correctKey].matching;
+  r.attempts++;
+  if (ok) r.correct++;
+  saveAll();
+
+  if (ok) {
+    game.correct++;
+    game.streak++;
+    game.bestStreak = Math.max(game.bestStreak, game.streak);
+  } else {
+    game.streak = 0;
+  }
+
+  let correctBtn = null;
+
+  document.querySelectorAll(".game-option").forEach(b => {
+    if (b.dataset.key === correctKey) {
+      b.classList.add("correct");
+      correctBtn = b;
+    } else if (b.dataset.key === picked) {
+      b.classList.add("wrong");
+    }
+    b.disabled = true;
+  });
+
+  $("gameStreak").textContent = "🔥" + game.streak;
+
+  if (ok) {
+    practicePlayPronunciationAndThen(correctKey, correctBtn, nextQuestion);
+  } else {
+    const body = $("gameBody");
+    const next = document.createElement("button");
+    next.className = "game-btn primary";
+    next.style.marginTop = "16px";
+    next.textContent = "Playing pronunciation…";
+    next.disabled = true;
+    body.appendChild(next);
+
+    practicePlayPronunciationAndThen(correctKey, correctBtn, () => {
+      next.textContent = "Continue";
+      next.disabled = false;
+      next.onclick = nextQuestion;
+    });
+  }
+}
+
+function renderMatch() {
+  if (game.pool.length < 4) { game.idx = game.queue.length; return renderSummary(); }
+  const items = sample(game.pool, 4);
+  const defs = sample(items, 4);
+  game.matchState = { remaining: 4, selected: null, items: items.map(w => w.key), defs: defs.map(w => w.key) };
+  const wordsHtml = items.map(w => `<button class="match-cell w" data-key="${escapeHtml(w.key)}">${escapeHtml(w.word)}</button>`).join("");
+  const defsHtml = defs.map(w => `<button class="match-cell d" data-key="${escapeHtml(w.key)}">${escapeHtml((dictCache[w.key].definitions || [])[0] || "")}</button>`).join("");
+  $("gameBody").innerHTML = `<div class="game-prompt-label">Matching</div><div class="game-prompt small">Tap a word, then its meaning</div><div class="match-grid"><div class="match-col">${wordsHtml}</div><div class="match-col">${defsHtml}</div></div>`;
+  $("gameBody").querySelectorAll(".match-cell.w").forEach(b => b.onclick = () => {
+    document.querySelectorAll(".match-cell.w").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel");
+    game.matchState.selected = b.dataset.key;
+  });
+  $("gameBody").querySelectorAll(".match-cell.d").forEach(b => b.onclick = () => answerMatch(b));
+}
+
+function answerMatch(defBtn) {
+  if (!game.matchState.selected) return;
+
+  const wKey = game.matchState.selected;
+  const dKey = defBtn.dataset.key;
+  const ok = wKey === dKey;
+
+  const r = progress[wKey].matching;
+  r.attempts++;
+  if (ok) r.correct++;
+  saveAll();
+
+  if (ok) {
+    game.correct++;
+    game.streak++;
+    game.bestStreak = Math.max(game.bestStreak, game.streak);
+
+    defBtn.classList.add("correct");
+    defBtn.disabled = true;
+
+    const wb = document.querySelector(`.match-cell.w[data-key="${CSS.escape(wKey)}"]`);
+    if (wb) {
+      wb.classList.add("correct");
+      wb.disabled = true;
+      wb.classList.remove("sel");
+    }
+
+    // NEW: Matching correct answer auto-plays pronunciation.
+    practicePlayPronunciation(wKey, wb || defBtn);
+
+    game.matchState.remaining--;
+    game.matchState.selected = null;
+    $("gameStreak").textContent = "🔥" + game.streak;
+
+    if (game.matchState.remaining === 0) {
+      setTimeout(nextQuestion, 850);
+    }
+  } else {
+    game.streak = 0;
+    $("gameStreak").textContent = "🔥0";
+
+    defBtn.classList.add("wrong");
+    setTimeout(() => defBtn.classList.remove("wrong"), 500);
+
+    document.querySelectorAll(".match-cell.w").forEach(x => x.classList.remove("sel"));
+    game.matchState.selected = null;
+  }
+}
+
+async function renderSpell(w) {
+  $("gameBody").innerHTML = `
+    <div class="game-prompt-label">${spellPromptLabelHtml(w, null)}</div>
+    <div class="game-prompt small">Loading example sentence…</div>
+    <div class="game-spell">
+      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" disabled />
+      <button class="game-btn primary" id="checkSpellBtn" disabled>Check</button>
+    </div>
+  `;
+
+  let entry = dictCache[w.key] || null;
+
+  if (!entry && typeof fetchDefinition === "function") {
+    try {
+      entry = await fetchDefinition(w);
+      if (entry) dictCache[w.key] = entry;
+    } catch (err) {
+      console.warn("Could not fetch spelling example:", err);
+    }
+  }
+
+  const q = buildSpellingQuestionFromEntry(w, entry);
+  const hint = practiceDefinitionForWord(w);
+
+  $("gameBody").innerHTML = `
+    <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
+    <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
+    <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;">
+      ${escapeHtml(hint)}
+    </div>
+    <div class="game-spell">
+      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+      <div style="display:flex;gap:10px;">
+        <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
+        <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
+      </div>
+    </div>
+  `;
+
+  $("spellInput").focus();
+
+  $("spellHintBtn").onclick = () => {
+    const box = $("spellHintBox");
+    if (box) box.style.display = "block";
+  };
+
+  $("checkSpellBtn").onclick = () => answerSpell(w);
+
+  $("spellInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") answerSpell(w);
+  });
+}
+
+
+/* ============================================================
+   PATCH: spelling cloze question from API examples
+   ============================================================ */
+
+function collectExampleSentencesFromEntry(entry) {
+  const out = [];
+
+  function pushExample(x) {
+    if (!x) return;
+    if (typeof x === "string") {
+      const s = x.trim();
+      if (s) out.push(s);
+      return;
+    }
+    if (typeof x.text === "string") {
+      const s = x.text.trim();
+      if (s) out.push(s);
+    }
+    if (typeof x.sentence === "string") {
+      const s = x.sentence.trim();
+      if (s) out.push(s);
+    }
+  }
+
+  if (!entry) return out;
+
+  if (Array.isArray(entry.examples)) entry.examples.forEach(pushExample);
+  if (Array.isArray(entry.example_sentences)) entry.example_sentences.forEach(pushExample);
+
+  const groups = [
+    ...(entry.mainEntries || []),
+    ...(entry.relatedBaseEntries || []),
+    ...(entry.otherEntries || [])
+  ];
+
+  for (const ent of groups) {
+    if (Array.isArray(ent.examples)) ent.examples.forEach(pushExample);
+
+    for (const meaning of (ent.meanings || [])) {
+      for (const seg of (meaning.definitionSegments || [])) {
+        if (Array.isArray(seg.examples)) seg.examples.forEach(pushExample);
+      }
+    }
+  }
+
+  return [...new Set(out)];
+}
+
+function spellingSurfaceForms(base) {
+  const b = String(base || "").trim();
+  const lower = b.toLowerCase();
+  const forms = [b];
+
+  if (lower.endsWith("e")) {
+    forms.push(b + "d");
+    forms.push(b.slice(0, -1) + "ing");
+  } else {
+    forms.push(b + "ed");
+    forms.push(b + "ing");
+  }
+
+  forms.push(b + "s");
+  forms.push(b + "es");
+
+  return [...new Set(forms)].sort((a, b) => b.length - a.length);
+}
+
+function makeClozeDisplay(surface, base) {
+  const s = String(surface || "");
+  const b = String(base || "");
+
+  if (!s || !b) return "";
+
+  const lowerSurface = s.toLowerCase();
+  const lowerBase = b.toLowerCase();
+
+  let suffix = "";
+
+  if (lowerSurface.startsWith(lowerBase)) {
+    suffix = s.slice(b.length);
+  } else if (lowerBase.endsWith("e") && lowerSurface.startsWith(lowerBase.slice(0, -1))) {
+    suffix = s.slice(lowerBase.slice(0, -1).length);
+  }
+
+  const first = s[0] || "";
+  const blankCount = Math.max(1, b.length - 1);
+  const blanks = Array(blankCount).fill("_").join(" ");
+
+  return `${first}${blanks}${suffix}`;
+}
+
+function buildSpellingQuestionFromEntry(w, entry) {
+  const word = String(w.word || "").trim();
+  const examples = collectExampleSentencesFromEntry(entry);
+  const exampleCandidates = spellingQuestionCandidatesFromEntry(entry);
+  const forms = spellingSurfaceForms(word);
+
+  for (const item of (exampleCandidates.length ? exampleCandidates : examples.map(text => ({ text, partOfSpeech: "" })))) {
+    const ex = item.text || "";
+    for (const form of forms) {
+      const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const re = new RegExp(`\\b${escaped}\\b`, "i");
+      if (re.test(ex)) {
+        const matched = ex.match(re)?.[0] || form;
+        const cloze = makeClozeDisplay(matched, word);
+        const prompt = ex.replace(re, cloze);
+        return { prompt, source: "api-example", partOfSpeech: item.partOfSpeech || "" };
+      }
+    }
+  }
+
+  const fallback = entry?.definitions?.[0] || entry?.shortDefinitions?.[0] || "";
+  if (fallback) {
+    return {
+      prompt: `${fallback}\n\nAnswer with the base word.`,
+      source: "definition",
+      partOfSpeech: entry?.functionalLabel || entry?.partOfSpeech || ""
+    };
+  }
+
+  return {
+    prompt: `${word.length} letters. Type the base word.`,
+    source: "",
+    partOfSpeech: ""
+  };
+}
+
+
+function normalizeSpelling(s) { return normalizeKey(s).replace(/[’']/g, "'"); }
+
+function answerSpell(w) {
+  const inp = $("spellInput");
+  const ans = inp.value;
+  const ok = normalizeSpelling(ans) === normalizeSpelling(w.word);
+
+  const r = progress[w.key].spelling;
+  r.attempts++;
+  if (ok) r.correct++;
+  saveAll();
+
+  if (ok) {
+    game.correct++;
+    game.streak++;
+    game.bestStreak = Math.max(game.bestStreak, game.streak);
+    inp.classList.add("correct");
+  } else {
+    game.streak = 0;
+    inp.classList.add("wrong");
+  }
+
+  $("gameStreak").textContent = "🔥" + game.streak;
+
+  inp.disabled = true;
+
+  const checkBtn = $("checkSpellBtn");
+  if (checkBtn) checkBtn.remove();
+
+  const hintBtn = $("spellHintBtn");
+  if (hintBtn) hintBtn.remove();
+
+  const body = $("gameBody");
+  const result = document.createElement("div");
+  result.style.marginTop = "12px";
+  result.style.textAlign = "center";
+  result.style.fontWeight = "700";
+  result.innerHTML = ok
+    ? `<div style="color:#3F6212">✓ Correct!</div>`
+    : `<div style="color:#9F1239">Correct: <b>${escapeHtml(w.word)}</b></div>`;
+  body.appendChild(result);
+
+  const next = document.createElement("button");
+  next.className = "game-btn primary";
+  next.style.marginTop = "12px";
+  next.textContent = "Playing pronunciation…";
+  next.disabled = true;
+  body.appendChild(next);
+
+  practicePlayPronunciationAndThen(w.key, inp, () => {
+    next.textContent = ok ? "Next" : "Continue";
+    next.disabled = false;
+    next.onclick = nextQuestion;
+
+    if (ok) {
+      nextQuestion();
+    }
+  });
+}
+
+function nextQuestion() {
+  game.idx++;
+  renderGame();
+}
+
+function renderSummary() {
+  const total = game.queue.length;
+  const acc = Math.round((game.correct / total) * 100);
+  const emoji = acc >= 90 ? "🏆" : acc >= 70 ? "🎉" : acc >= 50 ? "👍" : "💪";
+  const title = acc >= 90 ? "Outstanding!" : acc >= 70 ? "Great job!" : acc >= 50 ? "Keep going" : "Practice makes perfect";
+  $("gameBody").innerHTML = `<div class="game-summary">
+    <div class="summary-emoji">${emoji}</div>
+    <div class="summary-title">${title}</div>
+    <div class="summary-sub">${game.correct} of ${total} correct</div>
+    <div class="summary-stats">
+      <div class="summary-stat"><div class="v">${acc}%</div><div class="l">Accuracy</div></div>
+      <div class="summary-stat"><div class="v">${game.bestStreak}</div><div class="l">Best streak</div></div>
+    </div>
+    <div style="display:flex;gap:10px;width:100%;max-width:320px">
+      <button class="game-btn secondary" onclick="exitGame()">Done</button>
+      <button class="game-btn primary" onclick="startGame('${game.mode}')">Play again</button>
+    </div>
+  </div>`;
+}
+
+function practiceCurrentWord() {
+  if (!currentWord) return;
+
+  // Opened from an info-panel list (double panel): instead of starting a session
+  // immediately, take the user to the Practice tab at step 2 with this word's
+  // family preselected, so they can choose the practice type.
+  const sheetEl = document.getElementById("sheet");
+  if (window.__cardBackPanel || (sheetEl && sheetEl.classList.contains("from-list"))) {
+    const famKeys = [currentWord.key, ...((currentWord.relatedKeys || []))].filter(Boolean);
+    const panel = window.__cardBackPanel; window.__cardBackPanel = null;
+    try {
+      if (panel) {
+        panel.classList.remove("show");
+        document.body.classList.remove("history-overlay-open");
+        document.documentElement.classList.remove("history-overlay-open");
+      }
+    } catch (e) {}
+    if (typeof closeSheet === "function") closeSheet();
+    if (typeof goto === "function") goto("practice");
+    setTimeout(function () {
+      if (typeof window.practicePrepareCustomPool === "function") {
+        window.practicePrepareCustomPool({ keys: famKeys });
+      }
+    }, 80);
+    return;
+  }
+
+  const family = [currentWord, ...(currentWord.relatedKeys || []).map(k => words.find(w => w.key === k)).filter(Boolean)];
+  const pool = family.filter(w => dictCache[w.key] && (dictCache[w.key].definitions || []).length);
+  if (pool.length < 1) { toast("No cached definitions in this family yet"); return; }
+  if (pool.length < 4) {
+    // Force spelling if not enough for MC
+    closeSheet();
+    startGame("spelling", family);
+  } else {
+    closeSheet();
+    startGame("wordToMeaning", pool);
+  }
+}
+
+
+/* ============================================================
+   LEAN BACKUP / SYNC JSON HELPERS v3
+   - Export Backup and Drive sync use the same readable layout.
+   - No words, dictCache, easyDictCache, practiceLastCfg, or progress block.
+   ============================================================ */
+function arrFromLookup(obj) {
+  if (!obj) return [];
+  if (Array.isArray(obj)) return [...new Set(obj.map(normalizeKey).filter(Boolean))].sort();
+  return Object.keys(obj).filter(k => obj[k]).map(normalizeKey).filter(Boolean).sort();
+}
+function lookupFromArray(arr) {
+  const out = {};
+  for (const k of (Array.isArray(arr) ? arr : [])) {
+    const key = normalizeKey(k);
+    if (key) out[key] = true;
+  }
+  return out;
+}
+function hasMeaningfulProgressRecord(r) {
+  if (!r || typeof r !== "object") return false;
+  if (Number(r._consecCorrect || 0) > 0) return true;
+  if (Number(r.attempts || 0) > 0 || Number(r.correct || 0) > 0 || Number(r.wrong || 0) > 0) return true;
+  for (const v of Object.values(r)) {
+    if (!v || typeof v !== "object") continue;
+    if (Number(v.attempts || 0) > 0 || Number(v.correct || 0) > 0 || Number(v.wrong || 0) > 0) return true;
+    if (v.lastAttemptAt || v.lastCorrectAt) return true;
+  }
+  return false;
+}
+function compactProgressForStorage(src) {
+  const out = {};
+  for (const [k, r] of Object.entries(src || {})) {
+    const key = normalizeKey(k);
+    if (!key || !hasMeaningfulProgressRecord(r)) continue;
+    out[key] = r;
+  }
+  return out;
+}
+function normalizeBackupSession(s) {
+  if (!s || typeof s !== "object") return null;
+  const masteredWords = arrFromLookup(s.masteredWords || s.mastered || []);
+  const learningWords = arrFromLookup(s.learningWords || s.wrongKeys || s.reviewWords || []);
+  const wrongKeys = arrFromLookup(s.wrongKeys || []);
+  const correctKeys = arrFromLookup(s.correctKeys || []);
+  const loadedWordKeys = arrFromLookup(s.loadedWordKeys || s.wordKeys || s.poolKeys || []);
+  const id = String(s.id || s.sessionId || s.startedAt || ("s_" + Date.now() + "_" + Math.random().toString(36).slice(2))).trim();
+  return {
+    id,
+    startedAt: s.startedAt || "",
+    endedAt: s.endedAt || "",
+    mode: s.mode || "",
+    total: Number(s.total || s.sessionLength || s.totalAnswered || 0),
+    correct: Number(s.correct || s.correctAnswered || 0),
+    wrong: Number(s.wrong || (Array.isArray(s.wrongKeys) ? s.wrongKeys.length : 0) || 0),
+    masteredWords,
+    learningWords,
+    correctKeys,
+    loadedWordKeys,
+    poolDescription: s.poolDescription || "",
+    poolConfig: s.poolConfig || null,
+    poolSize: Number(s.poolSize || 0),
+    sessionLength: Number(s.sessionLength || s.total || 0),
+    studyUntilMastered: !!s.studyUntilMastered,
+    totalAnswered: Number(s.totalAnswered || s.total || 0),
+    correctAnswered: Number(s.correctAnswered || s.correct || 0),
+    uniqueWordsCorrect: Number(s.uniqueWordsCorrect || masteredWords.length || 0),
+    bestStreak: Number(s.bestStreak || 0),
+    wrongKeys,
+    completed: s.completed !== false
+  };
+}
+function loadJsonLocal(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback; }
+  catch { return fallback; }
+}
+function buildLeanBackupPayload() {
+  const now = new Date().toISOString();
+  const currentKnown = (typeof known !== "undefined" && known) ? known : loadJsonLocal(LS.KNOWN, {});
+  const currentReview = (typeof needsReview !== "undefined" && needsReview) ? needsReview : loadJsonLocal(LS.REVIEW, {});
+  const currentProgress = (typeof progress !== "undefined" && progress) ? progress : loadJsonLocal(LS.PROGRESS, {});
+  const currentHistory = loadJsonLocal(LS.PRACTICE_HISTORY, []);
+  const currentLastLoadedPool = loadJsonLocal("ielts_vocab_practice_last_loaded_pool_v1", null);
+  const currentGoal = loadJsonLocal(LS.GOAL, null);
+  const currentDaily = loadJsonLocal(LS.DAILY_RECORD, {});
+  const dictionarySource = localStorage.getItem(LS.DICT_SOURCE) || "learner";
+  const translationMode = localStorage.getItem(LS.ZH_TRANSLATION_MODE) || (localStorage.getItem("ielts_vocab_zh_translation_v1") === "1" ? "on" : "off");
+  const modeIntroRaw = localStorage.getItem(LS.MODE_INTRO_DONE);
+  const hasSavedGoal = Number((currentGoal || {}).wordsPerDay || (currentGoal || {}).dailyTarget || (currentGoal || {}).target || 0) > 0;
+  const modeIntroDone = modeIntroRaw === "1" || (modeIntroRaw === null && hasSavedGoal);
+  const modeIntroUpdatedAt = localStorage.getItem(LS.MODE_INTRO_UPDATED_AT) || now;
+  const masteredSet = new Set(arrFromLookup(currentKnown));
+  const learningSet = new Set(arrFromLookup(currentReview));
+  for (const s of (Array.isArray(currentHistory) ? currentHistory : [])) {
+    for (const k of arrFromLookup(s.learningWords || s.wrongKeys || [])) learningSet.add(k);
+    for (const k of arrFromLookup(s.masteredWords || [])) masteredSet.add(k);
+  }
+  for (const [k, r] of Object.entries(currentProgress || {})) {
+    const key = normalizeKey(k);
+    if (!key || masteredSet.has(key)) continue;
+    if (hasMeaningfulProgressRecord(r)) learningSet.add(key);
+  }
+  for (const k of masteredSet) learningSet.delete(k);
+  const sessions = (Array.isArray(currentHistory) ? currentHistory : []).map(normalizeBackupSession).filter(Boolean).slice(-100);
+  return {
+    schema: "ielts-vocab-cloud-sync-v3",
+    meta: { exportedAt: now, updatedAt: now, mergedAt: now, app: "IELTS Vocabulary Webapp", storageMode: "lean-user-learning-backup" },
+    wordState: { masteredWords: [...masteredSet].sort(), learningWords: [...learningSet].sort(), relatedCreatedWords: loadRelatedCreatedWords() },
+    practice: { sessions, lastLoadedPool: currentLastLoadedPool || null },
+    goalTracking: { goal: currentGoal || {}, dailyRecord: currentDaily || {} },
+    preferences: {
+      dictionarySource: dictionarySource === "learner" ? "learner" : "collegiate",
+      translationMode: translationMode === "on" || translationMode === "blur" ? translationMode : "off",
+      modeIntroDone,
+      modeIntroUpdatedAt
+    },
+    syncInfo: {
+      masteredCount: masteredSet.size,
+      learningCount: learningSet.size,
+      sessionCount: sessions.length,
+      excluded: ["words", "dictCache", "easyDictCache", "practiceLastCfg", "needsReviewSeparateBlock", "progress", "emptyProgressRecords", "individualAnswerEvents", "wordKeys"],
+      conditionRule: {
+        masteredWords: "words already known/mastered",
+        learningWords: "words practiced but not yet mastered",
+        newWords: "not stored in backup; derived from the built-in vocabulary list"
+      }
+    }
+  };
+}
+function payloadToInternalState(data) {
+  if (data && (data.schema === "ielts-vocab-cloud-sync-v3" || data.schema === "ielts-vocab-cloud-sync-v4")) {
+    const masteredWords = arrFromLookup(data.wordState?.masteredWords || []);
+    const learningWords = arrFromLookup(data.wordState?.learningWords || []).filter(k => !masteredWords.includes(k));
+    const relatedCreatedWords = Array.isArray(data.wordState?.relatedCreatedWords) ? data.wordState.relatedCreatedWords : [];
+    return {
+      known: lookupFromArray(masteredWords),
+      needsReview: lookupFromArray(learningWords),
+      practiceHistory: (data.practice?.sessions || []).map(normalizeBackupSession).filter(Boolean).slice(-100),
+      goal: data.goalTracking?.goal || {},
+      dailyRecord: data.goalTracking?.dailyRecord || {},
+      preferences: data.preferences || null,
+      lastLoadedPool: data.practice?.lastLoadedPool || null,
+      relatedCreatedWords
+    };
+  }
+    const d = data?.data || data || {};
+  const oldKnown = d.known || data.known || {};
+  const oldReview = d.needsReview || data.needsReview || {};
+  const oldHistory = d.practiceHistory || data.practiceHistory || [];
+  const mastered = arrFromLookup(oldKnown);
+  const learning = new Set(arrFromLookup(oldReview));
+  for (const s of (Array.isArray(oldHistory) ? oldHistory : [])) {
+    for (const k of arrFromLookup(s.learningWords || s.wrongKeys || [])) learning.add(k);
+  }
+  for (const [k, r] of Object.entries(d.progress || data.progress || {})) {
+    const key = normalizeKey(k);
+    if (key && !mastered.includes(key) && hasMeaningfulProgressRecord(r)) learning.add(key);
+  }
+  mastered.forEach(k => learning.delete(k));
+  return {
+    known: lookupFromArray(mastered),
+    needsReview: lookupFromArray([...learning]),
+    practiceHistory: (Array.isArray(oldHistory) ? oldHistory : []).map(normalizeBackupSession).filter(Boolean).slice(-100),
+    goal: d.goal || data.goal || {},
+    dailyRecord: d.dailyRecord || data.dailyRecord || {},
+    preferences: data.preferences || d.preferences || null,
+    lastLoadedPool: data.practice?.lastLoadedPool || d.lastLoadedPool || null,
+    relatedCreatedWords: Array.isArray(data.wordState?.relatedCreatedWords) ? data.wordState.relatedCreatedWords : []
+  };
+}
+function applyLeanBackupPayload(data) {
+  const state = payloadToInternalState(data);
+  recreateRelatedCreatedWords(state.relatedCreatedWords || []);
+  known = state.known || {};
+  needsReview = state.needsReview || {};
+  progress = compactProgressForStorage(progress || {});
+  safeLocalSet(LS.KNOWN, JSON.stringify(known));
+  safeLocalSet(LS.REVIEW, JSON.stringify(needsReview));
+  safeLocalSet(LS.PROGRESS, JSON.stringify(progress));
+  safeLocalSet(LS.PRACTICE_HISTORY, JSON.stringify(state.practiceHistory || []));
+  safeLocalSet("ielts_vocab_practice_last_loaded_pool_v1", JSON.stringify(state.lastLoadedPool || null));
+  safeLocalSet(LS.GOAL, JSON.stringify(state.goal || {}));
+  safeLocalSet(LS.DAILY_RECORD, JSON.stringify(state.dailyRecord || {}));
+  if (state.preferences && typeof state.preferences === "object") {
+    const prefs = state.preferences;
+    if (prefs.dictionarySource === "learner" || prefs.dictionarySource === "collegiate") {
+      safeLocalSet(LS.DICT_SOURCE, prefs.dictionarySource);
+    }
+    if (prefs.translationMode === "on" || prefs.translationMode === "blur" || prefs.translationMode === "off") {
+      safeLocalSet(LS.ZH_TRANSLATION_MODE, prefs.translationMode);
+      safeLocalSet("ielts_vocab_zh_translation_v1", prefs.translationMode === "off" ? "0" : "1");
+    }
+    if (Object.prototype.hasOwnProperty.call(prefs, "modeIntroDone")) {
+      safeLocalSet(LS.MODE_INTRO_DONE, prefs.modeIntroDone ? "1" : "0");
+      safeLocalSet(LS.MODE_INTRO_UPDATED_AT, prefs.modeIntroUpdatedAt || new Date().toISOString());
+    }
+  }
+  try { localStorage.removeItem(LS.DICT); } catch {}
+  try { localStorage.removeItem(LS.EASY_DICT); } catch {}
+  if (typeof renderAll === "function") renderAll();
+  if (typeof renderGoalTab === "function") renderGoalTab();
+  if ((state.practiceHistory || []).length && typeof window.preparePracticeHistoryHome === "function") {
+    try { window.preparePracticeHistoryHome("backup-apply"); } catch {}
+  }
+  if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+}
+if (!window.__leanWordStatusPatchV3) {
+  window.__leanWordStatusPatchV3 = true;
+  const _oldWordStatus = typeof wordStatus === "function" ? wordStatus : null;
+  wordStatus = function(w) {
+    if (known && known[w.key]) return "known";
+    if (needsReview && needsReview[w.key]) return "learning";
+    if (_oldWordStatus) return _oldWordStatus(w);
+    return "not_practiced";
+  };
+}
+window.buildCloudSyncPayloadV3 = buildLeanBackupPayload;
+window.applyCloudSyncPayloadV3 = applyLeanBackupPayload;
+window.mergeCloudSyncPayloadV3 = function(localPayload, remotePayload) {
+  const local = payloadToInternalState(localPayload || {});
+  const remote = payloadToInternalState(remotePayload || {});
+  const localWs = (localPayload && localPayload.wordState) || {};
+  const remoteWs = (remotePayload && remotePayload.wordState) || {};
+  const localGt = (localPayload && localPayload.goalTracking) || {};
+  const remoteGt = (remotePayload && remotePayload.goalTracking) || {};
+  const unionList = (...lists) => [...new Set(lists.flatMap(arr => Array.isArray(arr) ? arr.map(k => normalizeKey(k)).filter(Boolean) : []))].sort();
+  const relatedMap = new Map();
+  for (const item of [
+    ...(Array.isArray(remoteWs.relatedCreatedWords) ? remoteWs.relatedCreatedWords : []),
+    ...(Array.isArray(localWs.relatedCreatedWords) ? localWs.relatedCreatedWords : [])
+  ]) {
+    const key = normalizeKey(item && (item.key || item.word || item.term));
+    if (!key) continue;
+    relatedMap.set(key, {
+      key,
+      word: String(item.word || item.term || key).trim() || key,
+      sourceFromKey: normalizeKey(item.sourceFromKey || item.originKey || ""),
+      sourceFromWord: String(item.sourceFromWord || item.originWord || "").trim()
+    });
+  }
+  const mastered = new Set([...arrFromLookup(remote.known), ...arrFromLookup(local.known)]);
+  const learning = new Set([...arrFromLookup(remote.needsReview), ...arrFromLookup(local.needsReview)]);
+  mastered.forEach(k => learning.delete(k));
+  const sessionMap = new Map();
+  for (const s of [...(remote.practiceHistory || []), ...(local.practiceHistory || [])]) {
+    const ns = normalizeBackupSession(s);
+    if (ns) sessionMap.set(ns.id, { ...(sessionMap.get(ns.id) || {}), ...ns });
+  }
+  const mergedSessions = [...sessionMap.values()].slice(-100);
+  const now = new Date().toISOString();
+  const localPrefs = local.preferences && typeof local.preferences === "object" ? local.preferences : null;
+  const remotePrefs = remote.preferences && typeof remote.preferences === "object" ? remote.preferences : null;
+  const preferences = remotePrefs || localPrefs;
+  return {
+    schema: "ielts-vocab-cloud-sync-v3",
+    meta: { exportedAt: now, updatedAt: now, mergedAt: now, app: "IELTS Vocabulary Webapp", storageMode: "lean-user-learning-backup" },
+    wordState: {
+      masteredWords: [...mastered].sort(),
+      learningWords: [...learning].sort(),
+      meaningKnownWords: unionList(remoteWs.meaningKnownWords, localWs.meaningKnownWords),
+      spellingKnownWords: unionList(remoteWs.spellingKnownWords, localWs.spellingKnownWords),
+      meaningLearningWords: unionList(remoteWs.meaningLearningWords, localWs.meaningLearningWords),
+      spellingLearningWords: unionList(remoteWs.spellingLearningWords, localWs.spellingLearningWords),
+      relatedCreatedWords: [...relatedMap.values()].sort((a, b) => a.word.localeCompare(b.word))
+    },
+    practice: { sessions: mergedSessions },
+    goalTracking: {
+      goal: local.goal || remote.goal || {},
+      dailyRecord: { ...(remote.dailyRecord || {}), ...(local.dailyRecord || {}) },
+      goalV2: localGt.goalV2 || remoteGt.goalV2 || null,
+      dailyRecordV2: { ...(remoteGt.dailyRecordV2 || {}), ...(localGt.dailyRecordV2 || {}) }
+    },
+    preferences: preferences || {},
+    syncInfo: { masteredCount: mastered.size, learningCount: learning.size, sessionCount: mergedSessions.length }
+  };
+};
+
+/* ============================================================
+   IMPORT/EXPORT
+   ============================================================ */
+function exportBackup() {
+  const data = typeof window.buildLeanPayloadV4 === "function"
+    ? window.buildLeanPayloadV4("manual-export")
+    : buildLeanBackupPayload();
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ielts_vocab_backup.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("Backup downloaded");
+}
+
+async function importBackupFile(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    applyLeanBackupPayload(data);
+    toast("Backup imported");
+  } catch (e) { toast("Import failed: " + e.message); }
+}
+
+async function importVocabFile(file) {
+  try {
+    const json = JSON.parse(await file.text());
+    const incoming = extractWords(json);
+    words = mergeWordLists(words, incoming);
+    ensureProgressRecords();
+    saveAll();
+    renderAll();
+    toast("Vocabulary merged");
+  } catch (e) { toast("Import failed: " + e.message); }
+}
+
+function resetProgress() {
+  if (!confirm("Reset all progress and dictionary cache? Your word list and 'known' marks will stay.")) return;
+  progress = {}; dictCache = {};
+  ensureProgressRecords();
+  saveAll();
+  renderAll();
+  toast("Progress reset");
+}
+
+async function checkHealth() {
+  $("healthDesc").textContent = "Checking…";
+  try {
+    const res = await fetch("/api/health");
+    const j = await res.json();
+    $("healthDesc").textContent = j.ok ? (j.has_mw_dictionary_key ? "Online · Collegiate API key configured" : "Online · Dictionary API key missing") : "Backend error";
+  } catch (e) { $("healthDesc").textContent = "Cannot reach backend"; }
+}
+
+$("importFile").addEventListener("change", e => { if (e.target.files[0]) importVocabFile(e.target.files[0]); e.target.value = ""; });
+$("backupFile").addEventListener("change", e => { if (e.target.files[0]) importBackupFile(e.target.files[0]); e.target.value = ""; });
+
+/* ============================================================
+   TOAST & MISC
+   ============================================================ */
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(window._toastTO);
+  window._toastTO = setTimeout(() => t.classList.remove("show"), 1800);
+}
+
+// Scrolled header shadow
+window.addEventListener("scroll", () => {
+  $("wordsHeader").classList.toggle("scrolled", window.scrollY > 4);
+}, { passive: true });
+
+/* ── Sheet gestures: swipe L/R + close + keyboard ── */
+function doSwipeRight() {
+  if (!currentWord || !currentWord.key) return;
+
+  const key = currentWord.key;
+  const wasAlreadyKnown = !!known[key];
+
+  // Right swipe / Know it = force Known, never toggle.
+  known[key] = true;
+
+  // Remove Need Practice state if present.
+  if (typeof needsReview !== "undefined" && needsReview[key]) {
+    delete needsReview[key];
+  }
+
+  if (typeof saveKnown === "function") saveKnown();
+  if (typeof saveReview === "function") saveReview();
+  if (typeof saveAll === "function") saveAll();
+
+  if (typeof flashSheet === "function") flashSheet("green");
+  if (typeof toast === "function") {
+    toast(wasAlreadyKnown ? "✓ Already known" : "✓ Marked as known");
+  }
+
+  if (typeof renderWordList === "function") renderWordList();
+  if (typeof renderHome === "function") renderHome();
+
+  // First-time Known: move to next word, then force autoplay for the new panel word.
+  if (!wasAlreadyKnown && typeof showAdjacentWord === "function") {
+    setTimeout(() => {
+      const before = currentWord?.key || "";
+      showAdjacentWord(1);
+
+      setTimeout(() => {
+        const after = currentWord?.key || "";
+        if (after && after !== before) {
+          try {
+            const btn =
+              document.getElementById("audioBtn") ||
+              document.querySelector(".sheet .hero-audio") ||
+              document.querySelector(".sheet .speaker-btn") ||
+              document.querySelector(".sheet .card-speaker");
+
+            if (typeof playAudioFor === "function") {
+              playAudioFor(after, btn || null);
+            } else if (typeof playAudio === "function") {
+              playAudio();
+            } else if (btn) {
+              btn.click();
+            }
+          } catch (err) {
+            console.warn("Swipe-right next-word autoplay failed:", err);
+          }
+        }
+      }, 320);
+    }, 450);
+  } else if (typeof showWord === "function") {
+    showWord(key);
+  }
+}
+
+function doSwipeLeft() {
+  if (!currentWord || !currentWord.key) return;
+
+  const key = currentWord.key;
+
+  // Left swipe / Need practice = force Need Practice, never toggle.
+  if (known[key]) {
+    delete known[key];
+  }
+
+  if (typeof needsReview !== "undefined") {
+    needsReview[key] = true;
+  }
+
+  if (typeof progress !== "undefined") {
+    progress[key] = progress[key] || { correct: 0, wrong: 0, attempts: 0 };
+    progress[key].wrong = (progress[key].wrong || 0) + 1;
+    progress[key].attempts = (progress[key].attempts || 0) + 1;
+  }
+
+  if (typeof saveKnown === "function") saveKnown();
+  if (typeof saveReview === "function") saveReview();
+  if (typeof saveAll === "function") saveAll();
+
+  if (typeof flashSheet === "function") flashSheet("coral");
+  if (typeof toast === "function") toast("🔁 Needs more practice");
+
+  if (typeof showWord === "function") showWord(key);
+  if (typeof renderWordList === "function") renderWordList();
+  if (typeof renderHome === "function") renderHome();
+}
+
+function flashSheet(color) {
+  const f = $("sheetFlash");
+  if (!f) return;
+  f.className = `sheet-flash ${color} show`;
+  setTimeout(() => f.classList.remove("show"), 380);
+}
+
+function setupSheetGestures() {
+  const body = $("sheetBody");
+  if (!body) return;
+  let startX = null, startY = null, dragging = false;
+  const THRESH = 55;
+
+  function hideOverlay() {
+    const ov = $("swipeOverlay");
+    if (!ov) return;
+    ov.style.opacity = 0;
+    ov.className = "swipe-overlay";
+    const ll = $("swipeLabelLeft"), rl = $("swipeLabelRight");
+    if (ll) ll.style.opacity = 0;
+    if (rl) rl.style.opacity = 0;
+  }
+
+  function onStart(x, y) {
+    startX = x; startY = y; dragging = false;
+  }
+
+  function onMove(x, y) {
+    if (startX == null) return;
+    const dx = x - startX, dy = y - startY;
+    const adx = Math.abs(dx), ady = Math.abs(dy);
+    if (!dragging) {
+      if (ady > adx && ady > 8) {
+        // Vertical — check close gesture
+        if (body.scrollTop <= 0 && dy > 80) { closeSheet(); startX = null; return; }
+        if (ady > 10) { startX = null; return; } // let scroll handle
+        return;
+      }
+      if (adx > 8) dragging = true; else return;
+    }
+    const ratio = Math.min(adx / THRESH, 1);
+    const ov = $("swipeOverlay"), ll = $("swipeLabelLeft"), rl = $("swipeLabelRight");
+    if (!ov) return;
+    ov.style.opacity = 1;
+    if (dx < 0) {
+      ov.className = "swipe-overlay left";
+      if (ll) ll.style.opacity = ratio;
+      if (rl) rl.style.opacity = 0;
+    } else {
+      ov.className = "swipe-overlay right";
+      if (rl) rl.style.opacity = ratio;
+      if (ll) ll.style.opacity = 0;
+    }
+  }
+
+  function onEnd(x) {
+    if (startX == null) { hideOverlay(); return; }
+    const dx = x - startX;
+    hideOverlay();
+    if (dragging) {
+      if (dx > THRESH) doSwipeRight();
+      else if (dx < -THRESH) doSwipeLeft();
+    }
+    startX = null; dragging = false;
+  }
+
+  body.addEventListener("touchstart", e => { if (e.touches.length === 1) onStart(e.touches[0].clientX, e.touches[0].clientY); }, {passive: true});
+  body.addEventListener("touchmove", e => { if (e.touches.length === 1) onMove(e.touches[0].clientX, e.touches[0].clientY); }, {passive: true});
+  body.addEventListener("touchend", e => { onEnd(e.changedTouches[0].clientX); }, {passive: true});
+
+  body.addEventListener("mousedown", e => {
+    if (e.button !== 0) return;
+    onStart(e.clientX, e.clientY);
+    const mm = e2 => onMove(e2.clientX, e2.clientY);
+    const mu = e2 => { document.removeEventListener("mousemove", mm); document.removeEventListener("mouseup", mu); onEnd(e2.clientX); };
+    document.addEventListener("mousemove", mm);
+    document.addEventListener("mouseup", mu);
+  });
+
+  document.addEventListener("keydown", e => {
+    if (!$("sheet")?.classList.contains("show")) return;
+
+    const tag = (e.target?.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+
+    if (e.key === "ArrowRight") {
+      e.preventDefault();
+      e.stopPropagation();
+      doSwipeRight();
+    } else if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      e.stopPropagation();
+      doSwipeLeft();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      showAdjacentWord(-1);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      e.stopPropagation();
+      showAdjacentWord(1);
+    } else if (e.key === "Escape") {
+      closeSheet();
+    }
+  });
+}
+
+
+/* ── Prefetch upcoming words so advance feels instant ── */
+const PREFETCH_COUNT = 3;
+const _prefetchInflight = new Set();
+function prefetchUpcoming() {
+  if (!currentWord) return;
+  const keys = currentSheetListKeys && currentSheetListKeys.length ? currentSheetListKeys : words.map(w => w.key);
+  const idx = keys.indexOf(currentWord.key);
+  if (idx < 0) return;
+  for (let i = 1; i <= PREFETCH_COUNT; i++) {
+    const k = keys[idx + i];
+    if (!k) break;
+    if (dictCache[k]) continue;
+    if (_prefetchInflight.has(k)) continue;
+    const w = words.find(x => x.key === k);
+    if (!w) continue;
+    _prefetchInflight.add(k);
+    fetchDefinition(w)
+      .catch(() => {})
+      .finally(() => _prefetchInflight.delete(k));
+  }
+}
+
+/* ── Pull-to-advance gesture (touch) + click (desktop) ──
+   Info-panel only: pull UP at the bottom, release past distance → instant advance.
+   No hold timer. The existing ring/hint appearance is kept, but progress is distance-based.
+*/
+const AA_PULL_DISTANCE = 72;
+const AA_COOLDOWN_MS = 300;
+let _aa = null;        // active pull-up gesture state
+let _aaCooldown = 0;   // timestamp of last advance; new gestures ignored until +AA_COOLDOWN_MS
+
+function _ringOffset(progress) {
+  const ring = document.getElementById("nextWordRing");
+  if (!ring) return;
+  const c = ring.querySelector("circle");
+  if (c) {
+    const d = 163;
+    c.setAttribute("stroke-dashoffset", d * (1 - Math.min(progress, 1)));
+  }
+  const hint = document.getElementById("nextWordHint");
+  if (hint) {
+    if (progress >= 1) hint.textContent = "Release to advance";
+    else if (progress > 0) hint.textContent = "Pull a little more…";
+    else hint.textContent = "Pull up to advance";
+    hint.classList.toggle("active", progress > 0);
+  }
+}
+
+function _isAtBottom(body) {
+  return body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
+}
+
+function _aaCancel() {
+  _aa = null;
+  _ringOffset(0);
+}
+
+function setupAutoAdvance() {
+  const body = document.getElementById("sheetBody");
+  if (!body) return;
+
+  body.addEventListener("touchstart", (e) => {
+    if (Date.now() - _aaCooldown < AA_COOLDOWN_MS) return;
+    if (e.touches.length !== 1) return;
+
+    const y = e.touches[0].clientY;
+    _aa = {
+      startY: y,
+      lastY: y,
+      active: false,
+      ready: false,
+      maxPull: 0
+    };
+  }, { passive: true });
+
+  body.addEventListener("touchmove", (e) => {
+    if (!_aa) return;
+    if (e.touches.length !== 1) return;
+
+    const y = e.touches[0].clientY;
+    const dyStep = y - _aa.lastY;
+    _aa.lastY = y;
+
+    // Only activate this gesture inside the word-card info panel,
+    // and only when the panel content is already at the bottom.
+    if (!_aa.active) {
+      if (_isAtBottom(body) && dyStep < -2) {
+        _aa.active = true;
+        _aa.startY = y;
+        _aa.maxPull = 0;
+      } else {
+        return;
+      }
+    }
+
+    // Pull UP = finger moves upward = current Y is smaller than startY.
+    const pullDistance = Math.max(0, _aa.startY - y);
+    _aa.maxPull = Math.max(_aa.maxPull, pullDistance);
+    const progress = _aa.maxPull / AA_PULL_DISTANCE;
+    _aa.ready = progress >= 1;
+    _ringOffset(progress);
+
+    // If the user reverses back down substantially before release,
+    // cancel readiness but keep the gesture available until touchend.
+    if (dyStep > 8 && pullDistance < AA_PULL_DISTANCE * 0.35) {
+      _aa.ready = false;
+      _ringOffset(0);
+    }
+  }, { passive: true });
+
+  const endHandler = () => {
+    if (!_aa) return;
+    const shouldAdvance = _aa.active && _aa.ready && _aa.maxPull >= AA_PULL_DISTANCE;
+    _aaCancel();
+    if (shouldAdvance) advanceToNextWord();
+  };
+
+  body.addEventListener("touchend", endHandler, { passive: true });
+  body.addEventListener("touchcancel", endHandler, { passive: true });
+}
+
+function advanceToNextWord() {
+  if (!currentWord) return;
+  // No "advance through the list" when the card was opened from an info panel.
+  if (document.getElementById("sheet")?.classList.contains("from-list")) return;
+  if (Date.now() - _aaCooldown < AA_COOLDOWN_MS) return;
+  _aaCooldown = Date.now();
+  _aaCancel();
+
+  const keys = currentSheetListKeys && currentSheetListKeys.length ? currentSheetListKeys : words.map(w => w.key);
+  const idx = keys.indexOf(currentWord.key);
+  if (idx < 0 || idx >= keys.length - 1) { toast("End of list"); return; }
+  sheetChain = [keys[idx + 1]];
+  sheetTab = "meaning";
+  setSheetActiveTabButton("meaning");
+  showWord(keys[idx + 1]);
+  // Reset scroll to top
+  const body = document.getElementById("sheetBody");
+  if (body) {
+    body.scrollTop = 0;
+    requestAnimationFrame(() => { body.scrollTop = 0; });
+  }
+}
+
+bootstrap();
+
+
+
+function firstDefinition(ent) {
+  return firstDefinition(ent);
+}
+
+function firstDefinition(ent) {
+  if (!ent) return "";
+  if (Array.isArray(ent.shortDefinitions) && ent.shortDefinitions.length) {
+    return ent.shortDefinitions[0] || "";
+  }
+  if (Array.isArray(ent.definitions) && ent.definitions.length) {
+    const d = ent.definitions[0];
+    if (typeof d === "string") return d;
+    if (d && typeof d.definition === "string") return d.definition;
+  }
+  if (Array.isArray(ent.meanings) && ent.meanings.length) {
+    const m = ent.meanings[0];
+    if (typeof m === "string") return m;
+    if (m && typeof m.definition === "string") return m.definition;
+    if (m && Array.isArray(m.definitions) && m.definitions.length) {
+      const d = m.definitions[0];
+      if (typeof d === "string") return d;
+      if (d && typeof d.definition === "string") return d.definition;
+    }
+  }
+  return ent.definition || ent.meaning || "";
+}
+
+
+function hardCleanAllRuntimeVocabulary() {
+  try {
+    if (typeof words !== "undefined" && Array.isArray(words)) words = cleanLoadedVocabularyItems(words);
+    if (typeof allWords !== "undefined" && Array.isArray(allWords)) allWords = cleanLoadedVocabularyItems(allWords);
+    if (typeof vocabWords !== "undefined" && Array.isArray(vocabWords)) vocabWords = cleanLoadedVocabularyItems(vocabWords);
+    if (typeof WORDS !== "undefined" && Array.isArray(WORDS)) WORDS = cleanLoadedVocabularyItems(WORDS);
+    if (typeof state !== "undefined" && state && Array.isArray(state.words)) {
+      state.words = cleanLoadedVocabularyItems(state.words);
+    }
+  } catch (e) {
+    console.warn("Vocabulary runtime cleanup skipped", e);
+  }
+}
+
+function cleanLoadedVocabularyItems(items) {
+  const bad = new Set(["CONTINUATION", "Key to grammatical labels", "Labels used in word lists"]);
+  return (Array.isArray(items) ? items : []).filter(w => {
+    const vals = [w.section, w.title, w.original_section_title, w.boxed_bold_title, w.bold_title]
+      .map(v => String(v || "").trim());
+    return !vals.some(v => bad.has(v));
+  }).map(w => {
+    if (String(w.section || "").trim() === "CONTINUATION") w.section = w.title || w.bold_title || w.boxed_bold_title || "Uncategorised";
+    if (String(w.title || "").trim() === "CONTINUATION") w.title = w.section || w.bold_title || w.boxed_bold_title || "Uncategorised";
+    return w;
+  });
+}
+
+
+
+/* ============================================================
+   FINAL WORDS TAB FIX
+   Fixes card taps, fixed header, and numeric filter labels.
+   ============================================================ */
+
+function finalBadFilterValue(v) {
+  const s = String(v || "").trim();
+  if (!s) return true;
+  if (/^\d+$/.test(s)) return true;
+  if (/^\d+\s+\d+$/.test(s)) return true;
+  if (/^page\s*\d+$/i.test(s)) return true;
+  if (/^col\d+$/i.test(s)) return true;
+  if (/^(left|right|col1|col2|null|undefined)$/i.test(s)) return true;
+  if (s.length > 72) return true;
+  return false;
+}
+
+function finalArr(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(finalArr);
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+function finalClean(vals) {
+  const out = [];
+  const seen = new Set();
+  for (const v of vals || []) {
+    const s = String(v || "").trim();
+    if (finalBadFilterValue(s)) continue;
+    const k = normalizeKey(s);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function finalLabelPool(w) {
+  const vals = [];
+  const add = v => vals.push(...finalArr(v));
+
+  add(w.level); add(w.levels); add(w.sourceName); add(w.source_name);
+  add(w.top_header); add(w.topHeader);
+  add(w.boxed_bold_title); add(w.boxedBoldTitle);
+  add(w.bold_title); add(w.boldTitle);
+  add(w.section); add(w.title); add(w.titlePath); add(w.title_path);
+
+  for (const c of (w.categories || [])) {
+    add(c.level); add(c.sourceName); add(c.source_name);
+    add(c.topHeader); add(c.top_header);
+    add(c.boxedBoldTitle); add(c.boxed_bold_title); add(c.parentTitle);
+    add(c.boldTitle); add(c.bold_title); add(c.sectionTitle); add(c.title); add(c.section);
+    add(c.titlePath); add(c.title_path);
+  }
+
+  try { add(categoryLabelOf(w)); } catch {}
+  add(w.rawTexts);
+  return vals;
+}
+
+function finalSplitPath(v) {
+  return String(v || "")
+    .replace(/\s*\/\s*/g, " / ")
+    .split(/\s+\/\s+|[>｜|]+/)
+    .map(x => x.trim())
+    .filter(x => x && !finalBadFilterValue(x));
+}
+
+function finalLevel(w) {
+  const text = finalLabelPool(w).join(" / ");
+  if (/\bentry\b/i.test(text)) return "Entry";
+  if (/\bimprover\b/i.test(text)) return "Improver";
+  if (/\badvanced\b/i.test(text)) return "Advanced";
+  return "";
+}
+
+function finalBestPath(w) {
+  let best = [];
+  for (const lab of finalLabelPool(w)) {
+    const parts = finalSplitPath(lab);
+    if (parts.length > best.length) best = parts;
+  }
+  const lvl = finalLevel(w);
+  if (lvl) {
+    const idx = best.findIndex(x => /^(entry|improver|advanced)$/i.test(x));
+    if (idx > 0) best = best.slice(idx);
+    else if (idx < 0) best.unshift(lvl);
+  }
+  return best;
+}
+
+function wordMetaValues(w, field) {
+  const path = finalBestPath(w);
+  let vals = [];
+
+  if (field === "level") vals = finalLevel(w) ? [finalLevel(w)] : [];
+  else if (field === "topHeader") vals = path[1] ? [path[1]] : [];
+  else if (field === "boxedBoldTitle") vals = path[2] ? [path[2]] : [];
+  else if (field === "boldTitle") vals = path[3] ? [path[3]] : [];
+
+  if (!vals.length) {
+    const labels = finalClean(finalLabelPool(w));
+    if (field === "topHeader") {
+      vals = labels.filter(x => /^(academic study|arts|multi-discipline|sciences|social sciences|general|work|people|communication|environment)$/i.test(x));
+    } else if (field === "boxedBoldTitle") {
+      vals = labels.filter(x => !/^(entry|improver|advanced|academic study|arts|multi-discipline|sciences|social sciences)$/i.test(x)).slice(0, 2);
+    } else if (field === "boldTitle") {
+      vals = labels.filter(x => !/^(entry|improver|advanced)$/i.test(x)).slice(-2);
+    }
+  }
+
+  return finalClean(vals);
+}
+
+function wordMatchesMeta(w, field, selected) {
+  if (!selected || selected === "__all") return true;
+  return wordMetaValues(w, field).map(normalizeKey).includes(normalizeKey(selected));
+}
+
+function filterOptionCounts(field) {
+  const map = new Map();
+  for (const w of words) {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) continue;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) continue;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+    if (field === "status") {
+      const s = wordStatus(w);
+      map.set(s, (map.get(s) || 0) + 1);
+    } else {
+      for (const val of wordMetaValues(w, field)) {
+        if (!finalBadFilterValue(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+  }
+
+  return [...map.entries()].sort((a, b) => {
+    const order = { Entry: 0, Improver: 1, Advanced: 2 };
+    if (field === "level") return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function finalSectionName(w) {
+  const path = finalBestPath(w);
+  return path[1] || path[0] || "Words";
+}
+
+function renderWordList() {
+  const body = $("wordsBody");
+  const filtered = currentFilteredWords();
+  updateHeaderButtons();
+
+  if (!filtered.length) {
+    body.innerHTML = `<div class="empty-state"><div class="emoji">🔍</div><div class="t">No matches</div><div class="d">Try a different search or filter.</div></div>`;
+    finalBindWordCardOpenAndSwipe();
+    return;
+  }
+
+  const activeMode = shuffleActive || searchTerm || hasActiveWordFilters();
+  const wrapClass = viewMode === "grid" ? "word-grid" : "word-list";
+  const makeCard = viewMode === "grid"
+    ? (w => wordCardCompactHtml(w))
+    : (w => wordCardListHtml(w, categoryColor(finalSectionName(w))));
+  const endChip = `<div class="end-chip">End of list · ${filtered.length.toLocaleString()} words</div>`;
+
+  let lead = "", trail = endChip;
+  if (activeMode) {
+    const title = shuffleActive ? "Shuffled words" : searchTerm ? "Search results" : "Filtered words";
+    lead = `<div class="section-head clean-flat-head" style="top: 84px;">
+      <div class="title">✨ ${escapeHtml(title)} <span class="chip-count">${filtered.length}</span></div>
+      <div class="chev">⌄</div>
+    </div><div class="section-body">`;
+    trail = `</div>` + endChip;
+  }
+
+  renderCardsChunked(body, lead, filtered, makeCard, wrapClass, trail);
+}
+
+// Render a long card list progressively: first batch synchronously (fast first
+// paint, no blank cards), the rest appended in rAF batches. Click/swipe handling
+// is delegated, so appended cards work without rebinding.
+function renderCardsChunked(body, leadHtml, list, makeCardHtml, wrapClass, trailHtml) {
+  const FIRST = 90, BATCH = 90;
+  const firstCount = Math.min(FIRST, list.length);
+  let html = leadHtml + `<div class="${wrapClass}">`;
+  for (let i = 0; i < firstCount; i++) html += makeCardHtml(list[i]);
+  // Sentinel stays at the end; more cards are appended only as it nears the
+  // viewport — so the DOM stays small unless the user actually scrolls far.
+  html += `<div class="wl-sentinel" style="grid-column:1/-1;height:1px"></div></div>` + trailHtml;
+  body.innerHTML = html;
+  finalBindWordCardOpenAndSwipe();
+
+  const token = (renderCardsChunked.__token = (renderCardsChunked.__token || 0) + 1);
+  if (renderCardsChunked.__observer) { try { renderCardsChunked.__observer.disconnect(); } catch (e) {} renderCardsChunked.__observer = null; }
+  if (firstCount >= list.length) return;
+
+  // finalBindWordCardOpenAndSwipe clones #wordsBody, so re-query the live wrapper.
+  const liveBody = document.getElementById("wordsBody");
+  const wrap = liveBody && liveBody.querySelector("." + wrapClass.split(" ")[0]);
+  if (!wrap) return;
+  const sentinel = wrap.querySelector(".wl-sentinel");
+  if (!sentinel) return;
+
+  let i = firstCount;
+  function appendBatch() {
+    if (token !== renderCardsChunked.__token) return; // a newer render superseded us
+    const tmp = document.createElement("div");
+    let s = "";
+    const end = Math.min(i + BATCH, list.length);
+    for (; i < end; i++) s += makeCardHtml(list[i]);
+    tmp.innerHTML = s;
+    const frag = document.createDocumentFragment();
+    while (tmp.firstChild) frag.appendChild(tmp.firstChild);
+    wrap.insertBefore(frag, sentinel); // keep the sentinel last
+    if (i >= list.length) {
+      if (renderCardsChunked.__observer) { try { renderCardsChunked.__observer.disconnect(); } catch (e) {} renderCardsChunked.__observer = null; }
+      try { sentinel.remove(); } catch (e) {}
+    }
+  }
+  const obs = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting)) appendBatch();
+  }, { rootMargin: "1200px 0px" });
+  obs.observe(sentinel);
+  renderCardsChunked.__observer = obs;
+}
+
+function finalKeyFromNode(node) {
+  if (!node) return "";
+  const direct = node.getAttribute?.("data-key") || node.dataset?.key || node.getAttribute?.("data-word-key") || node.dataset?.wordKey;
+  if (direct) return direct;
+  const clickable = node.closest?.("[onclick*='showWord']") || node.querySelector?.("[onclick*='showWord']") || node;
+  const onclick = clickable.getAttribute ? (clickable.getAttribute("onclick") || "") : "";
+  let m = onclick.match(/showWord\(['"]([^'"]+)['"]\)/);
+  if (m) return m[1];
+  const wordText = (node.querySelector?.(".word, .w, .card-word, .word-title, .term")?.textContent || node.textContent || "").trim().split(/\n/)[0];
+  const found = words.find(w => normalizeKey(w.word) === normalizeKey(wordText));
+  return found ? found.key : "";
+}
+
+function finalCardFromTarget(target) {
+  return target.closest?.(".word-card, .word-card-compact, .card-word, [data-key], [data-word-key], [onclick*='showWord']");
+}
+
+function finalOpenCardFromTarget(target) {
+  const card = finalCardFromTarget(target);
+  if (!card) return false;
+  const key = finalKeyFromNode(card);
+  if (!key) return false;
+  openSheet(key);
+  return true;
+}
+
+function finalSwipeFeedback(text, type) {
+  let fb = $("swipeFeedback");
+  if (!fb) {
+    fb = document.createElement("div");
+    fb.id = "swipeFeedback";
+    fb.className = "swipe-feedback";
+    document.body.appendChild(fb);
+  }
+  fb.textContent = text;
+  fb.className = "swipe-feedback show " + (type || "");
+  clearTimeout(fb._t);
+  fb._t = setTimeout(() => fb.classList.remove("show"), 520);
+}
+
+function finalMarkSwipe(key, isKnown) {
+  if (!key) return;
+  if (isKnown) {
+    known[key] = true;
+    finalSwipeFeedback("Known ✓", "known");
+  } else {
+    delete known[key];
+    const w = words.find(x => x.key === key);
+    if (w) {
+      progress[w.key] = progress[w.key] || { correct: 0, wrong: 0, attempts: 0 };
+      progress[w.key].wrong = (progress[w.key].wrong || 0) + 1;
+      progress[w.key].attempts = (progress[w.key].attempts || 0) + 1;
+    }
+    finalSwipeFeedback("Not yet", "unknown");
+  }
+  saveAll();
+  renderWordList();
+}
+
+function finalBindWordCardOpenAndSwipe() {
+  const oldBody = $("wordsBody");
+  if (!oldBody) return;
+
+  const body = oldBody.cloneNode(true);
+  oldBody.parentNode.replaceChild(body, oldBody);
+
+  let sx = 0, sy = 0, activeCard = null, swiped = false, locked = false;
+
+  body.addEventListener("click", (e) => {
+    if (swiped) {
+      e.preventDefault();
+      e.stopPropagation();
+      swiped = false;
+      return;
+    }
+    const interactive = e.target.closest("button, input, textarea, select, a");
+    if (interactive) return;
+    if (finalOpenCardFromTarget(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+
+  body.addEventListener("touchstart", (e) => {
+    if (viewMode !== "grid") return;
+    activeCard = finalCardFromTarget(e.target);
+    if (!activeCard || !e.touches[0]) return;
+    sx = e.touches[0].clientX;
+    sy = e.touches[0].clientY;
+    locked = false;
+    swiped = false;
+  }, { passive: true });
+
+  body.addEventListener("touchmove", (e) => {
+    if (!activeCard || !e.touches[0] || viewMode !== "grid") return;
+    const dx = e.touches[0].clientX - sx;
+    const dy = e.touches[0].clientY - sy;
+    if (!locked && Math.abs(dx) > 22 && Math.abs(dx) > Math.abs(dy) * 1.35) locked = true;
+    if (!locked) return;
+    const clamped = Math.max(-86, Math.min(86, dx));
+    activeCard.style.transform = `translateX(${clamped}px) rotate(${clamped / 18}deg)`;
+    activeCard.style.transition = "none";
+  }, { passive: true });
+
+  body.addEventListener("touchend", (e) => {
+    if (!activeCard) return;
+    const dx = e.changedTouches && e.changedTouches[0] ? e.changedTouches[0].clientX - sx : 0;
+    const card = activeCard;
+    const key = finalKeyFromNode(card);
+    card.style.transition = "transform .18s ease";
+    card.style.transform = "";
+    activeCard = null;
+
+    if (locked && Math.abs(dx) > 78) {
+      swiped = true;
+      e.preventDefault();
+      e.stopPropagation();
+      finalMarkSwipe(key, dx > 0);
+      setTimeout(() => { swiped = false; }, 250);
+      return false;
+    }
+  }, { passive: false });
+}
+
+function attachWordCardSwipeHandlers() {
+  finalBindWordCardOpenAndSwipe();
+}
+
+
+/* ============================================================
+   HARD FIX: word-card tap + text-based filter labels
+   ============================================================ */
+
+function hardEscapeAttr(s){
+  return String(s || "").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function hardBadLabel(v){
+  const s = String(v || "").trim();
+  if (!s) return true;
+  if (/^\d+$/.test(s)) return true;
+  if (/^\d+\s+\d+$/.test(s)) return true;
+  if (/^page\s*\d+$/i.test(s)) return true;
+  if (/^col\d+$/i.test(s)) return true;
+  if (/^(left|right|col1|col2|null|undefined)$/i.test(s)) return true;
+  if (s.length > 90) return true;
+  return false;
+}
+
+function hardArr(v){
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(hardArr);
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+function hardClean(vals){
+  const out = [];
+  const seen = new Set();
+  for (const v of vals || []){
+    const s = String(v || "").trim();
+    if (hardBadLabel(s)) continue;
+    const k = normalizeKey(s);
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function hardLabelPool(w){
+  const vals = [];
+  const add = v => vals.push(...hardArr(v));
+
+  add(w.level); add(w.levels); add(w.sourceName); add(w.source_name);
+  add(w.top_header); add(w.topHeader);
+  add(w.boxed_bold_title); add(w.boxedBoldTitle);
+  add(w.bold_title); add(w.boldTitle);
+  add(w.section); add(w.sectionTitle); add(w.title); add(w.titlePath); add(w.title_path);
+
+  for (const c of (w.categories || [])){
+    add(c.level); add(c.sourceName); add(c.source_name);
+    add(c.topHeader); add(c.top_header);
+    add(c.boxedBoldTitle); add(c.boxed_bold_title); add(c.parentTitle);
+    add(c.boldTitle); add(c.bold_title); add(c.sectionTitle); add(c.title); add(c.section);
+    add(c.titlePath); add(c.title_path);
+  }
+
+  try { add(categoryLabelOf(w)); } catch(e) {}
+  add(w.rawTexts);
+  return vals;
+}
+
+function hardSplit(v){
+  return String(v || "")
+    .replace(/\s*\/\s*/g," / ")
+    .split(/\s+\/\s+|[>｜|]+/)
+    .map(x => x.trim())
+    .filter(x => x && !hardBadLabel(x));
+}
+
+function hardLevel(w){
+  const t = hardLabelPool(w).join(" / ");
+  if (/\bentry\b/i.test(t)) return "Entry";
+  if (/\bimprover\b/i.test(t)) return "Improver";
+  if (/\badvanced\b/i.test(t)) return "Advanced";
+  return "";
+}
+
+function hardBestPath(w){
+  let best = [];
+  for (const lab of hardLabelPool(w)){
+    const parts = hardSplit(lab);
+    if (parts.length > best.length) best = parts;
+  }
+  const lvl = hardLevel(w);
+  if (lvl){
+    const idx = best.findIndex(x => /^(entry|improver|advanced)$/i.test(x));
+    if (idx > 0) best = best.slice(idx);
+    else if (idx < 0) best.unshift(lvl);
+  }
+  return best;
+}
+
+function wordMetaValues(w, field){
+  const path = hardBestPath(w);
+  let vals = [];
+  if (field === "level") vals = hardLevel(w) ? [hardLevel(w)] : [];
+  else if (field === "topHeader") vals = path[1] ? [path[1]] : [];
+  else if (field === "boxedBoldTitle") vals = path[2] ? [path[2]] : [];
+  else if (field === "boldTitle") vals = path[3] ? [path[3]] : [];
+  return hardClean(vals);
+}
+
+function wordMatchesMeta(w, field, selected){
+  if (!selected || selected === "__all") return true;
+  return wordMetaValues(w, field).map(normalizeKey).includes(normalizeKey(selected));
+}
+
+function filterOptionCounts(field){
+  const map = new Map();
+  for (const w of words){
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) continue;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) continue;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+    if (field === "status"){
+      const s = wordStatus(w);
+      map.set(s, (map.get(s) || 0) + 1);
+    } else {
+      for (const val of wordMetaValues(w, field)){
+        if (!hardBadLabel(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+  }
+
+  return [...map.entries()].sort((a,b) => {
+    const order = {Entry:0, Improver:1, Advanced:2};
+    if (field === "level") return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function filterChipHtml(field, value, label, count, active){
+  const bad = hardBadLabel(label) || hardBadLabel(value);
+  const safe = hardEscapeAttr(value).replace(/'/g,"\\'");
+  return `<button data-bad-filter="${bad ? "1" : "0"}" class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('${field}', '${safe}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+}
+
+function filterGroupHtml(title, field, selected, options){
+  let html = `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">`;
+  const total = words.filter(w => {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) return false;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) return false;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) return false;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+    return true;
+  }).length;
+  html += filterChipHtml(field, "__all", "All", total, selected === "__all");
+  for (const opt of options || []){
+    const val = opt[0];
+    const count = opt[1];
+    if (hardBadLabel(val)) continue;
+    html += filterChipHtml(field, val, val, count, selected === val);
+  }
+  html += `</div></div>`;
+  return html;
+}
+
+function renderFilterPanel(){
+  const body = $("filterPanelBody");
+  if (!body) return;
+  const statusOptions = [
+    ["not_practiced", words.filter(w => wordStatus(w) === "not_practiced").length],
+    ["learning", words.filter(w => wordStatus(w) === "learning").length],
+    ["known", words.filter(w => wordStatus(w) === "known").length]
+  ];
+  body.innerHTML =
+    filterGroupHtml("Level", "level", currentLevelFilter, filterOptionCounts("level")) +
+    filterGroupHtml("Top header", "topHeader", currentTopHeaderFilter, filterOptionCounts("topHeader")) +
+    filterGroupHtml("Boxed bold title", "boxedBoldTitle", currentBoxedBoldFilter, filterOptionCounts("boxedBoldTitle")) +
+    filterGroupHtml("Bold title", "boldTitle", currentBoldTitleFilter, filterOptionCounts("boldTitle")) +
+    `<div class="filter-group"><div class="filter-group-title">Practice status</div><div class="filter-chip-row">` +
+    filterChipHtml("status", "__all", "All", words.length, currentStatusFilter === "__all") +
+    filterChipHtml("status", "not_practiced", "Not practiced", statusOptions[0][1], currentStatusFilter === "not_practiced") +
+    filterChipHtml("status", "learning", "Learning", statusOptions[1][1], currentStatusFilter === "learning") +
+    filterChipHtml("status", "known", "Known", statusOptions[2][1], currentStatusFilter === "known") +
+    `</div></div>`;
+}
+
+function hardCardKey(card){
+  if (!card) return "";
+  const direct = card.getAttribute("data-word-key") || card.getAttribute("data-key") || card.dataset?.wordKey || card.dataset?.key;
+  if (direct) return direct;
+  const onclickNode = card.closest?.("[onclick*='showWord']") || card.querySelector?.("[onclick*='showWord']") || card;
+  const onclick = onclickNode.getAttribute ? (onclickNode.getAttribute("onclick") || "") : "";
+  const m = onclick.match(/showWord\(['"]([^'"]+)['"]\)/);
+  if (m) return m[1];
+  const text = (card.querySelector?.(".word, .w, .term, .word-title, .card-title")?.textContent || card.textContent || "").trim().split(/\n/)[0];
+  const found = words.find(w => normalizeKey(w.word) === normalizeKey(text) || normalizeKey(w.key) === normalizeKey(text));
+  return found ? found.key : "";
+}
+
+function hardWrapCardHtml(w, html){
+  const key = hardEscapeAttr(w.key);
+  return `<div class="word-hitbox" data-word-key="${key}" onclick="showWord('${key.replace(/'/g,"\\'")}')">${html}</div>`;
+}
+
+if (!window.__hardOriginalCompact && typeof wordCardCompactHtml === "function"){
+  window.__hardOriginalCompact = wordCardCompactHtml;
+  wordCardCompactHtml = function(w){
+    return hardWrapCardHtml(w, window.__hardOriginalCompact(w));
+  };
+}
+if (!window.__hardOriginalList && typeof wordCardListHtml === "function"){
+  window.__hardOriginalList = wordCardListHtml;
+  wordCardListHtml = function(w, color){
+    return hardWrapCardHtml(w, window.__hardOriginalList(w, color));
+  };
+}
+
+document.addEventListener("click", function(e){
+  const wordsPage = document.querySelector('.page[data-page="words"]');
+  if (!wordsPage || !wordsPage.classList.contains("active")) return;
+  if (e.target.closest("button,input,textarea,select,a")) return;
+  const card = e.target.closest(".word-hitbox,[data-word-key],[data-key],[onclick*='showWord']");
+  if (!card || !$("wordsBody")?.contains(card)) return;
+  const key = hardCardKey(card);
+  if (!key) return;
+  e.preventDefault();
+  e.stopPropagation();
+  openSheet(key);
+}, true);
+
+setTimeout(() => {
+  try {
+    renderFilterPanel();
+    renderWordList();
+  } catch(e) {
+    console.warn("Hard words fix re-render failed:", e);
+  }
+}, 80);
+
+
+/* ============================================================
+   FINAL CLOUD FIX: word-card tap opens info panel
+   ============================================================ */
+(function(){
+  if (window.__wordCardTapCloudFixInstalled) return;
+  window.__wordCardTapCloudFixInstalled = true;
+
+  let downX = 0;
+  let downY = 0;
+  let downTarget = null;
+
+  function isWordsPageActive(){
+    const page = document.querySelector('.page[data-page="words"]');
+    return !!page && page.classList.contains('active');
+  }
+
+  function getWordKeyFromCard(card){
+    if (!card) return "";
+
+    const direct =
+      card.getAttribute("data-word-key") ||
+      card.getAttribute("data-key") ||
+      card.dataset?.wordKey ||
+      card.dataset?.key;
+
+    if (direct) return direct;
+
+    const inner = card.querySelector?.("[data-word-key],[data-key]");
+    if (inner) {
+      return inner.getAttribute("data-word-key") ||
+             inner.getAttribute("data-key") ||
+             inner.dataset?.wordKey ||
+             inner.dataset?.key ||
+             "";
+    }
+
+    const text = (
+      card.querySelector?.(".w,.word,.term,.word-title,.card-title")?.textContent ||
+      ""
+    ).trim();
+
+    if (text && Array.isArray(window.words)) {
+      const norm = typeof normalizeKey === "function"
+        ? normalizeKey
+        : (s) => String(s || "").trim().toLowerCase();
+
+      const found = window.words.find(w =>
+        norm(w.word) === norm(text) || norm(w.key) === norm(text)
+      );
+
+      if (found) return found.key;
+    }
+
+    return "";
+  }
+
+  function getWordCard(target){
+    return target?.closest?.(
+      ".word-hitbox,.word-card,.word-row,.word-card-compact,.card-word,[data-word-key],[data-key]"
+    );
+  }
+
+  document.addEventListener("pointerdown", function(e){
+    if (!isWordsPageActive()) return;
+    downX = e.clientX || 0;
+    downY = e.clientY || 0;
+    downTarget = e.target;
+  }, true);
+
+  document.addEventListener("pointerup", function(e){
+    if (!isWordsPageActive()) return;
+
+    const body = document.getElementById("wordsBody");
+    if (!body) return;
+
+    if (e.target.closest("button,input,textarea,select,a")) return;
+
+    const dx = Math.abs((e.clientX || 0) - downX);
+    const dy = Math.abs((e.clientY || 0) - downY);
+
+    if (dx > 35 && dx > dy * 1.25) return;
+
+    const card = getWordCard(e.target) || getWordCard(downTarget);
+    if (!card || !body.contains(card)) return;
+
+    const key = getWordKeyFromCard(card);
+    if (!key) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (typeof openSheet === "function") {
+      openSheet(key);
+    } else if (typeof showWord === "function") {
+      showWord(key);
+      document.body.classList.add("sheet-open");
+      document.documentElement.classList.add("sheet-open");
+      document.getElementById("backdrop")?.classList.add("show");
+      document.getElementById("sheet")?.classList.add("show");
+    }
+  }, true);
+})();
+
+
+
+/* ============================================================
+   PATCH: folded word-card speaker button plays pronunciation
+   ============================================================ */
+(function(){
+  if (window.__foldedCardSpeakerPatchV3) return;
+  window.__foldedCardSpeakerPatchV3 = true;
+
+  function keyFromButton(btn){
+    return btn?.getAttribute("data-key") ||
+           btn?.getAttribute("data-word-key") ||
+           btn?.dataset?.key ||
+           btn?.dataset?.wordKey ||
+           btn?.closest?.("[data-key],[data-word-key]")?.getAttribute("data-key") ||
+           btn?.closest?.("[data-key],[data-word-key]")?.getAttribute("data-word-key") ||
+           "";
+  }
+
+  document.addEventListener("click", function(e){
+    const btn = e.target.closest?.(".speaker-btn,.card-speaker");
+    if (!btn) return;
+
+    const key = keyFromButton(btn);
+    if (!key) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof e.stopImmediatePropagation === "function") e.stopImmediatePropagation();
+
+    if (typeof playAudioFor === "function") {
+      playAudioFor(key, btn);
+    } else if (typeof openSheet === "function") {
+      openSheet(key);
+    }
+  }, true);
+})();
+
+(function(){
+  const isStandalone =
+    window.navigator.standalone === true ||
+    window.matchMedia('(display-mode: standalone)').matches;
+
+  if (isStandalone) {
+    document.documentElement.classList.add('pwa-standalone');
+    document.body?.classList.add('pwa-standalone');
+  }
+})();
+
+
+
+
+/* ============================================================
+   FINAL FIX: info panel pronunciation autoplay once per word
+   ============================================================ */
+(function(){
+  if (window.__infoPanelAutoPronunciationOncePerWordInstalled) return;
+  window.__infoPanelAutoPronunciationOncePerWordInstalled = true;
+
+  let lastPanelOpen = false;
+  let lastPlayedKey = "";
+  let pendingTimer = null;
+
+  function sheetIsOpen(){
+    const sheet = document.getElementById("sheet");
+    return !!sheet && sheet.classList.contains("show");
+  }
+
+  function getCurrentPanelKey(){
+    if (typeof currentWord !== "undefined" && currentWord && currentWord.key) {
+      return currentWord.key;
+    }
+
+    const sheet = document.getElementById("sheet");
+    const sheetKey =
+      sheet?.getAttribute("data-word-key") ||
+      sheet?.dataset?.wordKey ||
+      sheet?.getAttribute("data-key") ||
+      sheet?.dataset?.key ||
+      "";
+
+    if (sheetKey) return sheetKey;
+
+    const hero =
+      document.getElementById("heroWord") ||
+      document.querySelector(".sheet .hero-word");
+
+    const heroText = (hero?.textContent || "").trim();
+
+    if (heroText && Array.isArray(words)) {
+      const norm = typeof normalizeKey === "function"
+        ? normalizeKey
+        : (s) => String(s || "").trim().toLowerCase();
+
+      const found = words.find(w =>
+        norm(w.key) === norm(heroText) ||
+        norm(w.word) === norm(heroText)
+      );
+
+      if (found) return found.key;
+    }
+
+    return "";
+  }
+
+  function playKeyOnce(key){
+    if (!key) return;
+    if (key === lastPlayedKey && sheetIsOpen()) return;
+    // showWord plays the word immediately when its card appears — don't replay.
+    if (window.__cardShownKey === key && (Date.now() - (window.__cardShownAt || 0)) < 1200) { lastPlayedKey = key; return; }
+
+    lastPlayedKey = key;
+
+    clearTimeout(pendingTimer);
+    pendingTimer = setTimeout(() => {
+      if (!sheetIsOpen()) return;
+
+      const currentKey = getCurrentPanelKey();
+      if (!currentKey || currentKey !== key) return;
+
+      try {
+        const btn =
+          document.getElementById("audioBtn") ||
+          document.querySelector(".sheet .hero-audio") ||
+          document.querySelector(".sheet .speaker-btn") ||
+          document.querySelector(".sheet .card-speaker");
+
+        if (typeof playAudioFor === "function") {
+          playAudioFor(key, btn || null);
+        } else if (typeof playAudio === "function") {
+          playAudio();
+        } else if (btn) {
+          btn.click();
+        } else if (Array.isArray(words) && typeof speechSynthesis !== "undefined") {
+          const w = words.find(x => x.key === key);
+          if (w?.word) {
+            const u = new SpeechSynthesisUtterance(w.word);
+            u.lang = "en-US";
+            speechSynthesis.cancel();
+            speechSynthesis.speak(u);
+          }
+        }
+      } catch (err) {
+        console.warn("Info panel autoplay failed:", err);
+      }
+    }, 60);
+  }
+
+  function checkPanelState(reason){
+    const open = sheetIsOpen();
+    const key = getCurrentPanelKey();
+
+    // Reset when panel closes, so opening the same word later can play again.
+    if (!open) {
+      lastPanelOpen = false;
+      lastPlayedKey = "";
+      clearTimeout(pendingTimer);
+      return;
+    }
+
+    // Play only on open transition or word-key change.
+    if (!lastPanelOpen || (key && key !== lastPlayedKey)) {
+      lastPanelOpen = true;
+      playKeyOnce(key);
+    }
+  }
+
+  function wrapFunction(name){
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__autoPronOnceWrapped) return;
+
+    const wrapped = function(){
+      const result = fn.apply(this, arguments);
+      setTimeout(() => checkPanelState(name), 180);
+      return result;
+    };
+
+    wrapped.__autoPronOnceWrapped = true;
+    window[name] = wrapped;
+  }
+
+  // Wrap all known ways of opening/changing the info panel.
+  ["openSheet", "showWord", "showAdjacentWord"].forEach(wrapFunction);
+
+  // Watch only sheet class / key attributes, not childList/subtree.
+  function installObserver(){
+    const sheet = document.getElementById("sheet");
+    if (!sheet || sheet.__autoPronOnceObserverInstalled) return;
+
+    sheet.__autoPronOnceObserverInstalled = true;
+
+    const observer = new MutationObserver(() => {
+      checkPanelState("sheet attribute change");
+    });
+
+    observer.observe(sheet, {
+      attributes: true,
+      attributeFilter: ["class", "data-word-key", "data-key"]
+    });
+  }
+
+  installObserver();
+
+  const docObserver = new MutationObserver(() => installObserver());
+  docObserver.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Gesture/key release backup, but still only plays if the word key changed.
+  ["touchend", "pointerup", "mouseup", "keyup"].forEach(evt => {
+    document.addEventListener(evt, () => {
+      setTimeout(() => checkPanelState(evt), 180);
+    }, true);
+  });
+})();
+
+/* ============================================================
+   PRACTICE v2 — multi-step wizard, multi-select filters,
+   study-until-mastered, richer summary, session history
+   ============================================================ */
+(function(){
+  "use strict";
+
+  // ---------- State ----------
+  const FILTER_DIMS = [
+    { key: "levels",         field: "level",                  title: "Level" },
+    { key: "subjectAreas",   field: "topHeader",              title: "Subject area" },
+    { key: "topicGroups",    field: "suggestedCombinedTitle", title: "Topic group" },
+    { key: "sourceTypes",    field: "sourceType",             title: "Word source" },
+    { key: "skillViews",     field: "skillView",              title: "Skill view" },
+    { key: "statuses",       field: "status",                 title: "Practice status" }
+  ];
+
+  const STATUS_LABELS = {
+    not_practiced: "Not practiced",
+    learning: "Learning",
+    known: "Known",
+    mastered: "Mastered"
+  };
+
+  const SKILL_VIEW_LABELS = {
+    all: "All",
+    meaning: "Meaning",
+    spelling: "Spelling"
+  };
+
+  const SOURCE_TYPE_LABELS = {
+    all: "All",
+    builtin: "Built-in",
+    related_created: "Related vocab"
+  };
+
+  const MODES = [
+    { id: "wordToMeaning", ico: "💕", name: "Word → Meaning", desc: "Match the word to its definition", cls: "m1" },
+    { id: "meaningToWord", ico: "🔁", name: "Meaning → Word", desc: "Pick the word that fits", cls: "m2" },
+    { id: "spelling",      ico: "✏️", name: "Spelling",       desc: "Type the word from a hint",        cls: "m4" }
+  ];
+
+  const HISTORY_CAP = 100;
+  const DEFAULT_LENGTH = 10;
+  const LAST_LOADED_POOL_KEY = "ielts_vocab_practice_last_loaded_pool_v1";
+
+  // Wizard transient state
+  let wizard = {
+    step: 0,
+    filter: emptyFilter(),
+    mode: null,
+    length: DEFAULT_LENGTH,
+    studyUntilMastered: true
+  };
+
+  function cloneFilterConfig(filter) {
+    const out = emptyFilter();
+    for (const d of FILTER_DIMS) out[d.key] = [...((filter && filter[d.key]) || [])];
+    return out;
+  }
+
+  function practicePoolConfig(filter, length, mode, studyUntilMastered) {
+    return {
+      filter: cloneFilterConfig(filter || emptyFilter()),
+      description: describeFilter(filter || emptyFilter()),
+      length: Number(length || DEFAULT_LENGTH),
+      mode: mode || null,
+      studyUntilMastered: !!studyUntilMastered
+    };
+  }
+
+  function emptyFilter() {
+    const f = {};
+    FILTER_DIMS.forEach(d => f[d.key] = []);
+    return f;
+  }
+
+  function filterIsEmpty(f) {
+    return FILTER_DIMS.every(d => !f[d.key] || f[d.key].length === 0);
+  }
+
+  function meaningPracticeStatus(w) {
+    if (!w || !w.key) return "not_practiced";
+    if ((window.knownMeaning || {})[w.key]) return "known";
+    const r = progress[w.key] || {};
+    const attempts = (r.wordToMeaning?.attempts || 0) + (r.meaningToWord?.attempts || 0) + (r.matching?.attempts || 0);
+    const correct = (r.wordToMeaning?.correct || 0) + (r.meaningToWord?.correct || 0) + (r.matching?.correct || 0);
+    const streak = r._consecMeaning || 0;
+    if (attempts <= 0) return "not_practiced";
+    if (attempts > correct) return streak >= 3 ? "known" : "learning";
+    return correct > 0 ? "known" : "not_practiced";
+  }
+
+  function spellingPracticeStatus(w) {
+    if (!w || !w.key) return "not_practiced";
+    if ((window.knownSpelling || {})[w.key]) return "known";
+    const r = progress[w.key] || {};
+    const attempts = r.spelling?.attempts || 0;
+    const correct = r.spelling?.correct || 0;
+    const streak = r._consecSpelling || 0;
+    if (attempts <= 0) return "not_practiced";
+    if (attempts > correct) return streak >= 3 ? "known" : "learning";
+    return correct > 0 ? "known" : "not_practiced";
+  }
+
+  function overallPracticeStatus(w) {
+    const m = meaningPracticeStatus(w);
+    const s = spellingPracticeStatus(w);
+    if (m === "known" && s === "known") return "mastered";
+    if (m === "known" || s === "known") return "known";
+    if (m === "learning" || s === "learning") return "learning";
+    return "not_practiced";
+  }
+
+  function selectedPracticeSkillView(filter) {
+    const v = (filter?.skillViews || [])[0];
+    return v === "meaning" || v === "spelling" ? v : "all";
+  }
+
+  function selectedPracticeSourceType(filter) {
+    const v = (filter?.sourceTypes || [])[0];
+    return v === "builtin" || v === "related_created" ? v : "all";
+  }
+
+  function practiceStatusForView(w, view) {
+    if (view === "meaning") return meaningPracticeStatus(w);
+    if (view === "spelling") return spellingPracticeStatus(w);
+    return overallPracticeStatus(w);
+  }
+
+  function wordMatchesPracticeStatus(w, status, view) {
+    if (!status || status === "__all") return true;
+    if (view === "meaning" || view === "spelling") {
+      const axisStatus = practiceStatusForView(w, view);
+      const overall = overallPracticeStatus(w);
+      if (status === "mastered") return overall === "mastered";
+      if (status === "known") return axisStatus === "known" && overall !== "mastered";
+      return axisStatus === status;
+    }
+    return overallPracticeStatus(w) === status;
+  }
+
+  // ---------- Persistence ----------
+  function stripExactPoolFromHistorySession(s) {
+    if (!s || typeof s !== "object") return s;
+    const { loadedWordKeys, ...rest } = s;
+    return rest;
+  }
+
+  function normalizeLocalPracticeHistory(arr) {
+    return (Array.isArray(arr) ? arr : [])
+      .map(stripExactPoolFromHistorySession)
+      .slice(-HISTORY_CAP);
+  }
+
+  function loadHistory() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(LS.PRACTICE_HISTORY) || "[]") || [];
+      const cleaned = normalizeLocalPracticeHistory(raw);
+      if (JSON.stringify(raw) !== JSON.stringify(cleaned)) saveHistory(cleaned);
+      return cleaned;
+    }
+    catch { return []; }
+  }
+  function saveHistory(arr) {
+    try { localStorage.setItem(LS.PRACTICE_HISTORY, JSON.stringify(normalizeLocalPracticeHistory(arr))); }
+    catch {}
+  }
+  function loadLastCfg() {
+    try { return JSON.parse(localStorage.getItem(LS.PRACTICE_LAST_CFG) || "null"); }
+    catch { return null; }
+  }
+  function saveLastCfg(cfg) {
+    try { localStorage.setItem(LS.PRACTICE_LAST_CFG, JSON.stringify(cfg)); }
+    catch {}
+  }
+  function loadLastLoadedPool() {
+    try { return JSON.parse(localStorage.getItem(LAST_LOADED_POOL_KEY) || "null"); }
+    catch { return null; }
+  }
+  function saveLastLoadedPool(pool) {
+    try { localStorage.setItem(LAST_LOADED_POOL_KEY, JSON.stringify(pool || null)); }
+    catch {}
+  }
+
+  // ---------- Path-aware filter (each word has one or more exact
+  // level/subject/topic paths; a word matches only if at least one of
+  // its paths satisfies every selected filter dimension) ----------
+  const P_LEVELS = ["Entry", "Improver", "Advanced"];
+  const P_SUBJECTS = ["ACADEMIC STUDY", "ARTS", "MULTI-DISCIPLINE", "SCIENCES", "SOCIAL SCIENCES"];
+  const P_LEVEL_ORDER = { Entry: 0, Improver: 1, Advanced: 2 };
+
+  function normP(v) { return String(v || "").trim().toLowerCase().replace(/\s+/g, " "); }
+  function cleanP(v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    if (/^\d+$/.test(s)) return "";
+    if (/^(null|undefined|continuation|left|right|col1|col2)$/i.test(s)) return "";
+    if (/^(key to grammatical labels|labels used in word lists)$/i.test(s)) return "";
+    return s;
+  }
+  function canonLevelP(v) { const s = cleanP(v); return P_LEVELS.find(x => normP(x) === normP(s)) || ""; }
+  function canonSubjectP(v) { const s = cleanP(v); return P_SUBJECTS.find(x => normP(x) === normP(s)) || ""; }
+  function pathKeyP(p) { return [p.level, p.subject, p.topic].map(normP).join("::"); }
+
+  function exactPracticePaths(w) {
+    const paths = [];
+    if (Array.isArray(w.exactSuggestedCombinedPaths)) {
+      for (const p of w.exactSuggestedCombinedPaths) {
+        const level = canonLevelP(p.level);
+        const subject = canonSubjectP(p.subject);
+        const topic = cleanP(p.topic);
+        if (level && subject && topic) paths.push({ level, subject, topic });
+      }
+    }
+    for (const c of (w.categories || [])) {
+      const level = canonLevelP(c.level);
+      const subject = canonSubjectP(c.topHeader || c.top_header);
+      const topic = cleanP(c.suggestedCombinedTitle || c.suggested_combined_title || c.topicGroup || c.topic_group || "");
+      if (level && subject && topic) paths.push({ level, subject, topic });
+    }
+    for (const p of [w.suggested_combined_title_path, w.suggestedCombinedTitlePath]) {
+      if (!Array.isArray(p) || p.length < 3) continue;
+      const level = canonLevelP(p[0]);
+      const subject = canonSubjectP(p[1]);
+      const topic = cleanP(p[2]);
+      if (level && subject && topic) paths.push({ level, subject, topic });
+    }
+    const out = [];
+    const seen = new Set();
+    for (const p of paths) {
+      const k = pathKeyP(p);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(p);
+    }
+    return out;
+  }
+
+  window.exactPracticePaths = exactPracticePaths;
+
+  function pathMatchesFilter(path, filter, exceptField) {
+    if (!path) return false;
+    if (exceptField !== "level" && filter.levels?.length) {
+      if (!filter.levels.map(normP).includes(normP(path.level))) return false;
+    }
+    if (exceptField !== "topHeader" && filter.subjectAreas?.length) {
+      if (!filter.subjectAreas.map(normP).includes(normP(path.subject))) return false;
+    }
+    if (exceptField !== "suggestedCombinedTitle" && filter.topicGroups?.length) {
+      if (!filter.topicGroups.map(normP).includes(normP(path.topic))) return false;
+    }
+    return true;
+  }
+
+  function wordMatchesMultiFilter(w, filter) {
+    const skillView = selectedPracticeSkillView(filter);
+    if (filter.statuses?.length && !filter.statuses.some(st => wordMatchesPracticeStatus(w, st, skillView))) return false;
+    const sourceType = selectedPracticeSourceType(filter);
+    if (sourceType === "related_created" && !isRelatedCreatedWord(w)) return false;
+    if (sourceType === "builtin" && isRelatedCreatedWord(w)) return false;
+    // If no path-based filters, the word matches (status already passed).
+    const hasPathFilter = (filter.levels?.length || filter.subjectAreas?.length || filter.topicGroups?.length);
+    if (!hasPathFilter) return true;
+    return exactPracticePaths(w).some(p => pathMatchesFilter(p, filter, ""));
+  }
+
+  function resolvePool(filter) {
+    return words.filter(w => wordMatchesMultiFilter(w, filter));
+  }
+
+  // Counts available for a given dimension, given the OTHER dimensions
+  function optionCountsFor(field, filter) {
+    const temp = {
+      levels: [...(filter.levels || [])],
+      subjectAreas: [...(filter.subjectAreas || [])],
+      topicGroups: [...(filter.topicGroups || [])],
+      sourceTypes: [...(filter.sourceTypes || [])],
+      skillViews: [...(filter.skillViews || [])],
+      statuses: [...(filter.statuses || [])]
+    };
+    if (field === "level") temp.levels = [];
+    if (field === "topHeader") temp.subjectAreas = [];
+    if (field === "suggestedCombinedTitle") temp.topicGroups = [];
+    if (field === "sourceType") temp.sourceTypes = [];
+    if (field === "skillView") temp.skillViews = [];
+    if (field === "status") temp.statuses = [];
+
+    if (field === "skillView") {
+      const base = words.filter(w => {
+        if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, "all"))) return false;
+        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
+      });
+      return [
+        ["all", base.length],
+        ["meaning", base.length],
+        ["spelling", base.length]
+      ];
+    }
+
+    if (field === "sourceType") {
+      const base = words.filter(w => {
+        if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, selectedPracticeSkillView(temp)))) return false;
+        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
+      });
+      return [
+        ["all", base.length],
+        ["builtin", base.filter(w => !isRelatedCreatedWord(w)).length],
+        ["related_created", base.filter(isRelatedCreatedWord).length]
+      ];
+    }
+
+    const map = new Map();
+    const skillView = selectedPracticeSkillView(temp);
+    for (const w of words) {
+      const sourceType = selectedPracticeSourceType(temp);
+      if (field !== "sourceType" && sourceType === "related_created" && !isRelatedCreatedWord(w)) continue;
+      if (field !== "sourceType" && sourceType === "builtin" && isRelatedCreatedWord(w)) continue;
+      if (field !== "status" && temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, skillView))) continue;
+
+      if (field === "status") {
+        // Word must satisfy path filters before its status is counted
+        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        if (hasPathFilter && !exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""))) continue;
+        for (const s of ["not_practiced", "learning", "known", "mastered"]) {
+          if (wordMatchesPracticeStatus(w, s, skillView)) map.set(s, (map.get(s) || 0) + 1);
+        }
+        continue;
+      }
+
+      const valsForWord = new Set();
+      for (const p of exactPracticePaths(w)) {
+        if (!pathMatchesFilter(p, temp, field)) continue;
+        if (field === "level") valsForWord.add(p.level);
+        else if (field === "topHeader") valsForWord.add(p.subject);
+        else if (field === "suggestedCombinedTitle") valsForWord.add(p.topic);
+      }
+      for (const val of valsForWord) {
+        if (cleanP(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+    if (field === "status") {
+      return ["not_practiced", "learning", "known", "mastered"].map(k => [k, map.get(k) || 0]);
+    }
+    return [...map.entries()].sort((a, b) => {
+      if (field === "level") {
+        return (P_LEVEL_ORDER[a[0]] ?? 99) - (P_LEVEL_ORDER[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+      }
+      return a[0].localeCompare(b[0]);
+    });
+  }
+
+  // ---------- Per-mode accuracy (pool-scoped) ----------
+  function poolModeAccuracy(poolKeys, modeId) {
+    let attempts = 0, correct = 0;
+    for (const key of poolKeys) {
+      const p = progress[key];
+      if (!p) continue;
+      const bucket = p[modeId] || (modeId === "wordToMeaning" || modeId === "meaningToWord" ? p.matching : null);
+      if (!bucket) continue;
+      attempts += bucket.attempts || 0;
+      correct += bucket.correct || 0;
+    }
+    if (!attempts) return null;
+    return { attempts, correct, pct: Math.round((correct / attempts) * 100) };
+  }
+
+  function ensureProgressBucket(key, modeId) {
+    if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
+    if (!progress[key][modeId]) progress[key][modeId] = { attempts: 0, correct: 0 };
+    return progress[key][modeId];
+  }
+
+  // ---------- Filter description (human-readable) ----------
+  function describeFilter(filter) {
+    if (filterIsEmpty(filter)) return "All words";
+    const parts = [];
+    for (const d of FILTER_DIMS) {
+      const sel = filter[d.key] || [];
+      if (!sel.length) continue;
+      const labels = d.field === "status" ? sel.map(s => STATUS_LABELS[s] || s)
+                   : d.field === "skillView" ? sel.map(s => SKILL_VIEW_LABELS[s] || s)
+                   : d.field === "sourceType" ? sel.map(s => SOURCE_TYPE_LABELS[s] || s)
+                   : sel;
+      parts.push(labels.join(", "));
+    }
+    return parts.join(" · ");
+  }
+
+  // ============================================================
+  // RENDER — Practice page root
+  // ============================================================
+  function renderPracticeRoot() {
+    const root = document.getElementById("practiceRoot");
+    if (!root) return;
+    // Skip Layer 0 entirely when there's nothing to show (no previous practice
+    // and no history) — go straight to Layer 1 (filter selection).
+    if (wizard.step === 0) {
+      const hasHistory = loadHistory().length > 0 || loadLastCfg();
+      if (!hasHistory) wizard.step = 1;
+    }
+    if (wizard.step === 0) renderLayer0(root);
+    else if (wizard.step === 1) renderLayer1(root);
+    else if (wizard.step === 2) renderLayer2(root);
+  }
+  window.renderPracticeRoot = renderPracticeRoot;
+
+  window.preparePracticeHistoryHome = function(reason) {
+    if (loadHistory().length > 0) {
+      wizard.step = 0;
+      historyTab = "sessions";
+      historyPageCount = 1;
+      return true;
+    }
+    return false;
+  };
+
+  // ── Layer 0: Compact history quicklook + Previous Practice + New Practice ──
+  // Shown only when the user has previous activity (history sessions or last cfg).
+  function renderLayer0(root) {
+    const hist = [...loadHistory()].reverse(); // newest first
+    const review = wordsToReview();
+    const mastered = masteredWords();
+
+    // === Compact history quicklook (3 stats, tappable) ===
+    const historyQuicklook = `
+      <div class="l0-history-card" onclick="practiceOpenHistoryPanel()">
+        <div class="l0-history-head">
+          <div class="l0-history-title">📊 Practice history</div>
+          <div class="l0-history-arrow">›</div>
+        </div>
+        <div class="l0-history-stats">
+          <div class="l0-history-stat">
+            <div class="v">${hist.length}</div>
+            <div class="l">Sessions</div>
+          </div>
+          <div class="l0-history-stat warn">
+            <div class="v">${review.length}</div>
+            <div class="l">Learning</div>
+          </div>
+          <div class="l0-history-stat good">
+            <div class="v">${mastered.length}</div>
+            <div class="l">Mastered</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // === Previous Practice card with View + Retry buttons ===
+    const cfg = preferredPreviousPracticeConfig();
+    let prevPracticeHtml = "";
+    if (cfg && cfg.mode) {
+      const pool = resolvePool(cfg.filter || emptyFilter());
+      const modeMeta = MODES.find(m => m.id === cfg.mode);
+      if (modeMeta && pool.length > 0) {
+        const length = Math.min(cfg.length || DEFAULT_LENGTH, pool.length);
+        const last = hist[0];
+        const scoreHtml = last
+          ? `<span class="l0-prev-score">${last.correctAnswered}/${last.sessionLength} · ${Math.round(last.correctAnswered / last.sessionLength * 100)}%</span>`
+          : "";
+        const lastSessionId = last ? String(last.id || "").replace(/'/g, "\\'") : "";
+        const viewBtn = last
+          ? `<button class="l0-prev-btn view" onclick="practiceOpenSessionDetail('${escapeHtml(lastSessionId)}')">👁 View</button>`
+          : `<button class="l0-prev-btn view" disabled>👁 View</button>`;
+        const wrongCount = last ? (last.wrongKeys || []).length : 0;
+        const repeatPrevBtn = last
+          ? (isLatestExactSession(last)
+            ? `<button class="l0-prev-btn repeat-exact" onclick="practiceRepeatExactSession('${escapeHtml(lastSessionId)}')">Repeat exact set</button>`
+            : `<button class="l0-prev-btn repeat-setup" onclick="practiceRepeatSetupFromSession('${escapeHtml(lastSessionId)}')">Repeat setup</button>`)
+          : `<button class="l0-prev-btn retry" onclick="practiceQuickStart()">▶ Repeat</button>`;
+        const retryBtn = wrongCount > 0
+          ? `<button class="l0-prev-btn retry" onclick="practiceRetryFromSession('${escapeHtml(lastSessionId)}')">↻ Retry ${wrongCount} wrong</button>`
+          : "";
+        prevPracticeHtml = `
+          <div class="l0-prev">
+            <div class="l0-prev-label">Previous Practice</div>
+            <div class="l0-prev-title">${modeMeta.ico} ${escapeHtml(modeMeta.name)} · ${length} words ${scoreHtml}</div>
+            <div class="l0-prev-meta">${escapeHtml(cfg.description || describeFilter(cfg.filter || emptyFilter()))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}</div>
+            <div class="l0-prev-actions">
+              ${viewBtn}
+              ${repeatPrevBtn}
+              ${retryBtn}
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    root.innerHTML = `
+      <div class="pw-page">
+        <div class="pw-hero">
+          <div class="pw-title">Practice</div>
+        </div>
+        ${historyQuicklook}
+        ${prevPracticeHtml}
+        <div class="l0-newbtn-wrap">
+          <button class="l0-new-btn" onclick="practiceStartFresh()">＋ New Practice</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // === History info panel (popup, opened by tapping the history card) ===
+  function ensureHistoryPanelOverlay() {
+    let el = document.getElementById("historyPanelOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "historyPanelOverlay";
+    el.className = "game-overlay history-overlay";
+    el.innerHTML = `
+      <div class="game-topbar">
+        <button class="game-close" onclick="practiceCloseHistoryPanel()">✕</button>
+        <div style="flex:1;text-align:center;font-weight:800;color:var(--ink-soft)">Practice history</div>
+        <div style="width:36px"></div>
+      </div>
+      <div class="game-body" id="historyPanelBody"></div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.practiceOpenHistoryPanel = function() {
+    historyPageCount = 1;
+    historyTab = "sessions";
+    const el = ensureHistoryPanelOverlay();
+    el.classList.add("show");
+    renderHistoryPanel();
+  };
+
+  window.practiceCloseHistoryPanel = function() {
+    const el = document.getElementById("historyPanelOverlay");
+    if (el) el.classList.remove("show");
+    const detail = document.getElementById("historyDetailOverlay");
+    if (detail) detail.classList.remove("show");
+    // Re-render Practice page in case stats changed
+    if (document.getElementById("practiceRoot")) renderPracticeRoot();
+  };
+
+  function renderHistoryPanel() {
+    const body = document.getElementById("historyPanelBody");
+    if (!body) return;
+    const hist = [...loadHistory()].reverse();
+    const review = wordsToReview();
+    const mastered = masteredWords();
+
+    const tabBar = `
+      <div class="hv-tabbar">
+        <button class="hv-tab ${historyTab === "sessions" ? "active" : ""}" data-tab="sessions" onclick="practiceSetHistoryTab('sessions')">Sessions <span class="hv-tab-n">${hist.length}</span></button>
+        <button class="hv-tab ${historyTab === "learning" ? "active" : ""}" data-tab="learning" onclick="practiceSetHistoryTab('learning')">Learning <span class="hv-tab-n">${review.length}</span></button>
+        <button class="hv-tab ${historyTab === "mastered" ? "active" : ""}" data-tab="mastered" onclick="practiceSetHistoryTab('mastered')">Mastered <span class="hv-tab-n">${mastered.length}</span></button>
+      </div>
+    `;
+    let tabContent = "";
+    if (historyTab === "sessions") tabContent = renderSessionsTab(hist);
+    else if (historyTab === "learning") tabContent = renderLearningTab(review);
+    else if (historyTab === "mastered") tabContent = renderMasteredTab(mastered);
+
+    body.innerHTML = `<div class="hv-wrap">${tabBar}<div id="layer0HistoryBody">${tabContent}</div></div>`;
+  }
+  window.renderHistoryPanel = renderHistoryPanel;
+
+  // History tab switch
+  window.practiceSetHistoryTab = function(tab) {
+    historyTab = tab;
+    if (tab === "sessions") historyPageCount = 1;
+    document.querySelectorAll(".hv-tab").forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.tab === tab);
+    });
+    const body = document.getElementById("layer0HistoryBody");
+    if (!body) { renderHistoryPanel(); return; }
+    if (tab === "sessions") body.innerHTML = renderSessionsTab([...loadHistory()].reverse());
+    else if (tab === "learning") body.innerHTML = renderLearningTab(wordsToReview());
+    else if (tab === "mastered") body.innerHTML = renderMasteredTab(masteredWords());
+  };
+
+  window.practiceLoadMoreHistory = function() {
+    historyPageCount++;
+    const body = document.getElementById("layer0HistoryBody");
+    if (body && historyTab === "sessions") {
+      body.innerHTML = renderSessionsTab([...loadHistory()].reverse());
+    } else {
+      renderHistoryPanel();
+    }
+  };
+
+  window.practiceFromReviewList = function() {
+    const review = wordsToReview();
+    if (review.length === 0) { toast("No review words"); return; }
+    const lastCfg = loadLastCfg();
+    const mode = lastCfg?.mode || "wordToMeaning";
+    const sum = lastCfg ? !!lastCfg.studyUntilMastered : true;
+    practiceCloseHistoryPanel();
+    window.startPracticeSession({
+      mode, pool: review, length: review.length,
+      studyUntilMastered: sum,
+      poolDescription: `Review · ${review.length} wrong words`
+    });
+  };
+
+  window.practiceFromMasteredList = function() {
+    const mastered = masteredWords();
+    if (mastered.length === 0) { toast("No mastered words"); return; }
+    const lastCfg = loadLastCfg();
+    const mode = lastCfg?.mode || "wordToMeaning";
+    const sum = lastCfg ? !!lastCfg.studyUntilMastered : false;
+    practiceCloseHistoryPanel();
+    window.startPracticeSession({
+      mode, pool: mastered, length: mastered.length,
+      studyUntilMastered: sum,
+      poolDescription: `Mastered · ${mastered.length} words`
+    });
+  };
+
+  // ── Layer 1: Filter / Word pool ──────────────────────────────
+  function renderLayer1(root) {
+    const pool = resolvePool(wizard.filter);
+    const canProceed = pool.length > 0;
+
+    let chipGroups = "";
+    for (const d of FILTER_DIMS) {
+      const counts = optionCountsFor(d.field, wizard.filter);
+      if (counts.length === 0) continue;
+      const sel = wizard.filter[d.key] || [];
+      let chipRows = counts;
+      if (d.field === "level") {
+        const allActive = !sel.length;
+        chipRows = [["__all", resolvePool({ ...wizard.filter, levels: [] }).length], ...counts];
+      }
+      const chips = chipRows.map(([val, n]) => {
+        const label = d.field === "status" ? (STATUS_LABELS[val] || val)
+                    : d.field === "skillView" ? (SKILL_VIEW_LABELS[val] || val)
+                    : d.field === "sourceType" ? (SOURCE_TYPE_LABELS[val] || val)
+                    : val === "__all" ? "All"
+                    : val;
+        const active = sel.includes(val);
+        const isAllActive = (val === "__all" || ((d.field === "skillView" || d.field === "sourceType") && val === "all")) && !sel.length;
+        const safeVal = String(val).replace(/'/g, "\\'");
+        return `<button class="pw-chip ${active || isAllActive ? "active" : ""}" onclick="practiceToggleFilter('${d.key}','${escapeHtml(safeVal)}')">${escapeHtml(label)}<span class="n">${n}</span></button>`;
+      }).join("");
+      chipGroups += `
+        <div class="pw-section">
+          <div class="pw-section-title">${escapeHtml(d.title)}</div>
+          <div class="pw-chip-row">${chips}</div>
+        </div>
+      `;
+    }
+
+    root.innerHTML = `
+      <div class="pw-page pw-step1-page">
+        <div class="pw-hero">
+          <div class="pw-step-label">Step 1 of 2</div>
+          <div class="pw-title">Word pool</div>
+          <div class="pw-sub">Pick filters from any group — you can mix dimensions.</div>
+        </div>
+        ${chipGroups || `<div class="pw-empty">Add some words first to start practicing.</div>`}
+        <div class="pw-count-banner">
+          <span>${filterIsEmpty(wizard.filter) ? "All words — or pick filters to narrow" : "Words matching"}</span>
+          <span class="v">${pool.length}</span>
+        </div>
+        <div class="pw-nav">
+          ${(loadHistory().length > 0 || loadLastCfg()) ? `<button class="pw-btn secondary" onclick="practiceGoStep(0)">‹ Back</button>` : ""}
+          <button class="pw-btn primary" ${canProceed ? "" : "disabled"} onclick="practiceGoStep(2)">Next ›</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Layer 2: Practice type + inline options ──────────────────
+  function renderLayer2(root) {
+    const pool = resolvePool(wizard.filter);
+    const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
+      ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
+      : [];
+    const maxLen = wizard.repeatPoolKeys
+      ? Math.max(1, pool.length || exactRepeatWords.length)
+      : pool.length;
+    if (wizard.length < 1 || wizard.length > maxLen) wizard.length = Math.min(DEFAULT_LENGTH, maxLen);
+    const poolKeys = pool.map(w => w.key);
+
+    const modeCards = MODES.map(m => {
+      const acc = poolModeAccuracy(poolKeys, m.id);
+      const stat = acc
+        ? `Pool accuracy: ${acc.pct}% · ${acc.attempts} attempts`
+        : "Not yet practiced for this pool";
+      const isSelected = wizard.mode === m.id;
+
+      const optionsBlock = isSelected ? `
+        <div class="l2-options" onclick="event.stopPropagation()">
+          <div class="l2-opt-label">Session length · <span id="pwSliderVal">${wizard.length}</span> words</div>
+          <input type="range" class="pw-slider" min="1" max="${maxLen}" value="${wizard.length}"
+            oninput="practiceSliderChange(this.value)" />
+          <div class="l2-slider-ends"><span>1</span><span>${maxLen}</span></div>
+          <div class="l2-toggle-row">
+            <div class="l2-toggle-body">
+              <div class="l2-toggle-name">🔁 Study Until Mastered</div>
+              <div class="l2-toggle-desc">Wrong answers come back until you get them all right.</div>
+            </div>
+            <button class="pw-switch ${wizard.studyUntilMastered ? "on" : ""}" onclick="practiceToggleSUM()" aria-label="Study Until Mastered"></button>
+          </div>
+          <button class="l2-start-btn" onclick="practiceLaunch()">▶ Start practice</button>
+        </div>
+      ` : "";
+
+      return `
+        <div class="l2-mode-card ${m.cls} ${isSelected ? "selected" : ""}">
+          <div class="l2-mode-head" onclick="practicePickMode('${m.id}')">
+            <div class="l2-mode-ico">${m.ico}</div>
+            <div class="l2-mode-body">
+              <div class="l2-mode-name">${escapeHtml(m.name)}</div>
+              <div class="l2-mode-desc">${escapeHtml(m.desc)}</div>
+              ${!isSelected ? `<div class="l2-mode-stat">${escapeHtml(stat)}</div>` : ""}
+            </div>
+            <div class="l2-mode-chev">${isSelected ? "▲" : "▼"}</div>
+          </div>
+          ${optionsBlock}
+        </div>
+      `;
+    }).join("");
+
+    root.innerHTML = `
+      <div class="pw-page pw-step2-page">
+        <div class="pw-hero">
+          <div class="pw-step-label">Step 2 of 2</div>
+          <div class="pw-title">Practice</div>
+        </div>
+        <div class="pw-summary-strip">
+          <span>${wizard.repeatPoolKeys ? `${exactRepeatWords.length} saved words · ` : ""}${pool.length} words · ${escapeHtml(describeFilter(wizard.filter))}</span>
+          <span class="edit" onclick="practiceGoStep(1)">Edit ›</span>
+        </div>
+        <div class="l2-mode-list">${modeCards}</div>
+        <div class="pw-nav">
+          <button class="pw-btn secondary" onclick="practiceGoStep(1)">‹ Back</button>
+        </div>
+      </div>
+    `;
+  }
+
+  // Slider update without full re-render
+  window.practiceSliderChange = function(val) {
+    wizard.length = parseInt(val, 10);
+    const label = document.getElementById("pwSliderVal");
+    if (label) label.textContent = val;
+  };
+
+  // ---------- Wizard actions (window-exposed) ----------
+  window.practiceToggleFilter = function(dimKey, value) {
+    if (value === "__all") {
+      wizard.filter[dimKey] = [];
+      if (dimKey !== "skillViews") wizard.repeatPoolKeys = null;
+      renderPracticeRoot();
+      return;
+    }
+    if (dimKey === "skillViews") {
+      wizard.filter.skillViews = value === "all" ? [] : [value];
+      renderPracticeRoot();
+      return;
+    }
+    if (dimKey === "sourceTypes") {
+      wizard.filter.sourceTypes = value === "all" ? [] : [value];
+      wizard.repeatPoolKeys = null;
+      renderPracticeRoot();
+      return;
+    }
+    const arr = wizard.filter[dimKey] || (wizard.filter[dimKey] = []);
+    const i = arr.indexOf(value);
+    if (i >= 0) arr.splice(i, 1); else arr.push(value);
+    wizard.repeatPoolKeys = null;
+    renderPracticeRoot();
+  };
+
+  window.practiceResetFilter = function() {
+    wizard.filter = emptyFilter();
+    wizard.repeatPoolKeys = null;
+    renderPracticeRoot();
+  };
+
+  window.practiceGoStep = function(n) {
+    // Reset mode when entering Layer 2 fresh from Layer 1
+    if (n === 2 && wizard.step === 1) wizard.mode = null;
+    if (n === 1) wizard.repeatPoolKeys = null;
+    wizard.step = n;
+    window.scrollTo(0, 0);
+    renderPracticeRoot();
+  };
+
+  window.practicePickMode = function(modeId) {
+    wizard.mode = modeId === wizard.mode ? null : modeId; // toggle
+    renderPracticeRoot();
+  };
+
+  window.practiceSetLength = function(n) {
+    wizard.length = n;
+    renderPracticeRoot();
+  };
+
+  window.practiceSetLengthInput = function(v) {
+    const n = parseInt(v, 10);
+    if (!isNaN(n) && n > 0) {
+      const pool = resolvePool(wizard.filter);
+      wizard.length = Math.min(n, pool.length);
+    }
+  };
+
+  window.practiceToggleSUM = function() {
+    wizard.studyUntilMastered = !wizard.studyUntilMastered;
+    // Only update the switch button in place to avoid re-rendering the slider
+    const sw = document.querySelector(".l2-toggle-row .pw-switch");
+    if (sw) sw.classList.toggle("on", wizard.studyUntilMastered);
+    else renderPracticeRoot();
+  };
+
+  window.practiceQuickStart = function() {
+    const cfg = loadLastCfg();
+    if (!cfg) return;
+    wizard.filter = cfg.filter || emptyFilter();
+    wizard.mode = cfg.mode;
+    wizard.length = cfg.length || DEFAULT_LENGTH;
+    wizard.studyUntilMastered = !!cfg.studyUntilMastered;
+    wizard.repeatPoolKeys = null;
+    practiceLaunch();
+  };
+
+  window.practiceStartFresh = function() {
+    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: true, repeatPoolKeys: null };
+    renderPracticeRoot();
+  };
+
+  window.practicePrepareCustomPool = function(opts) {
+    opts = opts || {};
+    const keys = Array.isArray(opts.keys) ? opts.keys.filter(Boolean) : [];
+    if (!keys.length) { if (typeof toast === "function") toast("No words in this pool"); return; }
+    const filter = opts.filter || emptyFilter();
+    wizard = {
+      step: 2,
+      filter,
+      mode: opts.mode || null,
+      length: Math.max(1, Math.min(opts.length || keys.length || DEFAULT_LENGTH, keys.length)),
+      studyUntilMastered: !!opts.studyUntilMastered,
+      repeatPoolKeys: [...new Set(keys)]
+    };
+    renderPracticeRoot();
+  };
+
+  // ---------- Launch ----------
+  window.practiceLaunch = function() {
+    const pool = resolvePool(wizard.filter);
+    const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
+      ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
+      : [];
+    if (pool.length === 0 && exactRepeatWords.length === 0) { toast("No words match these filters"); return; }
+    if (!wizard.mode) { toast("Pick a practice type"); return; }
+    const maxLen = Math.max(pool.length, exactRepeatWords.length);
+    const length = Math.min(Math.max(1, wizard.length), maxLen);
+
+    const cfg = {
+      filter: wizard.filter,
+      mode: wizard.mode,
+      length,
+      studyUntilMastered: wizard.studyUntilMastered
+    };
+    saveLastCfg(cfg);
+
+    let initialWords = null;
+    if (exactRepeatWords.length) {
+      if (length <= exactRepeatWords.length) {
+        initialWords = sample(exactRepeatWords, length);
+      } else {
+        const baseKeys = new Set(exactRepeatWords.map(w => w.key));
+        const extra = sample(pool.filter(w => !baseKeys.has(w.key)), length - exactRepeatWords.length);
+        initialWords = [...exactRepeatWords, ...extra];
+      }
+    }
+
+    window.startPracticeSession({
+      mode: cfg.mode,
+      pool: pool.length ? pool : exactRepeatWords,
+      length,
+      studyUntilMastered: cfg.studyUntilMastered,
+      poolDescription: describeFilter(wizard.filter),
+      poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered),
+      initialWords
+    });
+  };
+
+  // ============================================================
+  // SESSION — replaces legacy startGame / renderGame / ...
+  // ============================================================
+  function startPracticeSession(opts) {
+    const { mode, pool, length, studyUntilMastered, poolDescription } = opts;
+    const initial = Array.isArray(opts.initialWords) && opts.initialWords.length
+      ? opts.initialWords.slice(0, length)
+      : sample(pool, length);
+    const actualLength = initial.length || Math.min(length, pool.length);
+    const poolConfig = opts.poolConfig || practicePoolConfig(wizard.filter || emptyFilter(), length, mode, studyUntilMastered);
+
+    window.game = {
+      mode,
+      pool,                // full pool (for distractor sampling)
+      queue: initial,      // ordered queue; SUM requeues wrong answers randomly later
+      idx: 0,
+      correct: 0,
+      streak: 0,
+      bestStreak: 0,
+      studyUntilMastered: !!studyUntilMastered,
+      initialLength: actualLength,
+      toMaster: new Set(initial.map(w => w.key)),    // unique keys not yet correct
+      mastered: new Set(),                            // unique keys answered correctly at least once
+      totalAnswered: 0,
+      perWord: {},          // key -> { attempts, correct, firstTryCorrect }
+      wrongFirstTry: new Set(),
+      poolDescription: poolDescription || "",
+      poolConfig,
+      sessionLength: actualLength,
+      startedAt: new Date().toISOString(),
+      sessionId: "s_" + Date.now()
+    };
+
+    saveLastLoadedPool({
+      sessionId: window.game.sessionId,
+      wordKeys: initial.map(w => w.key),
+      poolConfig,
+      savedAt: window.game.startedAt
+    });
+
+    // Pre-init perWord
+    for (const w of initial) {
+      window.game.perWord[w.key] = { attempts: 0, correct: 0, firstTryCorrect: null, word: w };
+    }
+
+    $("gameOverlay").classList.add("show");
+    renderGameV2();
+  }
+  window.startPracticeSession = startPracticeSession;
+
+  function renderGameV2() {
+    const g = window.game;
+    if (!g) return;
+    renderGameTopbar();
+
+    // End condition
+    const queueExhausted = g.idx >= g.queue.length;
+    const masteryComplete = !g.studyUntilMastered || g.toMaster.size === 0;
+    if (queueExhausted && masteryComplete) {
+      finishSessionAndSummary(true);
+      return;
+    }
+
+    // If queue exhausted but mastery not complete, that shouldn't happen because
+    // we re-append on wrong. Defensive: re-queue any unmastered words.
+    if (queueExhausted && !masteryComplete) {
+      for (const key of g.toMaster) {
+        const w = g.pool.find(x => x.key === key) || g.perWord[key]?.word;
+        if (w) g.queue.push(w);
+      }
+    }
+
+    const w = g.queue[g.idx];
+
+    // Use window-exposed renderers so later Easy Mode patches can wrap them.
+    if (g.mode === "wordToMeaning" || g.mode === "meaningToWord") {
+      if (typeof window.renderMCV2 === "function") window.renderMCV2(w);
+      else renderMCV2(w);
+    } else if (g.mode === "spelling") {
+      if (typeof window.renderSpellV2 === "function") window.renderSpellV2(w);
+      else renderSpellV2(w);
+    }
+  }
+
+  function renderGameTopbar() {
+    const g = window.game;
+    const dots = $("progressDots");
+    if (!dots) return;
+
+    const denom = g.studyUntilMastered ? g.initialLength : g.queue.length;
+    const numer = g.studyUntilMastered ? g.mastered.size : g.idx;
+    const pct = denom > 0 ? Math.round((numer / denom) * 100) : 0;
+
+    dots.innerHTML = `<div class="game-progress-bar"><div style="width:${pct}%"></div></div>`;
+
+    $("gameStreak").textContent = "🔥" + g.streak;
+
+    // Recycle counter below topbar
+    let meta = document.getElementById("gameProgressMeta");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.id = "gameProgressMeta";
+      meta.className = "game-progress-meta";
+      const topbar = document.querySelector(".game-topbar");
+      if (topbar && topbar.parentNode) topbar.parentNode.insertBefore(meta, topbar.nextSibling);
+    }
+    if (g.studyUntilMastered) {
+      meta.innerHTML = `<span>${g.mastered.size} / ${g.initialLength} mastered</span><span class="recycle">🔁 ${g.toMaster.size} to master</span>`;
+    } else {
+      meta.innerHTML = `<span>${g.idx} / ${g.queue.length}</span>`;
+    }
+  }
+
+  function recordAttempt(key, mode, ok) {
+    // PER-SKILL MASTERY MODEL (test model)
+    // - Skill axes: "meaning" (wordToMeaning + meaningToWord) and "spelling".
+    // - Promotion (per-skill): first-attempt-correct in THAT skill OR 3 consecutive correct in THAT skill.
+    // - Demotion (per-skill): a wrong answer demotes only the tested skill back to Learning.
+    // - Mastered = Meaning Known AND Spelling Known.
+    const skill = (mode === "spelling") ? "spelling" : "meaning";
+    const isMeaningMode = (skill === "meaning");
+
+    // Detect first-ever attempt in THIS skill BEFORE we mutate counters.
+    const priorSkillAttempts = isMeaningMode
+      ? ((progress[key]?.wordToMeaning?.attempts) || 0) +
+        ((progress[key]?.meaningToWord?.attempts) || 0) +
+        ((progress[key]?.matching?.attempts) || 0)
+      : ((progress[key]?.spelling?.attempts) || 0);
+    const isFirstAttemptInSkill = priorSkillAttempts === 0;
+
+    const bucket = ensureProgressBucket(key, mode);
+    bucket.attempts = (bucket.attempts || 0) + 1;
+    if (ok) bucket.correct = (bucket.correct || 0) + 1;
+    const attemptTs = new Date().toISOString();
+    bucket.lastAttemptAt = attemptTs;
+    if (ok) bucket.lastCorrectAt = bucket.lastAttemptAt;
+    if (typeof window.touchSkillAxisState === "function") {
+      window.touchSkillAxisState(key, skill, attemptTs);
+    }
+
+    // Mirror to legacy "matching" bucket for back-compat with old readers.
+    if (isMeaningMode && mode !== "matching") {
+      const legacy = ensureProgressBucket(key, "matching");
+      legacy.attempts = (legacy.attempts || 0) + 1;
+      if (ok) legacy.correct = (legacy.correct || 0) + 1;
+    }
+
+    // Ensure root structure + per-skill streak counters
+    if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
+    const streakField = isMeaningMode ? "_consecMeaning" : "_consecSpelling";
+    if (typeof progress[key][streakField] !== "number") progress[key][streakField] = 0;
+
+    const km = (window.knownMeaning ||= {});
+    const ks = (window.knownSpelling ||= {});
+
+    const wasMastered = !!(km[key] && ks[key]);
+
+    if (ok) {
+      progress[key][streakField]++;
+      const alreadyKnown = isMeaningMode ? !!km[key] : !!ks[key];
+      const shouldPromote = !alreadyKnown && (isFirstAttemptInSkill || progress[key][streakField] >= 3);
+      if (shouldPromote) {
+        if (isMeaningMode) km[key] = true;
+        else                ks[key] = true;
+        // Mirror to legacy global "known" flag (Mastered means both Known).
+        const nowMastered = km[key] && ks[key];
+        if (nowMastered) {
+          known[key] = true;
+          if (typeof saveKnown === "function") saveKnown();
+        }
+        if (typeof saveSkillState === "function") saveSkillState();
+        // Notify per-skill listener (multi-goal, calendar, etc.)
+        if (typeof window.onSkillPromotion === "function") {
+          try { window.onSkillPromotion(key, skill); } catch (e) { console.warn("onSkillPromotion failed:", e); }
+        }
+        if (nowMastered && !wasMastered && typeof window.onMasteryPromotion === "function") {
+          try { window.onMasteryPromotion(key); } catch (e) { console.warn("onMasteryPromotion failed:", e); }
+        }
+        if (typeof toast === "function") {
+          const w = words.find(x => x.key === key);
+          const label = nowMastered ? "🏆 Mastered" : (isMeaningMode ? "✓ Meaning Known" : "✓ Spelling Known");
+          toast(`${label}: ${w?.word || key}`);
+        }
+      }
+    } else {
+      // Wrong: reset only this skill's streak, demote only this skill.
+      progress[key][streakField] = 0;
+      let demoted = false;
+      if (isMeaningMode && km[key]) { delete km[key]; demoted = true; }
+      if (!isMeaningMode && ks[key]) { delete ks[key]; demoted = true; }
+      // If word was Mastered, the legacy "known" flag must drop too.
+      if (demoted && wasMastered) {
+        if (known[key]) { delete known[key]; if (typeof saveKnown === "function") saveKnown(); }
+      }
+      if (demoted && typeof saveSkillState === "function") saveSkillState();
+      if (demoted && typeof toast === "function") {
+        const w = words.find(x => x.key === key);
+        toast(`↩︎ ${isMeaningMode ? "Meaning" : "Spelling"} back to Learning: ${w?.word || key}`);
+      }
+    }
+
+    saveAll();
+  }
+
+  function requeueWrongForMastery(g, w) {
+    if (!g || !w) return;
+    const current = Math.max(0, Number(g.idx || 0));
+    const minGap = Math.min(4, Math.max(2, Math.floor((g.initialLength || 0) / 4)));
+    const minIndex = Math.min(g.queue.length, current + minGap + 1);
+    const maxIndex = Math.max(minIndex, g.queue.length);
+    const insertAt = minIndex + Math.floor(Math.random() * (maxIndex - minIndex + 1));
+    g.queue.splice(Math.min(insertAt, g.queue.length), 0, w);
+  }
+
+  function handleAnswer(w, ok) {
+    const g = window.game;
+    if (!g) return;
+
+    g.totalAnswered++;
+
+    const pw = g.perWord[w.key] || (g.perWord[w.key] = { attempts: 0, correct: 0, firstTryCorrect: null, word: w });
+    pw.attempts++;
+    if (ok) pw.correct++;
+    if (pw.firstTryCorrect === null) {
+      pw.firstTryCorrect = ok;
+      if (!ok) g.wrongFirstTry.add(w.key);
+    }
+
+    if (ok) {
+      g.correct++;
+      g.streak++;
+      g.bestStreak = Math.max(g.bestStreak, g.streak);
+      g.mastered.add(w.key);
+      g.toMaster.delete(w.key);
+    } else {
+      g.streak = 0;
+      if (g.studyUntilMastered) {
+        requeueWrongForMastery(g, w);
+      }
+    }
+
+    recordAttempt(w.key, g.mode, ok);
+  }
+
+  // ---------- MC (Word→Meaning / Meaning→Word) ----------
+  function renderMCV2(w) {
+    const g = window.game;
+    const entry = dictCache[w.key] || {};
+    const others = sample(g.pool.filter(x => x.key !== w.key && dictCache[x.key] && (dictCache[x.key].definitions || []).length), 3);
+
+    if (others.length < 3) {
+      // Not enough cached distractors for MC. Try any words, even uncached, with a fallback def.
+      const fallbackOthers = sample(words.filter(x => x.key !== w.key), 3);
+      while (others.length < 3 && fallbackOthers.length) others.push(fallbackOthers.shift());
+    }
+
+    const options = sample([w, ...others], 4);
+    const isW2M = g.mode === "wordToMeaning";
+    const prompt = isW2M ? w.word : (entry.definitions?.[0] || practiceDefinitionForWord(w));
+    const promptLabel = isW2M ? "Choose the meaning" : "Choose the word";
+
+    const optHtml = options.map(o => {
+      const oEntry = dictCache[o.key] || {};
+      const text = isW2M
+        ? (oEntry.definitions?.[0] || practiceDefinitionForWord(o))
+        : o.word;
+      return `<button class="game-option" data-key="${escapeHtml(o.key)}">${escapeHtml(text || "")}</button>`;
+    }).join("");
+
+    $("gameBody").innerHTML = `
+      <div class="game-prompt-label">${promptLabel}</div>
+      <div class="game-prompt ${isW2M ? "" : "small"}">${escapeHtml(prompt || "")}</div>
+      <div class="game-options">${optHtml}</div>
+    `;
+    $("gameBody").querySelectorAll(".game-option").forEach(b =>
+      b.onclick = () => window.answerMCV2(b.dataset.key, w.key, w)
+    );
+  }
+
+  function answerMCV2(picked, correctKey, w) {
+    const ok = picked === correctKey;
+    handleAnswer(w, ok);
+
+    let correctBtn = null;
+    document.querySelectorAll(".game-option").forEach(b => {
+      if (b.dataset.key === correctKey) { b.classList.add("correct"); correctBtn = b; }
+      else if (b.dataset.key === picked) { b.classList.add("wrong"); }
+      b.disabled = true;
+    });
+
+    renderGameTopbar();
+
+    if (ok) {
+      practicePlayPronunciationAndThen(correctKey, correctBtn, nextQuestionV2);
+    } else {
+      const body = $("gameBody");
+      const next = document.createElement("button");
+      next.className = "game-btn primary";
+      next.style.marginTop = "16px";
+      next.textContent = "Playing pronunciation…";
+      next.disabled = true;
+      body.appendChild(next);
+      practicePlayPronunciationAndThen(correctKey, correctBtn, () => {
+        next.textContent = "Continue";
+        next.disabled = false;
+        next.onclick = nextQuestionV2;
+      });
+    }
+  }
+
+  // ---------- Spelling ----------
+  async function renderSpellV2(w) {
+    $("gameBody").innerHTML = `
+      <div class="game-prompt-label">${spellPromptLabelHtml(w, null)}</div>
+      <div class="game-prompt small">Loading example sentence…</div>
+    `;
+
+    let entry = dictCache[w.key] || null;
+    if (!entry && typeof fetchDefinition === "function") {
+      try {
+        entry = await fetchDefinition(w);
+        if (entry) dictCache[w.key] = entry;
+      } catch (err) {
+        console.warn("Could not fetch spelling example:", err);
+      }
+    }
+
+    const q = buildSpellingQuestionFromEntry(w, entry);
+    const hint = practiceDefinitionForWord(w);
+
+    $("gameBody").innerHTML = `
+      <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
+      <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
+      <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;">
+        ${escapeHtml(hint)}
+      </div>
+      <div class="game-spell">
+        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+        <div style="display:flex;gap:10px;">
+          <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
+          <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
+        </div>
+      </div>
+    `;
+
+    $("spellInput").focus();
+    $("spellHintBtn").onclick = () => { const b = $("spellHintBox"); if (b) b.style.display = "block"; };
+    $("checkSpellBtn").onclick = () => window.answerSpellV2(w);
+    $("spellInput").addEventListener("keydown", e => { if (e.key === "Enter") window.answerSpellV2(w); });
+  }
+
+  function answerSpellV2(w) {
+    const inp = $("spellInput");
+    if (!inp) return;
+    const ans = inp.value;
+    const ok = normalizeSpelling(ans) === normalizeSpelling(w.word);
+
+    handleAnswer(w, ok);
+
+    if (ok) inp.classList.add("correct"); else inp.classList.add("wrong");
+    inp.disabled = true;
+
+    $("checkSpellBtn")?.remove();
+    $("spellHintBtn")?.remove();
+
+    renderGameTopbar();
+
+    const body = $("gameBody");
+    const result = document.createElement("div");
+    result.style.marginTop = "12px";
+    result.style.textAlign = "center";
+    result.style.fontWeight = "700";
+    result.innerHTML = ok
+      ? `<div style="color:#3F6212">✓ Correct!</div>`
+      : `<div style="color:#9F1239">Correct: <b>${escapeHtml(w.word)}</b></div>`;
+    body.appendChild(result);
+
+    const next = document.createElement("button");
+    next.className = "game-btn primary";
+    next.style.marginTop = "12px";
+    next.textContent = "Playing pronunciation…";
+    next.disabled = true;
+    body.appendChild(next);
+
+    practicePlayPronunciationAndThen(w.key, inp, () => {
+      next.textContent = "Continue";
+      next.disabled = false;
+      next.onclick = nextQuestionV2;
+      // Auto-advance only on correct, to match prior UX
+      if (ok) nextQuestionV2();
+    });
+  }
+
+  function nextQuestionV2() {
+    const g = window.game;
+    if (!g) return;
+    g.idx++;
+    renderGameV2();
+  }
+  window.nextQuestionV2 = nextQuestionV2;
+  window.answerMCV2 = answerMCV2;
+  window.answerSpellV2 = answerSpellV2;
+  window.renderMCV2 = renderMCV2;
+  window.renderSpellV2 = renderSpellV2;
+  window.handleAnswer = handleAnswer;
+  window.renderGameTopbar = renderGameTopbar;
+
+  // ---------- Finish + Summary ----------
+  // Build a history record from the current game state. Reused by both the
+  // normal end-of-session save and the in-progress autosave (reload safety).
+  function buildSessionRecord(g, completed) {
+    if (!g) return null;
+    const wrongKeys = [...g.wrongFirstTry];
+    const correctKeys = Object.keys(g.perWord || {}).filter(k => g.perWord[k]?.firstTryCorrect === true);
+    return {
+      id: g.sessionId,
+      startedAt: g.startedAt,
+      endedAt: new Date().toISOString(),
+      mode: g.mode,
+      poolDescription: g.poolDescription,
+      poolConfig: g.poolConfig || null,
+      poolSize: g.pool.length,
+      sessionLength: g.sessionLength,
+      loadedWordKeys: Object.keys(g.perWord || {}),
+      studyUntilMastered: g.studyUntilMastered,
+      totalAnswered: g.totalAnswered,
+      correctAnswered: g.correct,
+      uniqueWordsCorrect: g.mastered.size,
+      bestStreak: g.bestStreak,
+      correctKeys,
+      masteredWords: [...g.mastered].filter(k => known && known[k]),
+      learningWords: Object.keys(g.perWord || {}).filter(k => !(known && known[k])),
+      wrongKeys,
+      completed: !!completed
+    };
+  }
+
+  // Upsert a session into history by id (replaces a partial autosave with the
+  // final record, or adds a new one), then persist.
+  function upsertSessionIntoHistory(rec) {
+    if (!rec || !rec.id) return;
+    const hist = loadHistory();
+    const idx = hist.findIndex(s => s && s.id === rec.id);
+    if (idx >= 0) hist[idx] = rec; else hist.push(rec);
+    saveHistory(hist);
+  }
+
+  const ACTIVE_SESSION_KEY = "ielts_vocab_active_session_v1";
+  // Snapshot the in-progress session so an iOS reload mid-session can't lose it.
+  window.persistActiveSession = function() {
+    try {
+      const g = window.game;
+      if (!g || !(g.totalAnswered > 0)) return;
+      localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(buildSessionRecord(g, false)));
+    } catch (e) {}
+  };
+  // On load, if a session was in progress and never finalized, fold it into
+  // history so its results are not lost.
+  window.recoverActiveSession = function() {
+    try {
+      const raw = localStorage.getItem(ACTIVE_SESSION_KEY);
+      if (!raw) return;
+      const rec = JSON.parse(raw);
+      localStorage.removeItem(ACTIVE_SESSION_KEY);
+      if (rec && rec.id && rec.totalAnswered > 0) {
+        const hist = loadHistory();
+        if (!hist.some(s => s && s.id === rec.id)) { hist.push(rec); saveHistory(hist); }
+      }
+    } catch (e) {}
+  };
+
+  function finishSessionAndSummary(completed) {
+    const g = window.game;
+    if (!g) return;
+
+    // This session is finalized — clear the in-progress snapshot.
+    try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (e) {}
+
+    // Persist history if any question was answered
+    if (g.totalAnswered > 0) {
+      upsertSessionIntoHistory(buildSessionRecord(g, completed));
+    }
+
+    renderSummaryV2(completed);
+  }
+
+  function renderSummaryV2(completed) {
+    const g = window.game;
+    const total = g.initialLength;
+    const correctUnique = g.mastered.size;
+    const wrongUnique = [...g.wrongFirstTry];
+
+    // First-try accuracy across unique words
+    const firstTryAttempted = Object.keys(g.perWord).filter(k => g.perWord[k].firstTryCorrect !== null);
+    const firstTryCorrect = firstTryAttempted.filter(k => g.perWord[k].firstTryCorrect === true).length;
+    const acc = firstTryAttempted.length ? Math.round((firstTryCorrect / firstTryAttempted.length) * 100) : 0;
+
+    const emoji = acc >= 90 ? "🏆" : acc >= 70 ? "🎉" : acc >= 50 ? "👍" : "💪";
+    const title = !completed ? "Session ended"
+      : acc >= 90 ? "Outstanding!"
+      : acc >= 70 ? "Great job!"
+      : acc >= 50 ? "Keep going"
+      : "Practice makes perfect";
+
+    const okItems = [...g.mastered]
+      .filter(k => g.perWord[k] && g.perWord[k].firstTryCorrect === true)
+      .map(k => {
+        const w = g.perWord[k].word;
+        const def = practiceDefinitionForWord(w) || "";
+        return `<div class="pw-result-item ok">
+          <span class="mark ok">✓</span>
+          <span class="word">${escapeHtml(w.word)}</span>
+          <span class="def">${escapeHtml(def)}</span>
+        </div>`;
+      }).join("");
+
+    const badItems = wrongUnique.map(k => {
+      const w = g.perWord[k]?.word;
+      if (!w) return "";
+      const def = practiceDefinitionForWord(w) || "";
+      const eventuallyMastered = g.mastered.has(k);
+      return `<div class="pw-result-item bad">
+        <span class="mark bad">✗</span>
+        <span class="word">${escapeHtml(w.word)}</span>
+        <span class="def">${escapeHtml(def)}${eventuallyMastered ? " · ✓ mastered" : ""}</span>
+      </div>`;
+    }).join("");
+
+    const retryBtn = wrongUnique.length
+      ? `<button class="pw-btn secondary" onclick="practiceRetryWrong()">Retry ${wrongUnique.length} wrong</button>`
+      : "";
+
+    // Remove the per-game progress meta strip
+    const meta = document.getElementById("gameProgressMeta");
+    if (meta) meta.remove();
+
+    $("gameBody").innerHTML = `
+      <div class="pw-summary-wrap">
+        <div class="pw-summary-hero">
+          <div class="pw-summary-emoji">${emoji}</div>
+          <div class="pw-summary-title">${escapeHtml(title)}</div>
+          <div class="pw-summary-sub">${correctUnique} of ${total} words mastered · first-try ${acc}%</div>
+        </div>
+        <div class="pw-summary-stats">
+          <div class="pw-summary-stat"><div class="v">${acc}%</div><div class="l">First-try</div></div>
+          <div class="pw-summary-stat"><div class="v">${g.bestStreak}</div><div class="l">Best streak</div></div>
+          <div class="pw-summary-stat"><div class="v">${g.totalAnswered}</div><div class="l">Answers</div></div>
+        </div>
+        ${okItems ? `<div class="pw-result-section">
+          <div class="pw-result-head">Got right first try (${[...g.mastered].filter(k => g.perWord[k]?.firstTryCorrect === true).length})</div>
+          <div class="pw-result-list">${okItems}</div>
+        </div>` : ""}
+        ${badItems ? `<div class="pw-result-section">
+          <div class="pw-result-head">Needed more practice (${wrongUnique.length})</div>
+          <div class="pw-result-list">${badItems}</div>
+        </div>` : ""}
+        <div class="pw-summary-actions">
+          <button class="pw-btn secondary" onclick="exitGame()">Done</button>
+          ${retryBtn}
+          <button class="pw-btn primary" onclick="practicePlayAgain()">Play again</button>
+        </div>
+      </div>
+    `;
+  }
+
+  window.practiceRetryWrong = function() {
+    const g = window.game;
+    if (!g) return;
+    const wrongKeys = [...g.wrongFirstTry];
+    const pool = wrongKeys.map(k => g.perWord[k]?.word).filter(Boolean);
+    if (!pool.length) { toast("No wrong words to retry"); return; }
+    const mode = g.mode;
+    const sum = g.studyUntilMastered;
+    const desc = (g.poolDescription || "") + " · retry wrong";
+    window.startPracticeSession({ mode, pool, length: pool.length, studyUntilMastered: sum, poolDescription: desc });
+  };
+
+  window.practicePlayAgain = function() {
+    const g = window.game;
+    if (!g) return;
+    const initialWords = Object.keys(g.perWord || {}).map(k => g.perWord[k]?.word).filter(Boolean);
+    window.startPracticeSession({
+      mode: g.mode,
+      pool: g.pool,
+      length: g.sessionLength,
+      studyUntilMastered: g.studyUntilMastered,
+      poolDescription: g.poolDescription,
+      poolConfig: g.poolConfig,
+      initialWords
+    });
+  };
+
+  // ---------- Override legacy entry points ----------
+  // Keep `startGame(mode, customPool)` working for legacy callers (e.g., practiceCurrentWord)
+  const _legacyStartGame = window.startGame;
+  window.startGame = function(mode, customPool) {
+    if (mode === "matching") {
+      toast("Matching has moved to the new Practice flow");
+      goto("practice");
+      return;
+    }
+    const pool = customPool || (mode === "spelling" ? words : (typeof cachedWords === "function" ? cachedWords() : words));
+    if (!pool || pool.length === 0) { toast("No words available"); return; }
+    window.startPracticeSession({
+      mode,
+      pool,
+      length: Math.min(10, pool.length),
+      studyUntilMastered: false,
+      poolDescription: customPool ? "Current word family" : "Quick session"
+    });
+  };
+
+  // Override exitGame to also clean up the progress meta strip
+  const _legacyExitGame = window.exitGame;
+  window.exitGame = function() {
+    // Save partial session if abandoned mid-way.
+    // If the user is already on the summary screen, Done should close the overlay
+    // and return the Practice tab to Layer 0: history + previous practice + new practice.
+    const g = window.game;
+    const isSummaryScreen = !!document.querySelector(".pw-summary-wrap");
+
+    if (g && g.totalAnswered > 0 && !isSummaryScreen) {
+      finishSessionAndSummary(false);
+      // Don't actually close yet — let user see summary. They'll tap Done.
+      return;
+    }
+
+    const meta = document.getElementById("gameProgressMeta");
+    if (meta) meta.remove();
+
+    $("gameOverlay").classList.remove("show");
+    window.game = null;
+
+    // After Done on a completed/summary practice, always show Practice Layer 0.
+    wizard.step = 0;
+    window.scrollTo(0, 0);
+
+    if (typeof renderAll === "function") renderAll();
+    else if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+  };
+
+  // Override the practice-tab render so the legacy `renderPracticeAcc` (which
+  // targets removed IDs) doesn't run on this page.
+  const _legacyRenderPracticeAcc = window.renderPracticeAcc;
+  window.renderPracticeAcc = function() {
+    if (document.getElementById("practiceRoot")) {
+      renderPracticeRoot();
+    } else if (typeof _legacyRenderPracticeAcc === "function") {
+      _legacyRenderPracticeAcc();
+    }
+  };
+
+  // ============================================================
+  // PRACTICE HISTORY VIEW
+  // ============================================================
+  const HISTORY_PAGE_SIZE = 20;
+  let historyPageCount = 1;        // multiplied by HISTORY_PAGE_SIZE for sessions
+  let historyMasteredExpanded = false;
+  let historyTab = "sessions";     // "sessions" | "learning" | "mastered"
+
+  // --- Derivations ---
+  function wordsToReview() {
+    // Words that appeared as wrong in any past session and aren't currently Known.
+    const hist = loadHistory();
+    const wrongKeys = new Set();
+    for (const s of hist) {
+      for (const k of (s.wrongKeys || [])) wrongKeys.add(k);
+    }
+    return [...wrongKeys]
+      .filter(k => !known[k])
+      .map(k => words.find(w => w.key === k))
+      .filter(Boolean);
+  }
+
+  function masteredWords() {
+    // "Mastered" uses the existing Known flag: manually right-swiped OR
+    // auto-promoted after 5 consecutive correct in practice.
+    return Object.keys(known)
+      .filter(k => known[k])
+      .map(k => words.find(w => w.key === k))
+      .filter(Boolean);
+  }
+
+  function recencyLabel(iso) {
+    if (!iso) return "";
+    const then = new Date(iso).getTime();
+    const now = Date.now();
+    const m = Math.round((now - then) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return m + "m ago";
+    const h = Math.round(m / 60);
+    if (h < 24) return h + "h ago";
+    const d = Math.round(h / 24);
+    if (d < 7) return d + "d ago";
+    const wk = Math.round(d / 7);
+    if (wk < 5) return wk + "w ago";
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function modeMetaFor(id) {
+    return MODES.find(m => m.id === id) || { ico: "🎮", name: id || "Practice" };
+  }
+
+  function sessionPoolConfig(s) {
+    if (s && s.poolConfig && typeof s.poolConfig === "object") return s.poolConfig;
+    const lastCfg = loadLastCfg();
+    return {
+      filter: (s && s.filter) || lastCfg?.filter || emptyFilter(),
+      description: s?.poolDescription || describeFilter((s && s.filter) || lastCfg?.filter || emptyFilter()),
+      length: Number(s?.sessionLength || lastCfg?.length || DEFAULT_LENGTH),
+      mode: s?.mode || lastCfg?.mode || "wordToMeaning",
+      studyUntilMastered: !!(s?.studyUntilMastered ?? lastCfg?.studyUntilMastered)
+    };
+  }
+
+  function previousPracticeConfigFromHistory() {
+    const hist = loadHistory();
+    const last = hist[hist.length - 1];
+    if (!last) return null;
+    const cfg = sessionPoolConfig(last);
+    return {
+      filter: cloneFilterConfig(cfg.filter || emptyFilter()),
+      mode: cfg.mode || last.mode || "wordToMeaning",
+      length: Number(cfg.length || last.sessionLength || DEFAULT_LENGTH),
+      studyUntilMastered: !!cfg.studyUntilMastered,
+      description: cfg.description || last.poolDescription || describeFilter(cfg.filter || emptyFilter())
+    };
+  }
+
+  function preferredPreviousPracticeConfig() {
+    return loadLastCfg() || previousPracticeConfigFromHistory();
+  }
+
+  function isLatestExactSession(s) {
+    const last = loadLastLoadedPool();
+    return !!(s && last && last.sessionId === s.id && Array.isArray(last.wordKeys) && last.wordKeys.length);
+  }
+
+  function sessionOptionLine(s) {
+    const cfg = sessionPoolConfig(s);
+    const parts = [];
+    if (cfg.description) parts.push(cfg.description);
+    parts.push(`${Number(cfg.length || s.sessionLength || DEFAULT_LENGTH)} words`);
+    if (s.studyUntilMastered || cfg.studyUntilMastered) parts.push("Until mastered");
+    return parts.join(" · ");
+  }
+
+
+
+  // --- Tab renderers (used by renderLayer0 inline history) ---
+  function renderSessionsTab(hist) {
+    if (hist.length === 0) {
+      return `<div style="padding:16px 20px"><div class="hv-empty">No sessions yet. Start practicing to build your history.</div></div>`;
+    }
+    const sessionsShown = hist.slice(0, historyPageCount * HISTORY_PAGE_SIZE);
+    const sessionItems = sessionsShown.map(s => {
+      const m = modeMetaFor(s.mode);
+      const acc = s.sessionLength > 0 ? Math.round((s.correctAnswered / s.sessionLength) * 100) : 0;
+      const safeId = String(s.id || "").replace(/'/g, "\\'");
+      const status = s.completed === false ? " · ended early" : "";
+      const wrongCount = (s.wrongKeys || []).length;
+      const exact = isLatestExactSession(s);
+      const repeatBtn = exact
+        ? `<button class="hv-session-btn repeat-exact" onclick="event.stopPropagation();practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
+        : `<button class="hv-session-btn repeat-setup" onclick="event.stopPropagation();practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
+      const redoBtn = wrongCount > 0
+        ? `<button class="hv-session-btn redo" onclick="event.stopPropagation();practiceRetryFromSession('${escapeHtml(safeId)}')">↻ Redo ${wrongCount} wrong</button>`
+        : `<button class="hv-session-btn redo" disabled>↻ No wrong words</button>`;
+      return `
+        <div class="hv-session" onclick="practiceOpenSessionDetail('${escapeHtml(safeId)}')">
+          <div class="hv-session-head">
+            <div class="hv-session-title">${m.ico} ${escapeHtml(m.name)}</div>
+            <div class="hv-session-score">${s.correctAnswered}/${s.sessionLength} · ${acc}%</div>
+          </div>
+          <div class="hv-session-meta">${escapeHtml(sessionOptionLine(s))}${exact ? " · exact words saved" : ""}${status}</div>
+          <div class="hv-session-foot"><span>${recencyLabel(s.endedAt || s.startedAt)}</span></div>
+          <div class="hv-session-actions">
+            <button class="hv-session-btn view" onclick="event.stopPropagation();practiceOpenSessionDetail('${escapeHtml(safeId)}')">View</button>
+            ${repeatBtn}
+            ${redoBtn}
+          </div>
+        </div>`;
+    }).join("");
+    const moreBtn = hist.length > sessionsShown.length
+      ? `<button class="hv-loadmore" onclick="practiceLoadMoreHistory()">Load more (${hist.length - sessionsShown.length} left)</button>`
+      : "";
+    return `<div class="hv-tabbody"><div class="hv-session-list" style="padding:8px 20px 0">${sessionItems}</div>${moreBtn}</div>`;
+  }
+
+  function renderLearningTab(review) {
+    if (review.length === 0) {
+      return `<div style="padding:16px 20px"><div class="hv-empty">No words to review — nice work!</div></div>`;
+    }
+    const items = review.map(w => {
+      const def = (typeof practiceDefinitionForWord === "function") ? practiceDefinitionForWord(w) : "";
+      const streak = (progress[w.key] && progress[w.key]._consecCorrect) || 0;
+      return `
+        <div class="hv-word-row">
+          <div class="hv-word-row-main">
+            <div class="hv-word-row-word">${escapeHtml(w.word)}</div>
+            <div class="hv-word-row-def">${escapeHtml(def)}</div>
+          </div>
+          <div class="hv-word-row-streak" title="Consecutive correct">${streak}/3</div>
+        </div>`;
+    }).join("");
+    return `
+      <div class="hv-tabbody">
+        <div class="hv-tab-intro">
+          <div class="hv-tab-intro-title">${review.length} word${review.length === 1 ? "" : "s"} to review</div>
+          <div class="hv-tab-intro-sub">Each needs 3 correct in a row to move to Known.</div>
+        </div>
+        <div class="hv-word-list">${items}</div>
+        <div class="hv-tab-actionbar">
+          <button class="hv-action-btn primary" onclick="practiceFromReviewList()">▶ Practice these now (${review.length})</button>
+        </div>
+      </div>`;
+  }
+
+  function renderMasteredTab(mastered) {
+    if (mastered.length === 0) {
+      return `<div style="padding:16px 20px"><div class="hv-empty">No mastered words yet. Get a word right on your first try, or 3 correct in a row.</div></div>`;
+    }
+    const items = mastered.map(w => {
+      const def = (typeof practiceDefinitionForWord === "function") ? practiceDefinitionForWord(w) : "";
+      return `
+        <div class="hv-word-row good">
+          <div class="hv-word-row-main">
+            <div class="hv-word-row-word">${escapeHtml(w.word)}</div>
+            <div class="hv-word-row-def">${escapeHtml(def)}</div>
+          </div>
+          <div class="hv-word-row-streak good">✓</div>
+        </div>`;
+    }).join("");
+    return `
+      <div class="hv-tabbody">
+        <div class="hv-tab-intro">
+          <div class="hv-tab-intro-title">${mastered.length} word${mastered.length === 1 ? "" : "s"} mastered</div>
+          <div class="hv-tab-intro-sub">Marked Known on first-try correct, or by 3 correct in a row.</div>
+        </div>
+        <div class="hv-word-list">${items}</div>
+        <div class="hv-tab-actionbar">
+          <button class="hv-action-btn primary" onclick="practiceFromMasteredList()">▶ Practice these now (${mastered.length})</button>
+        </div>
+      </div>`;
+  }
+
+  // --- Per-session detail view ---
+  function ensureSessionDetailOverlay() {
+    let el = document.getElementById("historyDetailOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "historyDetailOverlay";
+    el.className = "game-overlay history-overlay ip-no-topbar";
+    // No topbar — grab handle + backdrop tap handle dismissal.
+    el.innerHTML = `
+      <div class="game-body" id="historyDetailBody"></div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.practiceOpenSessionDetail = function(id) {
+    const hist = loadHistory();
+    const s = hist.find(x => x.id === id);
+    if (!s) { toast("Session not found"); return; }
+    const el = ensureSessionDetailOverlay();
+    el.classList.add("show");
+
+    const m = modeMetaFor(s.mode);
+    const wrongKeys = s.wrongKeys || [];
+    const correctKeys = Array.isArray(s.correctKeys)
+      ? s.correctKeys
+      : [];
+    const wrongSet = new Set(wrongKeys);
+    const sessionWordDisplay = k => {
+      const w = words.find(x => x.key === k);
+      return w ? w.word : k;
+    };
+    const wrongSorted = wrongKeys.slice().sort((a, b) => sessionWordDisplay(a).localeCompare(sessionWordDisplay(b)));
+    const correctSorted = correctKeys.filter(k => !wrongSet.has(k)).sort((a, b) => sessionWordDisplay(a).localeCompare(sessionWordDisplay(b)));
+    const rows = [
+      ...wrongSorted.map(k => ({ key: k, right: false })),
+      ...correctSorted.map(k => ({ key: k, right: true })),
+    ];
+    const wordList = rows.length
+      ? `<div class="ip-acc-section status-known open bare">
+           <div class="ip-acc-body">
+             <div class="ip-word-list">${rows.map(row => `
+               <div class="ip-word">
+                 <span class="ip-word-text">${escapeHtml(sessionWordDisplay(row.key))}</span>
+                 <span class="ip-word-chip ${row.right ? "ip-chip-right" : "ip-chip-wrong"}">${row.right ? "✓" : "✗"}</span>
+               </div>`).join("")}
+             </div>
+           </div>
+         </div>`
+      : `<div class="pg-empty">No exact word list was stored for this older session.</div>`;
+
+    const safeId = String(id).replace(/'/g, "\\'");
+    const repeatBtn = isLatestExactSession(s)
+      ? `<button class="ip-action-btn primary" onclick="practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
+      : `<button class="ip-action-btn primary" onclick="practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
+    const retryBtn = wrongKeys.length
+      ? `<button class="ip-action-btn danger" onclick="practiceRetryFromSession('${escapeHtml(safeId)}')">Retry ${wrongKeys.length} wrong</button>`
+      : "";
+
+    const historyBody = document.getElementById("historyDetailBody");
+    try { historyBody.dataset.kind = "session"; } catch {}
+    historyBody.innerHTML = `
+      <div class="ip-panel-page has-action-bar">
+        <div class="ip-hero">
+          <div class="ip-hero-main">
+            <div class="ip-hero-title">${m.ico} ${escapeHtml(m.name)}</div>
+            <div class="ip-hero-count">${s.correctAnswered || 0} / ${s.sessionLength || s.totalAnswered || rows.length || 0}</div>
+          </div>
+          <div class="ip-hero-sub">${escapeHtml(s.poolDescription || "")}</div>
+          <div class="ip-hero-sub strong">${escapeHtml(recencyLabel(s.endedAt || s.startedAt))}${s.completed === false ? " · ended early" : ""}</div>
+        </div>
+        ${wordList}
+        <div class="ip-action-bar ${retryBtn ? "" : "single"}">
+          ${repeatBtn}
+          ${retryBtn}
+        </div>
+      </div>
+    `;
+  };
+
+  window.practiceCloseSessionDetail = function() {
+    const el = document.getElementById("historyDetailOverlay");
+    if (el) el.classList.remove("show");
+  };
+
+  window.practiceRetryFromSession = function(id) {
+    const hist = loadHistory();
+    const s = hist.find(x => x.id === id);
+    if (!s) return;
+    const pool = (s.wrongKeys || []).map(k => words.find(w => w.key === k)).filter(Boolean);
+    if (pool.length === 0) { toast("No wrong words to retry"); return; }
+    practiceCloseSessionDetail();
+    practiceCloseHistoryPanel();
+    window.startPracticeSession({
+      mode: s.mode,
+      pool,
+      length: pool.length,
+      studyUntilMastered: true,
+      poolDescription: `Retry · ${recencyLabel(s.endedAt)} wrong words`
+    });
+  };
+
+  function prepareRepeatWizardFromSession(s, exact) {
+    const cfg = sessionPoolConfig(s);
+    wizard = {
+      step: 2,
+      filter: cloneFilterConfig(cfg.filter || emptyFilter()),
+      mode: cfg.mode || s.mode || "wordToMeaning",
+      length: Number(cfg.length || s.sessionLength || DEFAULT_LENGTH),
+      studyUntilMastered: !!cfg.studyUntilMastered,
+      repeatPoolKeys: null
+    };
+
+    if (exact) {
+      const last = loadLastLoadedPool();
+      if (last && last.sessionId === s.id && Array.isArray(last.wordKeys) && last.wordKeys.length) {
+        wizard.repeatPoolKeys = [...last.wordKeys];
+      }
+    }
+  }
+
+  window.practiceRepeatSetupFromSession = function(id) {
+    const hist = loadHistory();
+    const s = hist.find(x => x.id === id);
+    if (!s) { toast("Session not found"); return; }
+    prepareRepeatWizardFromSession(s, false);
+    practiceCloseSessionDetail();
+    practiceCloseHistoryPanel();
+    window.scrollTo(0, 0);
+    renderPracticeRoot();
+  };
+
+  window.practiceRepeatExactSession = function(id) {
+    const hist = loadHistory();
+    const s = hist.find(x => x.id === id);
+    if (!s) { toast("Session not found"); return; }
+    if (!isLatestExactSession(s)) {
+      practiceRepeatSetupFromSession(id);
+      return;
+    }
+    prepareRepeatWizardFromSession(s, true);
+    practiceCloseSessionDetail();
+    practiceCloseHistoryPanel();
+    window.scrollTo(0, 0);
+    renderPracticeRoot();
+  };
+
+  // ============================================================
+  // END PRACTICE HISTORY VIEW
+  // ============================================================
+
+  // Initial render once DOM is up
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", renderPracticeRoot);
+  } else {
+    renderPracticeRoot();
+  }
+})();
+
+
+
+
+/* ============================================================
+   FINAL FILTER HIERARCHY FIX
+   Use real vocab.json fields:
+   level / top_header / boxed_bold_title / bold_title
+   ============================================================ */
+
+function vhArr(v) {
+  if (v == null) return [];
+  if (Array.isArray(v)) return v.flatMap(vhArr);
+  const s = String(v).trim();
+  return s ? [s] : [];
+}
+
+function vhBad(v) {
+  const s = String(v || "").trim();
+  if (!s) return true;
+  if (/^\d+$/.test(s)) return true;
+  if (/^\d+\s+\d+$/.test(s)) return true;
+  if (/^page\s*\d+$/i.test(s)) return true;
+  if (/^col\d+$/i.test(s)) return true;
+  if (/^(left|right|col1|col2|null|undefined|continuation)$/i.test(s)) return true;
+  if (s.length > 90) return true;
+  return false;
+}
+
+function vhCanon(s) {
+  s = String(s || "").trim().replace(/\s+/g, " ");
+  if (!s) return "";
+
+  const upperKeep = new Set(["IT"]);
+  if (upperKeep.has(s.toUpperCase())) return s.toUpperCase();
+
+  const lower = s.toLowerCase();
+  const special = {
+    "multi-discipline": "MULTI-DISCIPLINE",
+    "academic study": "ACADEMIC STUDY",
+    "arts": "ARTS",
+    "sciences": "SCIENCES",
+    "social sciences": "SOCIAL SCIENCES"
+  };
+  if (special[lower]) return special[lower];
+
+  // Fix duplicate lowercase headings such as "academic writing" / "society & culture".
+  if (s === lower) {
+    return lower.replace(/\b[a-z]/g, ch => ch.toUpperCase())
+      .replace(/\bAnd\b/g, "and")
+      .replace(/\bOf\b/g, "of")
+      .replace(/\bThe\b/g, "the");
+  }
+
+  return s;
+}
+
+function vhPush(out, v) {
+  for (const raw of vhArr(v)) {
+    const s = vhCanon(raw);
+    if (!vhBad(s)) out.push(s);
+  }
+}
+
+function vhUnique(vals) {
+  const out = [];
+  const seen = new Set();
+  for (const raw of vals || []) {
+    const s = vhCanon(raw);
+    if (vhBad(s)) continue;
+    const k = normalizeKey(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+function vhKnownTopHeaders() {
+  return new Set(["academic study", "arts", "multi-discipline", "sciences", "social sciences"]);
+}
+
+function vhFromTitlePath(w, field) {
+  const vals = [];
+  const paths = [];
+  vhPush(paths, w.title_path);
+  vhPush(paths, w.titlePath);
+
+  for (const c of (w.categories || [])) {
+    vhPush(paths, c.title_path);
+    vhPush(paths, c.titlePath);
+  }
+
+  const flat = vhUnique(paths);
+  if (!flat.length) return [];
+
+  const topSet = vhKnownTopHeaders();
+
+  // Common flattened JSON path: [top_header, boxed_bold_title, bold_title]
+  if (topSet.has(normalizeKey(flat[0]))) {
+    if (field === "topHeader" && flat[0]) vals.push(flat[0]);
+    if (field === "boxedBoldTitle" && flat[1]) vals.push(flat[1]);
+    if (field === "boldTitle" && flat[2]) vals.push(flat[2]);
+    return vals;
+  }
+
+  // Fallback path with level first: [level, top_header, boxed_bold_title, bold_title]
+  if (/^(entry|improver|advanced)$/i.test(flat[0] || "")) {
+    if (field === "topHeader" && flat[1]) vals.push(flat[1]);
+    if (field === "boxedBoldTitle" && flat[2]) vals.push(flat[2]);
+    if (field === "boldTitle" && flat[3]) vals.push(flat[3]);
+  }
+
+  return vals;
+}
+
+function wordMetaValues(w, field) {
+  const vals = [];
+
+  if (field === "level") {
+    vhPush(vals, w.level);
+    vhPush(vals, w.levels);
+    for (const c of (w.categories || [])) {
+      vhPush(vals, c.level);
+    }
+    return vhUnique(vals).filter(x => /^(Entry|Improver|Advanced)$/i.test(x));
+  }
+
+  if (field === "topHeader") {
+    vhPush(vals, w.top_header);
+    vhPush(vals, w.topHeader);
+    vhPush(vals, w.topHeaders);
+    for (const c of (w.categories || [])) {
+      vhPush(vals, c.top_header);
+      vhPush(vals, c.topHeader);
+    }
+    vhPush(vals, vhFromTitlePath(w, "topHeader"));
+    return vhUnique(vals);
+  }
+
+  if (field === "boxedBoldTitle") {
+    vhPush(vals, w.boxed_bold_title);
+    vhPush(vals, w.boxedBoldTitle);
+    vhPush(vals, w.boxedBoldTitles);
+    for (const c of (w.categories || [])) {
+      vhPush(vals, c.boxed_bold_title);
+      vhPush(vals, c.boxedBoldTitle);
+    }
+    vhPush(vals, vhFromTitlePath(w, "boxedBoldTitle"));
+    return vhUnique(vals);
+  }
+
+  if (field === "boldTitle") {
+    vhPush(vals, w.bold_title);
+    vhPush(vals, w.boldTitle);
+    vhPush(vals, w.boldTitles);
+    for (const c of (w.categories || [])) {
+      vhPush(vals, c.bold_title);
+      vhPush(vals, c.boldTitle);
+    }
+    vhPush(vals, vhFromTitlePath(w, "boldTitle"));
+    return vhUnique(vals);
+  }
+
+  return [];
+}
+
+function wordMatchesMeta(w, field, selected) {
+  if (!selected || selected === "__all") return true;
+  const want = normalizeKey(selected);
+  return wordMetaValues(w, field).some(v => normalizeKey(v) === want);
+}
+
+function filterOptionCounts(field) {
+  const map = new Map();
+
+  for (const w of words) {
+    if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+    if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+    if (field !== "boxedBoldTitle" && !wordMatchesMeta(w, "boxedBoldTitle", currentBoxedBoldFilter)) continue;
+    if (field !== "boldTitle" && !wordMatchesMeta(w, "boldTitle", currentBoldTitleFilter)) continue;
+    if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+    if (field === "status") {
+      const s = wordStatus(w);
+      map.set(s, { label: s, count: (map.get(s)?.count || 0) + 1 });
+      continue;
+    }
+
+    for (const val of wordMetaValues(w, field)) {
+      if (vhBad(val)) continue;
+      const label = vhCanon(val);
+      const k = normalizeKey(label);
+      const old = map.get(k);
+      map.set(k, { label, count: (old?.count || 0) + 1 });
+    }
+  }
+
+  const rows = [...map.values()].map(x => [x.label, x.count]);
+
+  return rows.sort((a, b) => {
+    const order = { Entry: 0, Improver: 1, Advanced: 2 };
+    if (field === "level") {
+      return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+    }
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+function finalSectionName(w) {
+  return wordMetaValues(w, "topHeader")[0] || "Words";
+}
+
+// Force refresh after this override has loaded.
+setTimeout(() => {
+  try {
+    words = cleanLoadedVocabularyItems(words);
+    renderFilterPanel();
+    renderWordList();
+    updateHeaderButtons();
+  } catch (err) {
+    console.warn("Final filter hierarchy refresh failed:", err);
+  }
+}, 120);
+
+/* ============================================================
+   FINAL 3-LAYER FILTER OVERRIDE
+   Filter hierarchy: Level → Subject area → Topic group.
+   Data source: suggested_combined_title_path / suggested_combined_title.
+   ============================================================ */
+(function(){
+  if (window.__threeLayerCombinedFilterInstalled) return;
+  window.__threeLayerCombinedFilterInstalled = true;
+
+  const ALLOWED_LEVELS_3F = ["Entry", "Improver", "Advanced"];
+  const ALLOWED_AREAS_3F = ["ACADEMIC STUDY", "ARTS", "MULTI-DISCIPLINE", "SCIENCES", "SOCIAL SCIENCES"];
+
+  function arr3(v) {
+    if (v == null) return [];
+    if (Array.isArray(v)) return v.flatMap(arr3);
+    const s = String(v).trim();
+    return s ? [s] : [];
+  }
+
+  function clean3(v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    if (/^\d+$/.test(s)) return "";
+    if (/^page\s*\d+$/i.test(s)) return "";
+    if (/^(left|right|col1|col2|null|undefined|continuation)$/i.test(s)) return "";
+    if (/^(key to grammatical labels|labels used in word lists)$/i.test(s)) return "";
+    return s;
+  }
+
+  function uniq3(vals) {
+    const out = [];
+    const seen = new Set();
+    for (const v of vals || []) {
+      const s = clean3(v);
+      if (!s) continue;
+      const k = normalizeKey(s);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
+  }
+
+  function titlePath3FromRaw(w) {
+    const paths = [];
+    for (const p of [w.suggested_combined_title_path, w.suggestedCombinedTitlePath]) {
+      if (Array.isArray(p)) paths.push(p.map(clean3).filter(Boolean));
+    }
+    paths.sort((a,b) => b.length - a.length);
+    return paths[0] || [];
+  }
+
+  function level3(w) {
+    const vals = uniq3([...arr3(w.level), ...arr3(w.levels), ...titlePath3FromRaw(w).slice(0,1)]);
+    return ALLOWED_LEVELS_3F.find(l => vals.some(v => normalizeKey(v) === normalizeKey(l))) || "";
+  }
+
+  function area3(w) {
+    const path = titlePath3FromRaw(w);
+    const vals = uniq3([
+      path[1],
+      ...arr3(w.top_header), ...arr3(w.topHeader), ...arr3(w.topHeaders),
+      ...(w.categories || []).flatMap(c => [c.topHeader, c.top_header])
+    ]);
+    return ALLOWED_AREAS_3F.find(a => vals.some(v => normalizeKey(v) === normalizeKey(a))) || vals[0] || "";
+  }
+
+  function combined3(w) {
+    const path = titlePath3FromRaw(w);
+    const vals = uniq3([
+      path[2],
+      ...arr3(w.suggested_combined_title),
+      ...arr3(w.suggestedCombinedTitle),
+      ...arr3(w.suggestedCombinedTitles),
+      ...(w.categories || []).flatMap(c => [c.suggestedCombinedTitle, c.suggested_combined_title])
+    ]);
+    return vals[0] || "";
+  }
+
+  window.wordMetaValues = function(w, field) {
+    if (field === "level") return level3(w) ? [level3(w)] : [];
+    if (field === "topHeader") return area3(w) ? [area3(w)] : [];
+    if (field === "suggestedCombinedTitle" || field === "combinedTitle" || field === "boldTitle" || field === "boxedBoldTitle") {
+      return combined3(w) ? [combined3(w)] : [];
+    }
+    return [];
+  };
+
+  window.wordMatchesMeta = function(w, field, selected) {
+    if (!selected || selected === "__all") return true;
+    return wordMetaValues(w, field).map(normalizeKey).includes(normalizeKey(selected));
+  };
+
+  window.filterOptionCounts = function(field) {
+    const map = new Map();
+    for (const w of words) {
+      if (field !== "level" && !wordMatchesMeta(w, "level", currentLevelFilter)) continue;
+      if (field !== "topHeader" && !wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) continue;
+      if ((field !== "suggestedCombinedTitle" && field !== "combinedTitle" && field !== "boldTitle") && !wordMatchesMeta(w, "suggestedCombinedTitle", currentBoldTitleFilter)) continue;
+      if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+      if (field === "status") {
+        const s = wordStatus(w);
+        map.set(s, (map.get(s) || 0) + 1);
+      } else {
+        for (const val of wordMetaValues(w, field)) if (val) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+    return [...map.entries()].sort((a, b) => {
+      const order = { Entry: 0, Improver: 1, Advanced: 2 };
+      if (field === "level") return (order[a[0]] ?? 99) - (order[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+      return a[0].localeCompare(b[0]);
+    });
+  };
+
+  window.setWordFilter = function(field, value) {
+    if (field === "level") {
+      currentLevelFilter = value;
+      currentTopHeaderFilter = "__all";
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (field === "topHeader") {
+      currentTopHeaderFilter = value;
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (field === "suggestedCombinedTitle" || field === "combinedTitle" || field === "boldTitle") {
+      currentBoldTitleFilter = value;
+      currentBoxedBoldFilter = "__all";
+    } else if (field === "status") {
+      currentStatusFilter = value;
+      currentQuick = value === "not_practiced" ? "np" : value === "learning" ? "lr" : value === "known" ? "kn" : null;
+    }
+    shuffledWordKeys = [];
+    renderFilterPanel();
+    renderWords();
+  };
+
+  window.renderFilterPanel = function() {
+    const body = $("filterPanelBody");
+    if (!body) return;
+    const statusOptions = [
+      ["not_practiced", "Not practiced", words.filter(w => wordStatus(w) === "not_practiced").length],
+      ["learning", "Learning", words.filter(w => wordStatus(w) === "learning").length],
+      ["known", "Known", words.filter(w => wordStatus(w) === "known").length]
+    ];
+    body.innerHTML =
+      filterGroupHtml("Level", "level", currentLevelFilter, filterOptionCounts("level")) +
+      filterGroupHtml("Subject area", "topHeader", currentTopHeaderFilter, filterOptionCounts("topHeader")) +
+      filterGroupHtml("Topic group", "suggestedCombinedTitle", currentBoldTitleFilter, filterOptionCounts("suggestedCombinedTitle")) +
+      filterGroupHtml("Practice status", "status", currentStatusFilter, statusOptions);
+  };
+
+  window.wordPasses = function(w) {
+    if (currentQuick === "kn" && !known[w.key]) return false;
+    if (currentQuick === "np" && wordAttempts(w) > 0) return false;
+    if (currentQuick === "lr" && (wordAttempts(w) === 0 || known[w.key])) return false;
+    if (currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+    if (!wordMatchesMeta(w, "level", currentLevelFilter)) return false;
+    if (!wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
+    if (!wordMatchesMeta(w, "suggestedCombinedTitle", currentBoldTitleFilter)) return false;
+    if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
+    if (!wordInCategory(w, currentCategory)) return false;
+    return true;
+  };
+})();
+
+/* ============================================================
+   FINAL FIX: path-aware 3-layer filter
+   Uses only: Level → Subject area → Topic group
+   Internal JSON fields:
+   level → top_header → suggested_combined_title
+   ============================================================ */
+(function(){
+  if (window.__pathAwareThreeLayerFilterV2) return;
+  window.__pathAwareThreeLayerFilterV2 = true;
+
+  const LEVEL_ORDER_3PATH = { Entry: 0, Improver: 1, Advanced: 2 };
+  const ALLOWED_LEVELS_3PATH = ["Entry", "Improver", "Advanced"];
+  const ALLOWED_AREAS_3PATH = ["ACADEMIC STUDY", "ARTS", "MULTI-DISCIPLINE", "SCIENCES", "SOCIAL SCIENCES"];
+
+  function arr3p(v) {
+    if (v == null) return [];
+    if (Array.isArray(v)) return v.flatMap(arr3p);
+    const s = String(v).trim();
+    return s ? [s] : [];
+  }
+
+  function clean3p(v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    if (/^\d+$/.test(s)) return "";
+    if (/^page\s*\d+$/i.test(s)) return "";
+    if (/^(left|right|col1|col2|null|undefined|continuation)$/i.test(s)) return "";
+    if (/^(key to grammatical labels|labels used in word lists)$/i.test(s)) return "";
+    return s;
+  }
+
+  function norm3p(v) {
+    return typeof normalizeKey === "function"
+      ? normalizeKey(v)
+      : String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function uniq3p(vals) {
+    const out = [];
+    const seen = new Set();
+    for (const v of vals || []) {
+      const s = clean3p(v);
+      if (!s) continue;
+      const k = norm3p(s);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
+  }
+
+  function firstAllowedLevel3p(vals) {
+    vals = uniq3p(vals);
+    return ALLOWED_LEVELS_3PATH.find(x => vals.some(v => norm3p(v) === norm3p(x))) || vals[0] || "";
+  }
+
+  function firstAllowedArea3p(vals) {
+    vals = uniq3p(vals);
+    return ALLOWED_AREAS_3PATH.find(x => vals.some(v => norm3p(v) === norm3p(x))) || vals[0] || "";
+  }
+
+  function pathFromArray3p(p) {
+    if (!Array.isArray(p)) return null;
+    const level = firstAllowedLevel3p([p[0]]);
+    const area = firstAllowedArea3p([p[1]]);
+    const group = clean3p(p[2]);
+    if (!level || !area || !group) return null;
+    return { level, area, group };
+  }
+
+  function vocabPaths3p(w) {
+    const paths = [];
+
+    // Best source: original suggested_combined_title_path if it survived.
+    for (const p of [w.suggested_combined_title_path, w.suggestedCombinedTitlePath]) {
+      const path = pathFromArray3p(p);
+      if (path) paths.push(path);
+    }
+
+    // Main runtime source after extractWords(): categories.
+    for (const c of (w.categories || [])) {
+      const level = firstAllowedLevel3p([c.level, w.level, ...(w.levels || [])]);
+      const area = firstAllowedArea3p([c.topHeader, c.top_header, w.topHeader, w.top_header, ...(w.topHeaders || [])]);
+      const group = clean3p(
+        c.suggestedCombinedTitle ||
+        c.suggested_combined_title ||
+        c.combinedTitle ||
+        c.combined_title ||
+        c.topicGroup ||
+        c.topic_group ||
+        ""
+      );
+
+      if (level && area && group) {
+        paths.push({ level, area, group });
+      }
+    }
+
+    // Fallback: only use this if there are no category paths.
+    // This fallback is intentionally conservative to avoid wrong cross-combinations.
+    if (!paths.length) {
+      const level = firstAllowedLevel3p([w.level, ...(w.levels || [])]);
+      const area = firstAllowedArea3p([w.topHeader, w.top_header, ...(w.topHeaders || [])]);
+      const groups = uniq3p([
+        ...arr3p(w.suggested_combined_title),
+        ...arr3p(w.suggestedCombinedTitle),
+        ...arr3p(w.suggestedCombinedTitles)
+      ]);
+      for (const group of groups) {
+        if (level && area && group) paths.push({ level, area, group });
+      }
+    }
+
+    // Deduplicate exact paths.
+    const out = [];
+    const seen = new Set();
+    for (const p of paths) {
+      const k = [p.level, p.area, p.group].map(norm3p).join("::");
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(p);
+    }
+    return out;
+  }
+
+  function pathMatchesCurrent3p(path, exceptField) {
+    if (!path) return false;
+
+    if (exceptField !== "level" && currentLevelFilter !== "__all" && norm3p(path.level) !== norm3p(currentLevelFilter)) return false;
+    if (exceptField !== "topHeader" && currentTopHeaderFilter !== "__all" && norm3p(path.area) !== norm3p(currentTopHeaderFilter)) return false;
+    if (
+      exceptField !== "suggestedCombinedTitle" &&
+      exceptField !== "combinedTitle" &&
+      exceptField !== "boldTitle" &&
+      exceptField !== "boxedBoldTitle" &&
+      currentBoldTitleFilter !== "__all" &&
+      norm3p(path.group) !== norm3p(currentBoldTitleFilter)
+    ) return false;
+
+    return true;
+  }
+
+  function wordHasMatchingPath3p(w) {
+    return vocabPaths3p(w).some(p => pathMatchesCurrent3p(p, ""));
+  }
+
+  window.wordMetaValues = function(w, field) {
+    const vals = [];
+
+    for (const p of vocabPaths3p(w)) {
+      if (!pathMatchesCurrent3p(p, field)) continue;
+
+      if (field === "level") vals.push(p.level);
+      else if (field === "topHeader") vals.push(p.area);
+      else if (
+        field === "suggestedCombinedTitle" ||
+        field === "combinedTitle" ||
+        field === "boldTitle" ||
+        field === "boxedBoldTitle"
+      ) vals.push(p.group);
+    }
+
+    return uniq3p(vals);
+  };
+
+  window.wordMatchesMeta = function(w, field, selected) {
+    if (!selected || selected === "__all") return true;
+
+    return vocabPaths3p(w).some(p => {
+      if (field === "level") return norm3p(p.level) === norm3p(selected) && pathMatchesCurrent3p(p, "level");
+      if (field === "topHeader") return norm3p(p.area) === norm3p(selected) && pathMatchesCurrent3p(p, "topHeader");
+      if (
+        field === "suggestedCombinedTitle" ||
+        field === "combinedTitle" ||
+        field === "boldTitle" ||
+        field === "boxedBoldTitle"
+      ) return norm3p(p.group) === norm3p(selected) && pathMatchesCurrent3p(p, "suggestedCombinedTitle");
+      return false;
+    });
+  };
+
+  window.filterOptionCounts = function(field) {
+    const map = new Map();
+
+    for (const w of words) {
+      if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+      if (field === "status") {
+        if (!wordHasMatchingPath3p(w)) continue;
+        const s = wordStatus(w);
+        map.set(s, (map.get(s) || 0) + 1);
+        continue;
+      }
+
+      const valuesForThisWord = new Set();
+
+      for (const p of vocabPaths3p(w)) {
+        if (!pathMatchesCurrent3p(p, field)) continue;
+
+        if (field === "level") valuesForThisWord.add(p.level);
+        else if (field === "topHeader") valuesForThisWord.add(p.area);
+        else if (
+          field === "suggestedCombinedTitle" ||
+          field === "combinedTitle" ||
+          field === "boldTitle" ||
+          field === "boxedBoldTitle"
+        ) valuesForThisWord.add(p.group);
+      }
+
+      for (const val of valuesForThisWord) {
+        if (clean3p(val)) map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+
+    return [...map.entries()].sort((a, b) => {
+      if (field === "level") {
+        return (LEVEL_ORDER_3PATH[a[0]] ?? 99) - (LEVEL_ORDER_3PATH[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+      }
+      return a[0].localeCompare(b[0]);
+    });
+  };
+
+  window.filterChipHtml = function(field, value, label, count, active) {
+    const safeValue = String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('${field}', '${safeValue}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+  };
+
+  window.filterGroupHtml = function(title, field, selected, options) {
+    let html = `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">`;
+
+    let total = 0;
+    for (const w of words) {
+      if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+      if (field === "status") {
+        if (wordHasMatchingPath3p(w)) total++;
+      } else {
+        if (vocabPaths3p(w).some(p => pathMatchesCurrent3p(p, field))) total++;
+      }
+    }
+
+    html += filterChipHtml(field, "__all", "All", total, selected === "__all");
+
+    for (const opt of options || []) {
+      const value = opt[0];
+      const label = opt.length >= 3 ? opt[1] : opt[0];
+      const count = opt.length >= 3 ? opt[2] : opt[1];
+      if (!clean3p(value)) continue;
+      html += filterChipHtml(field, value, label, count, selected === value);
+    }
+
+    html += `</div></div>`;
+    return html;
+  };
+
+  window.setWordFilter = function(field, value) {
+    if (field === "level") {
+      currentLevelFilter = value;
+      currentTopHeaderFilter = "__all";
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (field === "topHeader") {
+      currentTopHeaderFilter = value;
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (
+      field === "suggestedCombinedTitle" ||
+      field === "combinedTitle" ||
+      field === "boldTitle" ||
+      field === "boxedBoldTitle"
+    ) {
+      currentBoldTitleFilter = value;
+      currentBoxedBoldFilter = "__all";
+    } else if (field === "status") {
+      currentStatusFilter = value;
+      currentQuick = value === "not_practiced" ? "np" : value === "learning" ? "lr" : value === "known" ? "kn" : null;
+    }
+
+    shuffledWordKeys = [];
+    renderFilterPanel();
+    renderWords();
+  };
+
+  window.renderFilterPanel = function() {
+    const body = $("filterPanelBody");
+    if (!body) return;
+
+    const statusOptions = [
+      ["not_practiced", "Not practiced", words.filter(w => wordStatus(w) === "not_practiced" && wordHasMatchingPath3p(w)).length],
+      ["learning", "Learning", words.filter(w => wordStatus(w) === "learning" && wordHasMatchingPath3p(w)).length],
+      ["known", "Known", words.filter(w => wordStatus(w) === "known" && wordHasMatchingPath3p(w)).length]
+    ];
+
+    body.innerHTML =
+      filterGroupHtml("Level", "level", currentLevelFilter, filterOptionCounts("level")) +
+      filterGroupHtml("Subject area", "topHeader", currentTopHeaderFilter, filterOptionCounts("topHeader")) +
+      filterGroupHtml("Topic group", "suggestedCombinedTitle", currentBoldTitleFilter, filterOptionCounts("suggestedCombinedTitle")) +
+      filterGroupHtml("Practice status", "status", currentStatusFilter, statusOptions);
+  };
+
+  window.hasActiveWordFilters = function() {
+    return currentLevelFilter !== "__all" ||
+      currentTopHeaderFilter !== "__all" ||
+      currentBoldTitleFilter !== "__all" ||
+      currentStatusFilter !== "__all";
+  };
+
+  window.resetWordFilters = function() {
+    currentLevelFilter = "__all";
+    currentTopHeaderFilter = "__all";
+    currentBoxedBoldFilter = "__all";
+    currentBoldTitleFilter = "__all";
+    currentStatusFilter = "__all";
+    currentQuick = null;
+    shuffledWordKeys = [];
+    renderFilterPanel();
+    renderWords();
+  };
+
+  window.wordPasses = function(w) {
+    if (currentQuick === "kn" && !known[w.key]) return false;
+    if (currentQuick === "np" && wordAttempts(w) > 0) return false;
+    if (currentQuick === "lr" && (wordAttempts(w) === 0 || known[w.key])) return false;
+
+    if (currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+    if (!wordHasMatchingPath3p(w)) return false;
+
+    if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
+    if (!wordInCategory(w, currentCategory)) return false;
+
+    return true;
+  };
+
+  window.searchTextForWord = function(w) {
+    const parts = [
+      w.word, w.key,
+      ...(w.grammarLabels || []),
+      ...(w.rawTexts || []),
+      ...(w.sourceExamples || [])
+    ];
+
+    for (const p of vocabPaths3p(w)) {
+      parts.push(p.level, p.area, p.group);
+    }
+
+    const d = dictCache[w.key];
+    if (d) {
+      parts.push(d.headword, d.hw, d.functionalLabel, ...(d.functionalLabels || []), ...(d.definitions || []), ...(d.shortDefinitions || []), ...(d.examples || []));
+      for (const ent of [...(d.mainEntries || []), ...(d.relatedBaseEntries || []), ...(d.otherEntries || [])]) {
+        parts.push(ent.headword, ent.hw, ent.functionalLabel, ...(ent.shortDefinitions || []));
+        for (const m of (ent.meanings || [])) {
+          parts.push(m.label, m.verbDivider);
+          for (const seg of (m.definitionSegments || [])) {
+            parts.push(seg.definition);
+            for (const ex of (seg.examples || [])) parts.push(ex.text, ex.author);
+          }
+        }
+      }
+    }
+
+    return norm3p(parts.filter(Boolean).join(" "));
+  };
+
+  // Also make Practice wizard use the same 3 dimensions when it asks wordMetaValues().
+  setTimeout(() => {
+    try {
+      renderFilterPanel();
+      renderWords();
+      if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+    } catch (err) {
+      console.warn("Path-aware 3-layer filter refresh failed:", err);
+    }
+  }, 100);
+})();
+
+/* ============================================================
+   ABSOLUTE FINAL FIX: exact suggested_combined_title_path filter
+   Only hierarchy used:
+   Level → Subject area → Topic group
+   Source of truth:
+   item.suggested_combined_title_path = [level, top_header, suggested_combined_title]
+   ============================================================ */
+(function(){
+  if (window.__exactSuggestedCombinedPathFilterV1) return;
+  window.__exactSuggestedCombinedPathFilterV1 = true;
+
+  const LEVELS_EXACT = ["Entry", "Improver", "Advanced"];
+  const SUBJECTS_EXACT = ["ACADEMIC STUDY", "ARTS", "MULTI-DISCIPLINE", "SCIENCES", "SOCIAL SCIENCES"];
+  const LEVEL_ORDER_EXACT = { Entry: 0, Improver: 1, Advanced: 2 };
+
+  function normExact(v) {
+    return String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function cleanExact(v) {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    if (/^\d+$/.test(s)) return "";
+    if (/^(null|undefined|continuation|left|right|col1|col2)$/i.test(s)) return "";
+    if (/^(key to grammatical labels|labels used in word lists)$/i.test(s)) return "";
+    return s;
+  }
+
+  function canonicalLevelExact(v) {
+    const s = cleanExact(v);
+    return LEVELS_EXACT.find(x => normExact(x) === normExact(s)) || "";
+  }
+
+  function canonicalSubjectExact(v) {
+    const s = cleanExact(v);
+    return SUBJECTS_EXACT.find(x => normExact(x) === normExact(s)) || "";
+  }
+
+  function exactPathFromItem(item, fallbackLevel) {
+    const rawPath =
+      Array.isArray(item.suggested_combined_title_path) ? item.suggested_combined_title_path :
+      Array.isArray(item.suggestedCombinedTitlePath) ? item.suggestedCombinedTitlePath :
+      null;
+
+    let level = "";
+    let subject = "";
+    let topic = "";
+
+    if (rawPath && rawPath.length >= 3) {
+      level = canonicalLevelExact(rawPath[0]) || canonicalLevelExact(item.level) || canonicalLevelExact(fallbackLevel);
+      subject = canonicalSubjectExact(rawPath[1]) || canonicalSubjectExact(item.top_header || item.topHeader);
+      topic = cleanExact(rawPath[2]);
+    } else {
+      level = canonicalLevelExact(item.level) || canonicalLevelExact(fallbackLevel);
+      subject = canonicalSubjectExact(item.top_header || item.topHeader);
+      topic = cleanExact(item.suggested_combined_title || item.suggestedCombinedTitle);
+    }
+
+    if (!level || !subject || !topic) return null;
+    return { level, subject, topic };
+  }
+
+  function pathKeyExact(p) {
+    return [p.level, p.subject, p.topic].map(normExact).join("::");
+  }
+
+  function uniqPathsExact(paths) {
+    const out = [];
+    const seen = new Set();
+    for (const p of paths || []) {
+      if (!p || !p.level || !p.subject || !p.topic) continue;
+      const k = pathKeyExact(p);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(p);
+    }
+    return out;
+  }
+
+  function getExactPaths(w) {
+    if (Array.isArray(w.exactSuggestedCombinedPaths) && w.exactSuggestedCombinedPaths.length) {
+      return uniqPathsExact(w.exactSuggestedCombinedPaths);
+    }
+
+    const paths = [];
+
+    for (const c of (w.categories || [])) {
+      const level = canonicalLevelExact(c.level);
+      const subject = canonicalSubjectExact(c.topHeader || c.top_header);
+      const topic = cleanExact(c.suggestedCombinedTitle || c.suggested_combined_title);
+      if (level && subject && topic) paths.push({ level, subject, topic });
+    }
+
+    return uniqPathsExact(paths);
+  }
+
+  function pathPassesCurrentExact(p, exceptField) {
+    if (!p) return false;
+
+    if (exceptField !== "level" && currentLevelFilter !== "__all" && normExact(p.level) !== normExact(currentLevelFilter)) return false;
+    if (exceptField !== "topHeader" && currentTopHeaderFilter !== "__all" && normExact(p.subject) !== normExact(currentTopHeaderFilter)) return false;
+    if (
+      exceptField !== "suggestedCombinedTitle" &&
+      exceptField !== "boldTitle" &&
+      exceptField !== "boxedBoldTitle" &&
+      currentBoldTitleFilter !== "__all" &&
+      normExact(p.topic) !== normExact(currentBoldTitleFilter)
+    ) return false;
+
+    return true;
+  }
+
+  function wordHasCurrentExactPath(w) {
+    return getExactPaths(w).some(p => pathPassesCurrentExact(p, ""));
+  }
+
+  // Replace parser so exact path survives aggregation by term.
+  window.extractWords = function(source) {
+    const map = new Map();
+
+    function addItemExact(item, fallbackLevel) {
+      const term = item?.term || item?.word || "";
+      const key = normalizeKey(term);
+      if (!key) return;
+
+      const p = exactPathFromItem(item, fallbackLevel);
+      if (!p) return;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          word: String(term).trim(),
+          grammarLabels: [],
+          rawTexts: [],
+          sourceExamples: [],
+          categories: [],
+          familyIds: [],
+          relatedKeys: [],
+          levels: [],
+          topHeaders: [],
+          boxedBoldTitles: [],
+          boldTitles: [],
+          suggestedCombinedTitles: [],
+          exactSuggestedCombinedPaths: [],
+          isDerivativeOrRelatedForm: !!item.is_derivative_or_related_form
+        });
+      }
+
+      const rec = map.get(key);
+
+      if (!rec.levels.includes(p.level)) rec.levels.push(p.level);
+      if (!rec.topHeaders.includes(p.subject)) rec.topHeaders.push(p.subject);
+      if (!rec.suggestedCombinedTitles.includes(p.topic)) rec.suggestedCombinedTitles.push(p.topic);
+
+      for (const g of (item.grammar_labels || [])) {
+        if (g && !rec.grammarLabels.includes(g)) rec.grammarLabels.push(g);
+      }
+
+      if (item.raw_text && !rec.rawTexts.includes(item.raw_text)) rec.rawTexts.push(item.raw_text);
+
+      const cat = {
+        level: p.level,
+        topHeader: p.subject,
+        suggestedCombinedTitle: p.topic,
+        suggestedCombinedTitlePath: [p.level, p.subject, p.topic],
+        pdfPageNumber: item.page || item.pdf_page_number || null,
+        imageLabel: item.image_label || item.imageLabel || ""
+      };
+
+      if (!rec.categories.some(c =>
+        c.level === cat.level &&
+        c.topHeader === cat.topHeader &&
+        c.suggestedCombinedTitle === cat.suggestedCombinedTitle
+      )) {
+        rec.categories.push(cat);
+      }
+
+      if (!rec.exactSuggestedCombinedPaths.some(x => pathKeyExact(x) === pathKeyExact(p))) {
+        rec.exactSuggestedCombinedPaths.push(p);
+      }
+    }
+
+    // Current cleaned JSON: { items: [...] }
+    if (Array.isArray(source?.items)) {
+      for (const item of source.items) addItemExact(item, item.level || "");
+    }
+
+    // Generated/API vocabulary fallback.
+    if (Array.isArray(source?.levels)) {
+      for (const block of source.levels) {
+        const levelName = block.level || block.name || "";
+        const data = block.data || block;
+        if (Array.isArray(data?.items)) {
+          for (const item of data.items) addItemExact(item, item.level || levelName);
+        }
+      }
+    }
+
+    const list = [...map.values()].sort((a, b) => a.word.localeCompare(b.word));
+
+    // Related-family support is intentionally conservative here.
+    // Existing dictionary related entries still work from API data.
+    return list;
+  };
+
+  window.wordMetaValues = function(w, field) {
+    const vals = [];
+
+    for (const p of getExactPaths(w)) {
+      if (!pathPassesCurrentExact(p, field)) continue;
+
+      if (field === "level") vals.push(p.level);
+      else if (field === "topHeader") vals.push(p.subject);
+      else if (
+        field === "suggestedCombinedTitle" ||
+        field === "boldTitle" ||
+        field === "boxedBoldTitle"
+      ) vals.push(p.topic);
+    }
+
+    return [...new Set(vals)];
+  };
+
+  window.wordMatchesMeta = function(w, field, selected) {
+    if (!selected || selected === "__all") return true;
+
+    return getExactPaths(w).some(p => {
+      if (!pathPassesCurrentExact(p, field)) return false;
+
+      if (field === "level") return normExact(p.level) === normExact(selected);
+      if (field === "topHeader") return normExact(p.subject) === normExact(selected);
+      if (
+        field === "suggestedCombinedTitle" ||
+        field === "boldTitle" ||
+        field === "boxedBoldTitle"
+      ) return normExact(p.topic) === normExact(selected);
+
+      return false;
+    });
+  };
+
+  window.filterOptionCounts = function(field) {
+    const map = new Map();
+
+    for (const w of words) {
+      if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+
+      if (field === "status") {
+        if (!wordHasCurrentExactPath(w)) continue;
+        const s = wordStatus(w);
+        map.set(s, (map.get(s) || 0) + 1);
+        continue;
+      }
+
+      const valuesForWord = new Set();
+
+      for (const p of getExactPaths(w)) {
+        if (!pathPassesCurrentExact(p, field)) continue;
+
+        if (field === "level") valuesForWord.add(p.level);
+        else if (field === "topHeader") valuesForWord.add(p.subject);
+        else if (
+          field === "suggestedCombinedTitle" ||
+          field === "boldTitle" ||
+          field === "boxedBoldTitle"
+        ) valuesForWord.add(p.topic);
+      }
+
+      for (const val of valuesForWord) {
+        map.set(val, (map.get(val) || 0) + 1);
+      }
+    }
+
+    return [...map.entries()].sort((a, b) => {
+      if (field === "level") {
+        return (LEVEL_ORDER_EXACT[a[0]] ?? 99) - (LEVEL_ORDER_EXACT[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+      }
+      return a[0].localeCompare(b[0]);
+    });
+  };
+
+  window.filterChipHtml = function(field, value, label, count, active) {
+    const safeValue = String(value || "")
+      .replace(/\\/g, "\\\\")
+      .replace(/'/g, "\\'");
+    return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('${field}', '${safeValue}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+  };
+
+  window.filterGroupHtml = function(title, field, selected, options) {
+    let html = `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">`;
+
+    let total = 0;
+    for (const w of words) {
+      if (field !== "status" && currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) continue;
+      if (field === "status") {
+        if (wordHasCurrentExactPath(w)) total++;
+      } else {
+        if (getExactPaths(w).some(p => pathPassesCurrentExact(p, field))) total++;
+      }
+    }
+
+    html += filterChipHtml(field, "__all", "All", total, selected === "__all");
+
+    for (const opt of options || []) {
+      const value = opt[0];
+      const label = opt.length >= 3 ? opt[1] : opt[0];
+      const count = opt.length >= 3 ? opt[2] : opt[1];
+      html += filterChipHtml(field, value, label, count, selected === value);
+    }
+
+    html += `</div></div>`;
+    return html;
+  };
+
+  window.setWordFilter = function(field, value) {
+    if (field === "level") {
+      currentLevelFilter = value;
+      currentTopHeaderFilter = "__all";
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (field === "topHeader") {
+      currentTopHeaderFilter = value;
+      currentBoxedBoldFilter = "__all";
+      currentBoldTitleFilter = "__all";
+    } else if (
+      field === "suggestedCombinedTitle" ||
+      field === "boldTitle" ||
+      field === "boxedBoldTitle"
+    ) {
+      currentBoldTitleFilter = value;
+      currentBoxedBoldFilter = "__all";
+    } else if (field === "status") {
+      currentStatusFilter = value;
+      currentQuick = value === "not_practiced" ? "np" : value === "learning" ? "lr" : value === "known" ? "kn" : null;
+    }
+
+    shuffledWordKeys = [];
+    renderFilterPanel();
+    renderWords();
+  };
+
+  window.renderFilterPanel = function() {
+    const body = $("filterPanelBody");
+    if (!body) return;
+
+    const statusOptions = [
+      ["not_practiced", "Not practiced", words.filter(w => wordStatus(w) === "not_practiced" && wordHasCurrentExactPath(w)).length],
+      ["learning", "Learning", words.filter(w => wordStatus(w) === "learning" && wordHasCurrentExactPath(w)).length],
+      ["known", "Known", words.filter(w => wordStatus(w) === "known" && wordHasCurrentExactPath(w)).length]
+    ];
+
+    body.innerHTML =
+      filterGroupHtml("Level", "level", currentLevelFilter, filterOptionCounts("level")) +
+      filterGroupHtml("Subject area", "topHeader", currentTopHeaderFilter, filterOptionCounts("topHeader")) +
+      filterGroupHtml("Topic group", "suggestedCombinedTitle", currentBoldTitleFilter, filterOptionCounts("suggestedCombinedTitle")) +
+      filterGroupHtml("Practice status", "status", currentStatusFilter, statusOptions);
+  };
+
+  window.hasActiveWordFilters = function() {
+    return currentLevelFilter !== "__all" ||
+      currentTopHeaderFilter !== "__all" ||
+      currentBoldTitleFilter !== "__all" ||
+      currentStatusFilter !== "__all";
+  };
+
+  window.resetWordFilters = function() {
+    currentLevelFilter = "__all";
+    currentTopHeaderFilter = "__all";
+    currentBoxedBoldFilter = "__all";
+    currentBoldTitleFilter = "__all";
+    currentStatusFilter = "__all";
+    currentQuick = null;
+    shuffledWordKeys = [];
+    renderFilterPanel();
+    renderWords();
+  };
+
+  window.wordPasses = function(w) {
+    if (currentQuick === "kn" && !known[w.key]) return false;
+    if (currentQuick === "np" && wordAttempts(w) > 0) return false;
+    if (currentQuick === "lr" && (wordAttempts(w) === 0 || known[w.key])) return false;
+
+    if (currentStatusFilter !== "__all" && wordStatus(w) !== currentStatusFilter) return false;
+    if (!wordHasCurrentExactPath(w)) return false;
+
+    if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
+    return true;
+  };
+
+  window.searchTextForWord = function(w) {
+    const parts = [
+      w.word,
+      w.key,
+      ...(w.grammarLabels || []),
+      ...(w.rawTexts || []),
+      ...(w.sourceExamples || [])
+    ];
+
+    for (const p of getExactPaths(w)) {
+      parts.push(p.level, p.subject, p.topic);
+    }
+
+    const d = dictCache[w.key];
+    if (d) {
+      parts.push(d.headword, d.hw, d.functionalLabel, ...(d.functionalLabels || []), ...(d.definitions || []), ...(d.shortDefinitions || []), ...(d.examples || []));
+    }
+
+    return normExact(parts.filter(Boolean).join(" "));
+  };
+
+  // Force reload packaged vocab through the new exact parser.
+  window.__reloadExactSuggestedCombinedVocabulary = async function() {
+    try {
+      const res = await fetch("vocab.json?ts=" + Date.now());
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const json = await res.json();
+      words = extractWords(json);
+      ensureProgressRecords();
+      saveAll();
+      renderFilterPanel();
+      renderWords();
+      if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+      console.log("Exact path vocabulary reloaded:", words.length, "unique words");
+    } catch (err) {
+      console.error("Exact path vocabulary reload failed:", err);
+    }
+  };
+
+  setTimeout(() => {
+    window.__reloadExactSuggestedCombinedVocabulary();
+  }, 80);
+})();
+
+
+/* ============================================================
+   FINAL PATCH: Auto-fetch word info when Practice starts
+   - Fetches selected session words before launching
+   - Background-fetches the rest of the pool afterwards
+   ============================================================ */
+(function(){
+  if (window.__practiceAutoFetchDefinitionsV1) return;
+  window.__practiceAutoFetchDefinitionsV1 = true;
+
+  const PREFETCH_CONCURRENCY = 4;
+  const BACKGROUND_POOL_LIMIT = 120;
+
+  function hasUsefulDefinition(w) {
+    const entry = dictCache[w.key];
+    if (!entry) return false;
+
+    if (Array.isArray(entry.definitions) && entry.definitions.length) return true;
+    if (Array.isArray(entry.shortDefinitions) && entry.shortDefinitions.length) return true;
+    if (Array.isArray(entry.mainEntries) && entry.mainEntries.length) return true;
+
+    return false;
+  }
+
+  function samplePracticeItems(arr, n) {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a.slice(0, Math.min(n, a.length));
+  }
+
+  function ensurePracticePrefetchOverlay() {
+    let el = document.getElementById("practicePrefetchOverlay");
+    if (el) return el;
+
+    el = document.createElement("div");
+    el.id = "practicePrefetchOverlay";
+    el.className = "game-overlay practice-prefetch-overlay";
+    el.innerHTML = `
+      <div class="game-summary">
+        <div class="summary-emoji">📚</div>
+        <div class="summary-title">Preparing practice words</div>
+        <div class="summary-sub" id="practicePrefetchText">Fetching dictionary info…</div>
+        <div class="summary-stats" style="max-width:260px">
+          <div class="summary-stat">
+            <div class="v" id="practicePrefetchDone">0</div>
+            <div class="l">Ready</div>
+          </div>
+          <div class="summary-stat">
+            <div class="v" id="practicePrefetchTotal">0</div>
+            <div class="l">Needed</div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function showPracticePrefetchOverlay(total) {
+    const el = ensurePracticePrefetchOverlay();
+    const done = document.getElementById("practicePrefetchDone");
+    const totalEl = document.getElementById("practicePrefetchTotal");
+    const text = document.getElementById("practicePrefetchText");
+
+    if (done) done.textContent = "0";
+    if (totalEl) totalEl.textContent = String(total);
+    if (text) text.textContent = total ? "Fetching dictionary info…" : "Already ready.";
+
+    el.classList.add("show");
+  }
+
+  function updatePracticePrefetchOverlay(doneCount, total, failed) {
+    const done = document.getElementById("practicePrefetchDone");
+    const totalEl = document.getElementById("practicePrefetchTotal");
+    const text = document.getElementById("practicePrefetchText");
+
+    if (done) done.textContent = String(doneCount);
+    if (totalEl) totalEl.textContent = String(total);
+
+    if (text) {
+      text.textContent = failed
+        ? `Fetched ${doneCount}/${total}. Some words could not be fetched, but practice can continue.`
+        : `Fetched ${doneCount}/${total}`;
+    }
+  }
+
+  function hidePracticePrefetchOverlay() {
+    const el = document.getElementById("practicePrefetchOverlay");
+    if (el) el.classList.remove("show");
+  }
+
+  async function fetchWordsWithLimit(list, options = {}) {
+    const items = (list || []).filter(Boolean);
+    const total = items.length;
+    let index = 0;
+    let done = 0;
+    let failed = 0;
+
+    const showProgress = !!options.showProgress;
+
+    if (showProgress) showPracticePrefetchOverlay(total);
+
+    async function worker() {
+      while (index < items.length) {
+        const w = items[index++];
+        if (!w || hasUsefulDefinition(w)) {
+          done++;
+          if (showProgress) updatePracticePrefetchOverlay(done, total, failed);
+          continue;
+        }
+
+        try {
+          if (typeof fetchDefinition === "function") {
+            await fetchDefinition(w);
+          }
+        } catch (err) {
+          failed++;
+          console.warn("Practice auto-fetch failed:", w.word || w.key, err);
+        }
+
+        done++;
+        if (showProgress) updatePracticePrefetchOverlay(done, total, failed);
+      }
+    }
+
+    const workers = [];
+    const count = Math.min(PREFETCH_CONCURRENCY, Math.max(1, items.length));
+    for (let i = 0; i < count; i++) workers.push(worker());
+
+    await Promise.all(workers);
+
+    try {
+      if (typeof saveAll === "function") saveAll();
+    } catch {}
+
+    return { total, done, failed };
+  }
+
+  function backgroundFetchRestOfPool(pool, sessionWords) {
+    const sessionKeys = new Set((sessionWords || []).map(w => w.key));
+    const rest = (pool || [])
+      .filter(w => w && !sessionKeys.has(w.key) && !hasUsefulDefinition(w))
+      .slice(0, BACKGROUND_POOL_LIMIT);
+
+    if (!rest.length) return;
+
+    setTimeout(() => {
+      fetchWordsWithLimit(rest, { showProgress: false })
+        .then(result => {
+          console.log("Background practice definition fetch complete:", result);
+        })
+        .catch(err => console.warn("Background practice fetch failed:", err));
+    }, 800);
+  }
+
+  function wrapStartPracticeSession() {
+    const original = window.startPracticeSession;
+    if (typeof original !== "function" || original.__autoFetchWrapped) return false;
+
+    const wrapped = async function(opts) {
+      opts = opts || {};
+      const pool = Array.isArray(opts.pool) ? opts.pool : [];
+      const presetWords = Array.isArray(opts.initialWords) && opts.initialWords.length
+        ? opts.initialWords.filter(Boolean)
+        : null;
+      const maxLength = presetWords ? presetWords.length : (pool.length || 1);
+      const length = Math.min(Math.max(1, opts.length || 10), maxLength);
+
+      // Decide the session words before launching, so those exact words are prepared.
+      const sessionWords = presetWords
+        ? presetWords.slice(0, length)
+        : samplePracticeItems(pool, length);
+      const needed = sessionWords.filter(w => !hasUsefulDefinition(w));
+
+      try {
+        if (needed.length) {
+          await fetchWordsWithLimit(needed, { showProgress: true });
+        }
+      } finally {
+        hidePracticePrefetchOverlay();
+      }
+
+      // Start the session using the prepared session words.
+      const nextOpts = {
+        ...opts,
+        pool: pool.length ? pool : sessionWords,
+        length: sessionWords.length ? sessionWords.length : length,
+        initialWords: sessionWords.length ? sessionWords : opts.initialWords
+      };
+
+      const result = original.call(this, nextOpts);
+
+      // Quietly fetch more words from the selected pool for future sessions.
+      backgroundFetchRestOfPool(pool, sessionWords);
+
+      return result;
+    };
+
+    wrapped.__autoFetchWrapped = true;
+    window.startPracticeSession = wrapped;
+    return true;
+  }
+
+  // Try immediately and again later, because the Practice module may define
+  // startPracticeSession after this patch depending on file order.
+  wrapStartPracticeSession();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (wrapStartPracticeSession() || tries > 30) clearInterval(timer);
+  }, 200);
+})();
+
+/* ============================================================
+   EASY MODE — Learner's dictionary + Chinese translation
+   - Per-user sticky toggle stored in localStorage
+   - fetchEasyDefinition(w) hits /api/define-easy and caches result
+   - Settings page: row injected on render
+   ============================================================ */
+(function(){
+  if (window.__easyModeV1) return;
+  window.__easyModeV1 = true;
+
+  // ---------- State ----------
+  function loadEasyMode() {
+    try {
+      const saved = localStorage.getItem(LS.EASY_MODE);
+      if (saved === null) return true;
+      return saved === "1";
+    } catch {
+      return true;
+    }
+  }
+  function saveEasyMode(on) {
+    try { localStorage.setItem(LS.EASY_MODE, on ? "1" : "0"); } catch {}
+  }
+  window.easyMode = loadEasyMode();
+  try {
+    if (localStorage.getItem(LS.EASY_MODE) === null) saveEasyMode(window.easyMode);
+  } catch {}
+  window.isEasyMode = function() { return !!window.easyMode; };
+
+  // ---------- Easy-mode dictionary cache (separate from collegiate dictCache) ----------
+  function loadEasyDict() {
+    try { return JSON.parse(localStorage.getItem(LS.EASY_DICT) || "{}") || {}; }
+    catch { return {}; }
+  }
+  function saveEasyDict() {
+    try { localStorage.setItem(LS.EASY_DICT, JSON.stringify(window.easyDictCache || {})); } catch {}
+  }
+  window.easyDictCache = loadEasyDict();
+  window.saveEasyDict = saveEasyDict;
+
+  // ---------- Fetch ----------
+  // Returns the easy-mode entry: { word, pronunciation, audio, grammarLabels,
+  //   definitions: [{text, chinese, examples, partOfSpeech}], source }
+  window.fetchEasyDefinition = async function(w) {
+    if (!w || !w.key) return null;
+    const cached = window.easyDictCache[w.key];
+    if (cached) return cached;
+    const query = encodeURIComponent(w.word || w.key);
+    try {
+      const r = await fetch(`/api/define-easy?word=${query}`);
+      if (!r.ok) {
+        const detail = await r.text();
+        console.warn("define-easy failed:", r.status, detail);
+        return null;
+      }
+      const data = await r.json();
+      window.easyDictCache[w.key] = data;
+      saveEasyDict();
+      return data;
+    } catch (err) {
+      console.warn("define-easy fetch error:", err);
+      return null;
+    }
+  };
+
+  // ---------- Toggle ----------
+  window.setEasyMode = function(on) {
+    window.easyMode = !!on;
+    saveEasyMode(window.easyMode);
+    // Re-render any open pages so the toggle reflects everywhere
+    if (typeof renderAll === "function") renderAll();
+    if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+    renderEasyModeSettingsRow();
+    if (typeof toast === "function") {
+      toast(window.easyMode ? "✓ Easy Mode on" : "Easy Mode off");
+    }
+  };
+
+  // ---------- Settings UI injection ----------
+  function renderEasyModeSettingsRow() {
+    const settingsPage = document.querySelector('[data-page="settings"] .settings-list');
+    if (!settingsPage) return;
+
+    let group = document.getElementById("easyModeSettingsGroup");
+    if (!group) {
+      group = document.createElement("div");
+      group.id = "easyModeSettingsGroup";
+      const label = document.createElement("div");
+      label.className = "settings-group-label";
+      label.textContent = "Learning mode";
+      const wrapper = document.createElement("div");
+      wrapper.className = "settings-group";
+      group.appendChild(label);
+      group.appendChild(wrapper);
+      // Insert at the very top of the settings list
+      settingsPage.insertBefore(group, settingsPage.firstChild);
+    }
+
+    const wrapper = group.querySelector(".settings-group");
+    wrapper.innerHTML = `
+      <div class="settings-row" onclick="setEasyMode(!isEasyMode())">
+        <div class="l">
+          Easy Mode
+          <div class="desc">${window.easyMode
+            ? "Simpler definitions from Learner's dictionary, with Chinese translations."
+            : "Off — using standard definitions."}</div>
+        </div>
+        <div class="em-switch ${window.easyMode ? "on" : ""}" aria-label="Easy Mode toggle"></div>
+      </div>
+    `;
+  }
+  window.renderEasyModeSettingsRow = renderEasyModeSettingsRow;
+
+  // Inject on page load and on every navigation to Settings
+  function tryInject() {
+    if (document.querySelector('[data-page="settings"] .settings-list')) {
+      renderEasyModeSettingsRow();
+      return true;
+    }
+    return false;
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryInject);
+  } else {
+    tryInject();
+  }
+  // Also retry a few times in case settings DOM appears late
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (tryInject() || tries > 30) clearInterval(timer);
+  }, 200);
+
+  // Hook into goto() so the toggle re-renders when Settings opens
+  const _origGoto = window.goto;
+  if (typeof _origGoto === "function" && !_origGoto.__easyModeWrapped) {
+    window.goto = function(page) {
+      const r = _origGoto.apply(this, arguments);
+      if (page === "settings") renderEasyModeSettingsRow();
+      return r;
+    };
+    window.goto.__easyModeWrapped = true;
+  }
+})();
+
+/* ============================================================
+   EASY MODE UI — wrong/correct full-screen view, swipe disable,
+   sheet override (Definitions only + Chinese inline)
+   ============================================================ */
+(function(){
+  if (window.__easyModeUIV1) return;
+  window.__easyModeUIV1 = true;
+
+  // ---- Apply / remove body.easy-mode class ----
+  function syncBodyClass() {
+    if (typeof document === "undefined") return;
+    document.body.classList.toggle("easy-mode", !!window.easyMode);
+  }
+  syncBodyClass();
+  // Re-sync when easy mode toggles
+  const _origSetEasyMode = window.setEasyMode;
+  if (typeof _origSetEasyMode === "function" && !_origSetEasyMode.__bodyClassWrapped) {
+    window.setEasyMode = function(on) {
+      const r = _origSetEasyMode.apply(this, arguments);
+      syncBodyClass();
+      return r;
+    };
+    window.setEasyMode.__bodyClassWrapped = true;
+  }
+
+  // ---- Helper: render English + Chinese + examples ----
+  function renderEasyDefinitionsHtml(easyEntry) {
+    if (!easyEntry || !Array.isArray(easyEntry.definitions) || !easyEntry.definitions.length) {
+      return `<div class="em-empty">No definition found in the Learner's dictionary.</div>`;
+    }
+    return easyEntry.definitions.map((d, i) => {
+      const examples = (d.examples || []).map(ex =>
+        `<div class="em-example">${escapeHtml(ex)}</div>`
+      ).join("");
+      const pos = d.partOfSpeech ? `<span class="em-pos">${escapeHtml(d.partOfSpeech)}</span>` : "";
+      return `
+        <div class="em-def-item">
+          <div class="em-def-num">${i + 1}</div>
+          <div class="em-def-body">
+            ${pos}
+            <div class="em-def-en">${escapeHtml(d.text || "")}</div>
+            ${d.chinese ? `<div class="em-def-zh">${escapeHtml(d.chinese)}</div>` : ""}
+            ${examples ? `<div class="em-examples">${examples}</div>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // ---- Full-screen Easy answer overlay ----
+  function ensureEasyOverlay() {
+    let el = document.getElementById("easyAnswerOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "easyAnswerOverlay";
+    el.className = "easy-answer-overlay";
+    el.innerHTML = `
+      <div class="em-header" id="emHeader">
+        <button class="em-close" onclick="closeEasyAnswerOverlay()">✕</button>
+        <div class="em-header-text" id="emHeaderText">—</div>
+        <button class="em-audio" id="emAudioBtn">🔊</button>
+      </div>
+      <div class="em-scroll" id="emScroll">
+        <div class="em-content" id="emContent"></div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  // Show overlay. opts = { word, isWrong, onContinue }
+  window.openEasyAnswerOverlay = async function(opts) {
+    const { word, isWrong, onContinue } = opts;
+    if (!word) return;
+
+    const el = ensureEasyOverlay();
+    const header = document.getElementById("emHeader");
+    const headerText = document.getElementById("emHeaderText");
+    const content = document.getElementById("emContent");
+    const audioBtn = document.getElementById("emAudioBtn");
+    const closeBtn = document.querySelector("#easyAnswerOverlay .em-close");
+
+    header.classList.toggle("wrong", !!isWrong);
+    header.classList.toggle("correct", !isWrong);
+
+    // In Easy Mode wrong-answer teaching screen, do not allow exit from the X.
+    // The user must leave through the bottom Continue button after reading.
+    if (closeBtn) {
+      closeBtn.style.visibility = isWrong ? "hidden" : "";
+      closeBtn.disabled = !!isWrong;
+      closeBtn.setAttribute("aria-hidden", isWrong ? "true" : "false");
+    }
+    headerText.innerHTML = isWrong
+      ? `✗ The correct answer was<br><b>${escapeHtml(word.word)}</b>`
+      : `✓ Correct!<br><b>${escapeHtml(word.word)}</b>`;
+
+    // Loading shimmer while we fetch
+    content.innerHTML = `<div class="em-shimmer"></div><div class="em-shimmer" style="width:80%"></div><div class="em-shimmer" style="width:60%"></div>`;
+
+    el.classList.add("show");
+
+    // Reset scroll
+    const scrollEl = document.getElementById("emScroll");
+    if (scrollEl) scrollEl.scrollTop = 0;
+
+    // Fetch (cached if available)
+    let easyEntry = null;
+    try {
+      if (typeof window.fetchEasyDefinition === "function") {
+        easyEntry = await window.fetchEasyDefinition(word);
+      }
+    } catch (err) {
+      console.warn("openEasyAnswerOverlay fetch failed:", err);
+    }
+
+    // Audio: prefer easy entry's audio, fall back to collegiate dictCache
+    const collegiateAudio = (window.dictCache && window.dictCache[word.key] && window.dictCache[word.key].audio) || "";
+    const audioUrl = (easyEntry && easyEntry.audio) || collegiateAudio || "";
+    audioBtn.disabled = !audioUrl;
+    audioBtn.onclick = () => { if (audioUrl) { try { new Audio(audioUrl).play(); } catch (e) {} } };
+
+    // Auto-play once
+    if (audioUrl) {
+      try { new Audio(audioUrl).play(); } catch (e) { /* may be blocked */ }
+    }
+
+    // Render content
+    const pron = (easyEntry && easyEntry.pronunciation) || (window.dictCache && window.dictCache[word.key] && window.dictCache[word.key].pronunciation) || "";
+    const pronHtml = pron ? `<div class="em-pron">/${escapeHtml(pron)}/</div>` : "";
+    content.innerHTML = `
+      ${pronHtml}
+      <div class="em-def-list">${renderEasyDefinitionsHtml(easyEntry)}</div>
+      <button class="em-continue-btn" onclick="closeEasyAnswerOverlay()">Continue ›</button>
+    `;
+    // Set continue handler
+    const contBtn = content.querySelector(".em-continue-btn");
+    if (contBtn) {
+      contBtn.onclick = () => {
+        closeEasyAnswerOverlay();
+        if (typeof onContinue === "function") onContinue();
+      };
+    }
+  };
+
+  window.closeEasyAnswerOverlay = function() {
+    const el = document.getElementById("easyAnswerOverlay");
+    if (el) el.classList.remove("show");
+  };
+
+  // ---- Wrap answerMCV2 ----
+  const _origAnswerMC = window.answerMCV2;
+  if (typeof _origAnswerMC === "function" && !_origAnswerMC.__easyWrapped) {
+    window.answerMCV2 = function(picked, correctKey, w) {
+      if (!window.easyMode) return _origAnswerMC.apply(this, arguments);
+
+      const ok = picked === correctKey;
+      // Update state via the original handler path: we mimic its critical effects
+      if (typeof handleAnswer === "function") handleAnswer(w, ok);
+
+      // Mark buttons visually
+      document.querySelectorAll(".game-option").forEach(b => {
+        if (b.dataset.key === correctKey) b.classList.add("correct");
+        else if (b.dataset.key === picked) b.classList.add("wrong");
+        b.disabled = true;
+      });
+      if (typeof renderGameTopbar === "function") renderGameTopbar();
+
+      if (ok) {
+        // Inline ✓ with [More info] and [Continue]
+        renderEasyCorrectInlineActions(w);
+      } else {
+        // Full-screen wrong-answer takeover
+        window.openEasyAnswerOverlay({
+          word: w,
+          isWrong: true,
+          onContinue: () => nextQuestionV2()
+        });
+      }
+    };
+    window.answerMCV2.__easyWrapped = true;
+  }
+
+  // ---- Wrap answerSpellV2 ----
+  const _origAnswerSpell = window.answerSpellV2;
+  if (typeof _origAnswerSpell === "function" && !_origAnswerSpell.__easyWrapped) {
+    window.answerSpellV2 = function(w) {
+      if (!window.easyMode) return _origAnswerSpell.apply(this, arguments);
+
+      const inp = document.getElementById("spellInput");
+      if (!inp) return;
+      const ans = inp.value;
+      const ok = (typeof normalizeSpelling === "function")
+        ? normalizeSpelling(ans) === normalizeSpelling(w.word)
+        : (ans || "").trim().toLowerCase() === (w.word || "").trim().toLowerCase();
+
+      if (typeof handleAnswer === "function") handleAnswer(w, ok);
+
+      inp.classList.add(ok ? "correct" : "wrong");
+      inp.disabled = true;
+      const chk = document.getElementById("checkSpellBtn"); if (chk) chk.remove();
+      const hnt = document.getElementById("spellHintBtn"); if (hnt) hnt.remove();
+      if (typeof renderGameTopbar === "function") renderGameTopbar();
+
+      if (ok) {
+        const body = document.getElementById("gameBody");
+        const result = document.createElement("div");
+        result.style.cssText = "margin-top:12px;text-align:center;color:#3F6212;font-weight:700";
+        result.textContent = "✓ Correct!";
+        body.appendChild(result);
+        renderEasyCorrectInlineActions(w);
+      } else {
+        window.openEasyAnswerOverlay({
+          word: w,
+          isWrong: true,
+          onContinue: () => nextQuestionV2()
+        });
+      }
+    };
+    window.answerSpellV2.__easyWrapped = true;
+  }
+
+  // ---- Inline action row for correct answers in Easy Mode ----
+  function renderEasyCorrectInlineActions(w) {
+    const body = document.getElementById("gameBody");
+    if (!body) return;
+    // Avoid duplicates
+    if (body.querySelector(".em-correct-actions")) return;
+
+    const row = document.createElement("div");
+    row.className = "em-correct-actions";
+    row.innerHTML = `
+      <button class="em-action-btn secondary" id="emMoreInfoBtn">📖 More info</button>
+      <button class="em-action-btn primary" id="emContinueBtn">Continue ›</button>
+    `;
+    body.appendChild(row);
+
+    document.getElementById("emMoreInfoBtn").onclick = () => {
+      window.openEasyAnswerOverlay({
+        word: w,
+        isWrong: false,
+        onContinue: () => nextQuestionV2()
+      });
+    };
+    document.getElementById("emContinueBtn").onclick = () => nextQuestionV2();
+
+    // Auto-play pronunciation in background (already happens via existing flow,
+    // but we trigger explicitly here since we bypass the original branch).
+    if (typeof practicePlayPronunciationAndThen === "function") {
+      practicePlayPronunciationAndThen(w.key, null, () => {});
+    }
+  }
+
+  // ---- Disable swipes in Words tab + sheet when Easy Mode is on ----
+  const _origSwipeRight = window.doSwipeRight;
+  const _origSwipeLeft  = window.doSwipeLeft;
+  if (typeof _origSwipeRight === "function" && !_origSwipeRight.__easyWrapped) {
+    window.doSwipeRight = function() {
+      if (window.easyMode) {
+        if (typeof toast === "function") toast("Status changes through practice only");
+        return;
+      }
+      return _origSwipeRight.apply(this, arguments);
+    };
+    window.doSwipeRight.__easyWrapped = true;
+  }
+  if (typeof _origSwipeLeft === "function" && !_origSwipeLeft.__easyWrapped) {
+    window.doSwipeLeft = function() {
+      if (window.easyMode) {
+        if (typeof toast === "function") toast("Status changes through practice only");
+        return;
+      }
+      return _origSwipeLeft.apply(this, arguments);
+    };
+    window.doSwipeLeft.__easyWrapped = true;
+  }
+
+  // ---- Override word card sheet definitions tab when Easy Mode is on ----
+  // Strategy: wrap renderSheetTab. If easy mode + meaning tab, fetch easy
+  // entry and replace the tab content. Other tabs are hidden by CSS already.
+  const _origRenderSheetTab = window.renderSheetTab;
+  if (typeof _origRenderSheetTab === "function" && !_origRenderSheetTab.__easyWrapped) {
+    window.renderSheetTab = async function() {
+      if (!window.easyMode) return _origRenderSheetTab.apply(this, arguments);
+
+      const w = window.currentWord;
+      const c = document.getElementById("tabContent");
+      if (!w || !c) return _origRenderSheetTab.apply(this, arguments);
+
+      // Force Definitions tab in Easy Mode (Related/Synonyms hidden by CSS)
+      if (window.sheetTab !== "meaning") window.sheetTab = "meaning";
+      if (typeof setSheetActiveTabButton === "function") setSheetActiveTabButton("meaning");
+
+      // Show loading shimmer
+      c.innerHTML = `<div class="em-shimmer"></div><div class="em-shimmer" style="width:80%"></div><div class="em-shimmer" style="width:60%"></div>${tabBottomHtml(w)}`;
+
+      try {
+        const easyEntry = window.easyDictCache && window.easyDictCache[w.key]
+          ? window.easyDictCache[w.key]
+          : (typeof window.fetchEasyDefinition === "function" ? await window.fetchEasyDefinition(w) : null);
+
+        c.innerHTML = `
+          <div class="em-sheet-def-list">${renderEasyDefinitionsHtml(easyEntry)}</div>
+          ${tabBottomHtml(w)}
+        `;
+      } catch (err) {
+        console.warn("Easy renderSheetTab failed:", err);
+        c.innerHTML = `<div class="em-empty">Could not load Easy Mode dictionary.</div>${tabBottomHtml(w)}`;
+      }
+    };
+    window.renderSheetTab.__easyWrapped = true;
+  }
+})();
+
+/* ============================================================
+   GOAL & RECORD TAB — calendar, daily goal, streak, progress bars
+   Replaces the old Home tab. Hooks mastery promotion to log
+   daily records.
+   ============================================================ */
+(function(){
+  if (window.__goalTabV1) return;
+  window.__goalTabV1 = true;
+
+  // ---------- Persistence ----------
+  function loadGoal() {
+    try { return JSON.parse(localStorage.getItem(LS.GOAL) || "null"); }
+    catch { return null; }
+  }
+  function saveGoal(g) {
+    try { localStorage.setItem(LS.GOAL, JSON.stringify(g)); } catch {}
+  }
+  function loadDailyRecord() {
+    try { return JSON.parse(localStorage.getItem(LS.DAILY_RECORD) || "{}") || {}; }
+    catch { return {}; }
+  }
+  function saveDailyRecord(d) {
+    try { localStorage.setItem(LS.DAILY_RECORD, JSON.stringify(d)); } catch (e) {
+      console.warn("Could not save daily record:", e);
+    }
+  }
+  window.loadGoal = loadGoal;
+  window.saveGoal = saveGoal;
+
+  // ---------- Date helpers (local timezone) ----------
+  function todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  function dateKey(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+  function parseKey(k) {
+    const [y, m, d] = k.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  }
+  function dayBefore(d) {
+    const nd = new Date(d);
+    nd.setDate(nd.getDate() - 1);
+    return nd;
+  }
+
+  // ---------- Mastery hook ----------
+  // Called by Practice IIFE when a word is just promoted to Known.
+  window.onMasteryPromotion = function(key) {
+    const record = loadDailyRecord();
+    const today = todayKey();
+    if (!record[today]) {
+      record[today] = { newWordsMastered: [], practiceSessions: 0, totalMinutes: 0, goalMet: false };
+    }
+    if (!record[today].newWordsMastered.includes(key)) {
+      record[today].newWordsMastered.push(key);
+    }
+    // Evaluate goal-met
+    const goal = loadGoal();
+    const target = (goal && goal.wordsPerDay) || 5;
+    const wasGoalMet = record[today].goalMet;
+    record[today].goalMet = record[today].newWordsMastered.length >= target;
+    saveDailyRecord(record);
+
+    // If goal just became met, celebrate
+    if (!wasGoalMet && record[today].goalMet) {
+      if (typeof toast === "function") toast(`🎯 Daily goal achieved! ${target} new words`);
+    }
+
+    // Re-render goal tab if visible
+    if (document.querySelector('[data-page="home"].active')) renderGoalTab();
+  };
+
+  // Practice session completion hook (call this if/when sessions finish)
+  // For now session completion happens elsewhere — we count it via practiceHistory directly.
+
+  // ---------- Streak calculation ----------
+  function computeStreak() {
+    const record = loadDailyRecord();
+    let streak = 0;
+    let cursor = new Date();
+    // If today's goal is met, count today and walk back.
+    // Otherwise, start counting from yesterday (today is still "in progress").
+    if (record[dateKey(cursor)]?.goalMet) {
+      streak = 1;
+      cursor = dayBefore(cursor);
+    } else {
+      cursor = dayBefore(cursor);
+    }
+    while (record[dateKey(cursor)]?.goalMet) {
+      streak++;
+      cursor = dayBefore(cursor);
+    }
+    return streak;
+  }
+
+  // ---------- Progress aggregation per dimension ----------
+  // For each value of (level | subjectArea | topicGroup), count
+  // mastered / learning / not_practiced words.
+  function countByDimension(field) {
+    // field ∈ "level" | "topHeader" | "suggestedCombinedTitle"
+    const buckets = new Map(); // value → {mastered, learning, total}
+    for (const w of words) {
+      const paths = (typeof exactPracticePaths === "function") ? exactPracticePaths(w) : [];
+      const values = new Set();
+      for (const p of paths) {
+        if (field === "level") values.add(p.level);
+        else if (field === "topHeader") values.add(p.subject);
+        else if (field === "suggestedCombinedTitle") values.add(p.topic);
+      }
+      const status = (typeof wordStatus === "function") ? wordStatus(w) : "not_practiced";
+      for (const v of values) {
+        if (!v) continue;
+        if (!buckets.has(v)) buckets.set(v, { mastered: 0, learning: 0, total: 0 });
+        const b = buckets.get(v);
+        b.total++;
+        if (status === "known") b.mastered++;
+        else if (status === "learning") b.learning++;
+      }
+    }
+    const arr = [...buckets.entries()].map(([k, v]) => ({ name: k, ...v }));
+    // Sort by name (special order for level)
+    if (field === "level") {
+      const order = { Entry: 0, Improver: 1, Advanced: 2 };
+      arr.sort((a, b) => (order[a.name] ?? 99) - (order[b.name] ?? 99) || a.name.localeCompare(b.name));
+    } else {
+      arr.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return arr;
+  }
+
+  function progressBarHtml(rows) {
+    if (!rows.length) return `<div class="g-empty">No data yet</div>`;
+    return rows.map(r => {
+      const pctM = r.total > 0 ? (r.mastered / r.total) * 100 : 0;
+      const pctL = r.total > 0 ? (r.learning / r.total) * 100 : 0;
+      const notP = r.total - r.mastered - r.learning;
+      return `
+        <div class="g-prog-row">
+          <div class="g-prog-head">
+            <span class="g-prog-name">${escapeHtml(r.name)}</span>
+            <span class="g-prog-count">${r.mastered}/${r.total}</span>
+          </div>
+          <div class="g-prog-bar">
+            <div class="g-prog-seg mastered" style="width:${pctM}%"></div>
+            <div class="g-prog-seg learning" style="width:${pctL}%"></div>
+          </div>
+          <div class="g-prog-foot">${r.mastered} mastered · ${r.learning} learning · ${notP} to go</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // ---------- Calendar ----------
+  let calCursor = new Date(); // controls which month is shown
+
+  function renderCalendarHtml() {
+    const record = loadDailyRecord();
+    const year = calCursor.getFullYear();
+    const month = calCursor.getMonth();
+    const monthName = calCursor.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    // Make Monday-first: shift Sunday(0) to be last
+    const startWeekday = (firstDay.getDay() + 6) % 7;
+    const todayK = todayKey();
+
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+      .map(d => `<div class="g-cal-dow">${d}</div>`).join("");
+
+    let cells = "";
+    for (let i = 0; i < startWeekday; i++) cells += `<div class="g-cal-cell empty"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(year, month, d);
+      const key = dateKey(date);
+      const rec = record[key];
+      const isToday = key === todayK;
+      let cls = "g-cal-cell";
+      let badge = "";
+      if (rec && rec.goalMet) { cls += " met"; badge = `<div class="g-cal-badge">✓</div>`; }
+      else if (rec && rec.newWordsMastered && rec.newWordsMastered.length > 0) {
+        cls += " partial";
+        badge = `<div class="g-cal-dot"></div>`;
+      }
+      if (isToday) cls += " today";
+      cells += `<div class="${cls}" onclick="openGoalDayDetail('${key}')"><span>${d}</span>${badge}</div>`;
+    }
+
+    return `
+      <div class="g-cal-card">
+        <div class="g-cal-header">
+          <button class="g-cal-nav" onclick="goalCalPrev()">‹</button>
+          <div class="g-cal-month">${escapeHtml(monthName)}</div>
+          <button class="g-cal-nav" onclick="goalCalNext()">›</button>
+        </div>
+        <div class="g-cal-dow-row">${days}</div>
+        <div class="g-cal-grid">${cells}</div>
+      </div>
+    `;
+  }
+
+  window.goalCalPrev = function() {
+    calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() - 1, 1);
+    renderGoalTab();
+  };
+  window.goalCalNext = function() {
+    calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 1);
+    renderGoalTab();
+  };
+
+  // ---------- Day detail sheet ----------
+  function ensureDayDetailOverlay() {
+    let el = document.getElementById("goalDayOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "goalDayOverlay";
+    el.className = "game-overlay history-overlay";
+    el.innerHTML = `
+      <div class="game-topbar">
+        <button class="game-close" onclick="closeGoalDayDetail()">✕</button>
+        <div style="flex:1;text-align:center;font-weight:800;color:var(--ink-soft)" id="goalDayTitle">Day</div>
+        <div style="width:36px"></div>
+      </div>
+      <div class="game-body" id="goalDayBody"></div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.openGoalDayDetail = function(key) {
+    const el = ensureDayDetailOverlay();
+    const record = loadDailyRecord();
+    const rec = record[key] || { newWordsMastered: [], practiceSessions: 0, totalMinutes: 0, goalMet: false };
+    const date = parseKey(key);
+    const niceDate = date.toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+
+    // Sessions / minutes from practiceHistory
+    const hist = (typeof loadHistory === "function") ? loadHistory() : [];
+    const dayStart = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+    const dayEnd = dayStart + 24 * 3600 * 1000;
+    const daySessions = hist.filter(s => {
+      const t = new Date(s.startedAt || s.endedAt || 0).getTime();
+      return t >= dayStart && t < dayEnd;
+    });
+    const totalMs = daySessions.reduce((acc, s) => {
+      const a = new Date(s.startedAt || 0).getTime();
+      const b = new Date(s.endedAt || 0).getTime();
+      return acc + Math.max(0, b - a);
+    }, 0);
+    const totalMin = Math.round(totalMs / 60000);
+
+    const wordList = (rec.newWordsMastered || []).map(k => {
+      const w = words.find(x => x.key === k);
+      return `<span class="g-day-chip">${escapeHtml(w ? w.word : k)}</span>`;
+    }).join("");
+
+    document.getElementById("goalDayTitle").textContent = niceDate;
+    document.getElementById("goalDayBody").innerHTML = `
+      <div class="g-day-wrap">
+        ${rec.goalMet ? `<div class="g-day-banner met">🎯 Goal met!</div>` : ""}
+        <div class="g-day-stats">
+          <div class="g-day-stat"><div class="v">${rec.newWordsMastered?.length || 0}</div><div class="l">Mastered</div></div>
+          <div class="g-day-stat"><div class="v">${daySessions.length}</div><div class="l">Sessions</div></div>
+          <div class="g-day-stat"><div class="v">${totalMin}<span class="u">m</span></div><div class="l">Time</div></div>
+        </div>
+        <div class="g-day-section">
+          <div class="g-day-section-head">New words mastered</div>
+          ${wordList ? `<div class="g-day-chips">${wordList}</div>` : `<div class="g-empty">No words mastered this day</div>`}
+        </div>
+      </div>
+    `;
+    el.classList.add("show");
+  };
+
+  window.closeGoalDayDetail = function() {
+    const el = document.getElementById("goalDayOverlay");
+    if (el) el.classList.remove("show");
+  };
+
+  // ---------- Goal-setting modal (mandatory on first launch) ----------
+  let pendingGoalValue = 5;
+
+  function ensureGoalSetupOverlay() {
+    let el = document.getElementById("goalSetupOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "goalSetupOverlay";
+    el.className = "g-setup-overlay";
+    el.innerHTML = `
+      <div class="g-setup-card">
+        <div class="g-setup-emoji">🎯</div>
+        <div class="g-setup-title">Set your daily goal</div>
+        <div class="g-setup-sub">How many new words do you want to master each day?</div>
+        <div class="g-setup-value"><span id="goalSetupValue">5</span> <span class="u">words / day</span></div>
+        <input id="goalSetupSlider" type="range" min="1" max="30" value="5" class="g-setup-slider"
+          oninput="goalSetupSliderChange(this.value)" />
+        <div class="g-setup-ends"><span>1</span><span>30</span></div>
+        <div class="g-setup-chips">
+          <button class="g-setup-chip" onclick="goalSetupQuickPick(3)">3</button>
+          <button class="g-setup-chip" onclick="goalSetupQuickPick(5)">5</button>
+          <button class="g-setup-chip" onclick="goalSetupQuickPick(10)">10</button>
+          <button class="g-setup-chip" onclick="goalSetupQuickPick(20)">20</button>
+        </div>
+        <div class="g-setup-hint">Master = answer right on first try, or 3 correct in a row.<br>You can change this anytime.</div>
+        <button class="g-setup-btn" onclick="goalSetupConfirm()">Continue ›</button>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.goalSetupSliderChange = function(v) {
+    pendingGoalValue = parseInt(v, 10) || 5;
+    const label = document.getElementById("goalSetupValue");
+    if (label) label.textContent = pendingGoalValue;
+  };
+  window.goalSetupQuickPick = function(n) {
+    pendingGoalValue = n;
+    const label = document.getElementById("goalSetupValue");
+    const slider = document.getElementById("goalSetupSlider");
+    if (label) label.textContent = n;
+    if (slider) slider.value = n;
+  };
+  window.goalSetupConfirm = function() {
+    saveGoal({ wordsPerDay: pendingGoalValue });
+    const el = document.getElementById("goalSetupOverlay");
+    if (el) el.remove();
+    renderGoalTab();
+  };
+
+  function openGoalSetup(initial) {
+    pendingGoalValue = parseInt(initial, 10) || 5;
+
+    // Reuse the original modal, but make edit clicks reliable by resetting
+    // any stale hidden inline styles from cloud/offline guard patches.
+    let el = document.getElementById("goalSetupOverlay");
+    if (el) el.remove();
+
+    el = ensureGoalSetupOverlay();
+    el.style.display = "flex";
+    el.style.opacity = "";
+    el.style.pointerEvents = "";
+    el.style.visibility = "";
+    el.classList.add("show");
+
+    const label = document.getElementById("goalSetupValue");
+    const slider = document.getElementById("goalSetupSlider");
+    if (label) label.textContent = pendingGoalValue;
+    if (slider) slider.value = pendingGoalValue;
+  }
+  window.openGoalSetup = openGoalSetup;
+
+  // ---------- Main render ----------
+  function renderGoalTab() {
+    // This legacy renderer is still reachable through IIFE-local timers and
+    // callbacks. Once the per-skill Goal V2 renderer exists, delegate to it so
+    // the retired single-goal UI can never repaint over the new design.
+    if (typeof window.__myRenderGoalTab === "function" && window.__myRenderGoalTab !== renderGoalTab) {
+      return window.__myRenderGoalTab();
+    }
+
+    const root = document.getElementById("goalRoot");
+    if (!root) return;
+
+    const goal = loadGoal();
+    // No goal yet → block with the goal-setup modal
+    if (!goal || !goal.wordsPerDay) {
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+      openGoalSetup(5);
+      return;
+    }
+
+    const record = loadDailyRecord();
+    const today = todayKey();
+    const todayRec = record[today] || { newWordsMastered: [], goalMet: false };
+    const mastered = todayRec.newWordsMastered?.length || 0;
+    const target = goal.wordsPerDay;
+    const pctToday = Math.min(100, Math.round((mastered / target) * 100));
+    const streak = computeStreak();
+
+    // reset chart tab to Level on every render
+    progressChartTab = "level";
+
+    const calHtml = renderCalendarHtml();
+
+    root.innerHTML = `
+      <div class="g-page">
+        <div class="g-hero">
+          <div class="g-title">Goal</div>
+        </div>
+
+        <div class="g-today-card">
+          <div class="g-today-left">
+            <div class="g-today-label">Today</div>
+            <div class="g-today-value">${mastered} <span class="u">/ ${target}</span></div>
+            <div class="g-today-sub">${todayRec.goalMet ? "🎯 Goal achieved!" : `${target - mastered} more to go`}</div>
+            <button class="g-edit-goal" onclick="openGoalSetup(${target})">Edit goal</button>
+          </div>
+          <div class="g-today-right">
+            <div class="g-streak-fire">🔥</div>
+            <div class="g-streak-n">${streak}</div>
+            <div class="g-streak-l">day streak</div>
+          </div>
+        </div>
+
+        <div class="g-today-bar">
+          <div class="g-today-bar-fill" style="width:${pctToday}%"></div>
+        </div>
+
+        ${calHtml}
+
+        ${renderProgressChart()}
+      </div>
+    `;
+
+    // Animate bars on next frame so they start from 0 and grow
+    requestAnimationFrame(() => animateProgressBars());
+  }
+  window.renderGoalTab = renderGoalTab;
+
+  // ── Progress chart ─────────────────────────────────────────────────────
+
+  let progressChartTab = "level"; // "all" | "level" | "subject" | "topic"
+
+  const CHART_TABS = [
+    { id: "all",     label: "All"     },
+    { id: "level",   label: "Level"   },
+    { id: "subject", label: "Subject" },
+    { id: "topic",   label: "Topic"   }
+  ];
+
+  // Build rows for the active tab
+  function chartRows() {
+    if (progressChartTab === "all") {
+      // Single aggregate row
+      let mastered = 0, learning = 0, total = 0;
+      for (const w of words) {
+        const st = (typeof wordStatus === "function") ? wordStatus(w) : "not_practiced";
+        total++;
+        if (st === "known")     mastered++;
+        else if (st === "learning") learning++;
+      }
+      return [{ name: "All words", mastered, learning, total }];
+    }
+    const field = progressChartTab === "level"   ? "level"
+                : progressChartTab === "subject" ? "topHeader"
+                :                                  "suggestedCombinedTitle";
+    return countByDimension(field);
+  }
+
+  function renderProgressChart() {
+    const rows = chartRows();
+
+    const tabHtml = CHART_TABS.map(t =>
+      `<button class="${t.id === progressChartTab ? "active" : ""}"
+         onclick="progressChartSetTab('${t.id}')">${t.label}</button>`
+    ).join("");
+
+    const barsHtml = rows.map(r => {
+      const pctM = r.total > 0 ? (r.mastered / r.total) * 100 : 0;
+      const pctL = r.total > 0 ? (r.learning / r.total) * 100 : 0;
+      const notP = r.total - r.mastered - r.learning;
+      const fieldAttr = progressChartTab === "all"     ? "all"
+                      : progressChartTab === "level"   ? "level"
+                      : progressChartTab === "subject" ? "topHeader"
+                      :                                  "suggestedCombinedTitle";
+      const nameEsc = escapeHtml(r.name);
+      const nameAttr = r.name.replace(/'/g, "\'");
+      return `
+        <div class="g-prog-row g-prog-row--tap"
+             onclick="openProgressWordList('${nameAttr}','${fieldAttr}')">
+          <div class="g-prog-head">
+            <span class="g-prog-name">${nameEsc}</span>
+            <span class="g-prog-count">${r.mastered}<span class="g-prog-count-sep">/</span>${r.total}</span>
+          </div>
+          <div class="g-prog-bar">
+            <div class="g-prog-seg mastered" data-pct="${pctM}" style="width:0%"></div>
+            <div class="g-prog-seg learning" data-pct="${pctL}" style="width:0%"></div>
+            <div class="g-prog-seg untouched" data-pct="${r.total > 0 ? (notP / r.total) * 100 : 0}" style="width:0%"></div>
+          </div>
+          <div class="g-prog-foot">${r.mastered} mastered · ${r.learning} learning · ${notP} untouched</div>
+        </div>`;
+    }).join("");
+
+    return `
+      <div class="g-prog-chart-card">
+        <div class="g-prog-chart-title">Progress</div>
+        <div class="g-prog-chart-tabs tab-row">${tabHtml}</div>
+        <div class="g-prog-chart-bars">${barsHtml || '<div class="g-empty">No data yet</div>'}</div>
+        <div class="g-prog-legend">
+          <span class="g-prog-legend-dot mastered"></span>Mastered
+          <span class="g-prog-legend-dot learning"></span>Learning
+          <span class="g-prog-legend-dot untouched"></span>Untouched
+        </div>
+      </div>`;
+  }
+
+  function animateProgressBars() {
+    document.querySelectorAll(".g-prog-seg[data-pct]").forEach(el => {
+      const pct = parseFloat(el.dataset.pct) || 0;
+      // Force a reflow at 0 first so transition fires
+      el.style.width = "0%";
+      requestAnimationFrame(() => {
+        el.style.width = pct + "%";
+      });
+    });
+  }
+  window.animateProgressBars = animateProgressBars;
+
+  window.progressChartSetTab = function(tab) {
+    progressChartTab = tab;
+    // Re-render just the chart card in-place
+    const card = document.querySelector(".g-prog-chart-card");
+    if (!card) { renderGoalTab(); return; }
+    const tmp = document.createElement("div");
+    tmp.innerHTML = renderProgressChart();
+    card.replaceWith(tmp.firstElementChild);
+    requestAnimationFrame(() => animateProgressBars());
+  };
+
+  // ── Word-list overlay ──────────────────────────────────────────────────
+
+  function ensureProgressWordOverlay() {
+    let el = document.getElementById("progressWordOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "progressWordOverlay";
+    el.className = "game-overlay history-overlay";
+    el.innerHTML = `
+      <div class="game-topbar">
+        <button class="game-close" onclick="closeProgressWordList(true)">✕</button>
+        <div class="g-pwo-title" id="progressWordOverlayTitle"></div>
+        <div style="width:36px"></div>
+      </div>
+      <div class="game-body" id="progressWordOverlayBody" style="overflow-y:auto;-webkit-overflow-scrolling:touch;"></div>`;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.openProgressWordList = function(groupName, field) {
+    window.__progressOverlayState = { groupName, field };
+    // Collect words that belong to this group
+    let wordsInGroup;
+    if (field === "all") {
+      wordsInGroup = [...words];
+    } else {
+      wordsInGroup = words.filter(w => {
+        const paths = (typeof exactPracticePaths === "function") ? exactPracticePaths(w) : [];
+        return paths.some(p => {
+          if (field === "level")                  return p.level   === groupName;
+          if (field === "topHeader")              return p.subject === groupName;
+          if (field === "suggestedCombinedTitle") return p.topic   === groupName;
+          return false;
+        });
+      });
+    }
+
+    const mastered  = wordsInGroup.filter(w => wordStatus(w) === "known");
+    const learning  = wordsInGroup.filter(w => wordStatus(w) === "learning");
+    const untouched = wordsInGroup.filter(w => wordStatus(w) === "not_practiced");
+
+    const chipHtml = (arr, cls) => arr.length
+      ? arr.map(w =>
+          `<span class="hv-word-chip ${cls}" onclick="closeProgressWordList();openSheet('${w.key.replace(/'/g,"\'")}')">
+            ${escapeHtml(w.word)}
+          </span>`
+        ).join("")
+      : `<div class="hv-empty">None yet</div>`;
+
+    const overlay = ensureProgressWordOverlay();
+    const title   = document.getElementById("progressWordOverlayTitle");
+    const body    = document.getElementById("progressWordOverlayBody");
+
+    if (title) title.textContent = `${groupName} · ${mastered.length}/${wordsInGroup.length}`;
+
+    body.innerHTML = `<div class="hv-wrap">
+      <div class="hv-section">
+        <div class="hv-section-title">✅ Mastered <span style="font-size:12px;font-weight:600;color:var(--muted)">(${mastered.length})</span></div>
+        <div class="hv-word-chips">${chipHtml(mastered, "good")}</div>
+      </div>
+      <div class="hv-section">
+        <div class="hv-section-title">🔄 Learning <span style="font-size:12px;font-weight:600;color:var(--muted)">(${learning.length})</span></div>
+        <div class="hv-word-chips">${chipHtml(learning, "warn")}</div>
+      </div>
+      <div class="hv-section">
+        <div class="hv-section-title">📖 Untouched <span style="font-size:12px;font-weight:600;color:var(--muted)">(${untouched.length})</span></div>
+        <div class="hv-word-chips">${chipHtml(untouched, "")}</div>
+      </div>
+    </div>`;
+
+    overlay.classList.add("show");
+  };
+
+  window.closeProgressWordList = function(clearState) {
+    const el = document.getElementById("progressWordOverlay");
+    if (el) el.classList.remove("show");
+    if (clearState) window.__progressOverlayState = null;
+  };
+
+  // Re-open overlay when returning from word sheet
+  const _origCloseSheet = window.closeSheet;
+  window.closeSheet = function() {
+    if (window.__progressState) {
+      const {g, f} = window.__progressState;
+      setTimeout(() => openProgressWordList(g, f), 100);
+      window.__progressState = null;
+    }
+    return _origCloseSheet?.();
+  };
+
+  // ---------- Render hook ----------
+  // Replace the old renderHome with our render
+  const _origRenderHome = window.renderHome;
+  window.renderHome = function() {
+    renderGoalTab();
+  };
+
+  // Also ensure renderGoalTab fires on initial load
+  function tryInitRender() {
+    if (document.getElementById("goalRoot")) {
+      renderGoalTab();
+      return true;
+    }
+    return false;
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryInitRender);
+  } else {
+    tryInitRender();
+  }
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    if (tryInitRender() || tries > 30) clearInterval(timer);
+  }, 200);
+})();
+
+/* ============================================================
+   CLOUD SYNC — Google Drive backup
+   Uses Google Identity Services (GIS) for OAuth implicit flow.
+   File: ielts-vocab-data.json in the user's Drive root (drive.file scope).
+   Last-write-wins by updatedAt timestamp.
+   ============================================================ */
+(function(){
+  if (window.__cloudSyncV1) return;
+  window.__cloudSyncV1 = true;
+
+  const DRIVE_FILE_NAME = "ielts-vocab-data.json";
+  const SYNC_SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ].join(" ");
+  // localStorage keys whose changes trigger an auto-sync push
+  const SYNC_KEYS = [
+    LS.KNOWN,
+    LS.REVIEW,
+    LS.PROGRESS,
+    LS.PRACTICE_HISTORY,
+    LS.GOAL,
+    LS.DAILY_RECORD,
+    "ielts_vocab_known_meaning_v1",
+    "ielts_vocab_known_spelling_v1",
+    "ielts_vocab_goal_v2",
+    "ielts_vocab_daily_record_v2",
+    "ielts_vocab_word_state_updated_at_v1",
+    "ielts_vocab_meaning_state_updated_at_v1",
+    "ielts_vocab_spelling_state_updated_at_v1",
+    "ielts_vocab_related_created_words_v1",
+    "ielts_vocab_practice_last_loaded_pool_v1"
+  ];
+  const AUTO_PUSH_DEBOUNCE_MS = 5000;
+
+  // ---------- State ----------
+  let clientId = "";
+  let tokenClient = null;          // GIS token client
+  let accessToken = "";
+  let accessTokenExpiry = 0;       // epoch ms
+
+  // Keep the user visually signed in after reload if we have a saved email.
+  // The short-lived access token is refreshed silently when sync is needed.
+  let userEmail = localStorage.getItem(LS.CLOUD_USER_EMAIL) || "";
+  let signedIn = !!userEmail;
+
+  let isPushing = false;
+  let isPulling = false;
+  let pendingPushTimer = null;
+  let driveFileId = "";            // cached id of our data file in Drive
+
+  // ---------- Local-state helpers ----------
+  function markDataChanged(reason = "") {
+    const ignoredPracticeReasons = new Set([
+      "saveKnown",
+      "saveReview",
+      "onMasteryPromotion",
+      "practice-answer",
+      "practice-started"
+    ]);
+
+    if (ignoredPracticeReasons.has(reason)) {
+      console.log("[Cloud Sync] ignored duplicate generic trigger:", reason);
+      return;
+    }
+
+    window.__cloudLastChangeReasonV3 = reason || "";
+    try { localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, new Date().toISOString()); } catch {}
+    try { setPendingSync(true); } catch {}
+    if (reason) console.log("[Cloud Sync] marked changed:", reason);
+    schedulePush();
+  }
+
+  // Expose explicit trigger for practice/goal modules.
+  window.cloudMarkChanged = function(reason = "manual-trigger") {
+    markDataChanged(reason);
+  };
+  function getLocalUpdatedAt() {
+    return localStorage.getItem(LS.CLOUD_DATA_UPDATED_AT) || "";
+  }
+  function setLastSyncAt(iso) {
+    try { localStorage.setItem(LS.CLOUD_LAST_SYNC_AT, iso); } catch {}
+  }
+  function getLastSyncAt() {
+    return localStorage.getItem(LS.CLOUD_LAST_SYNC_AT) || "";
+  }
+
+  function setPendingSync(on) {
+    try {
+      if (on) localStorage.setItem(LS.CLOUD_PENDING_SYNC, "1");
+      else localStorage.removeItem(LS.CLOUD_PENDING_SYNC);
+    } catch {}
+  }
+
+  function hasPendingSync() {
+    try { return localStorage.getItem(LS.CLOUD_PENDING_SYNC) === "1"; }
+    catch { return false; }
+  }
+
+  function hasLiveToken() {
+    return !!(accessToken && Date.now() < accessTokenExpiry);
+  }
+
+  // ---------- Wrap localStorage.setItem to detect changes to sync-relevant keys ----------
+  const _origSetItem = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = function(key, val) {
+    try { _origSetItem(key, val); }
+    catch (e) {
+      // Quota errors or others — still fire any side-effects we want
+      throw e;
+    }
+    if (window.__cloudApplyingRemotePayloadV4) {
+      return;
+    }
+    if (SYNC_KEYS.indexOf(key) !== -1) {
+      markDataChanged();
+    }
+  };
+
+  // ---------- Auto-push (debounced) ----------
+  function schedulePush() {
+    if (!signedIn && !userEmail) {
+      console.log("[Cloud Sync] auto-sync skipped: not signed in visually, but trying backend status if available");
+    }
+
+    const reason = String(window.__cloudLastChangeReasonV3 || "");
+    const isPracticeConditionChange = reason.startsWith("practice-first-condition-change:") ||
+                                      reason.startsWith("practice-condition-change:");
+
+    // Practice changes happen rapidly; use a short quiet-window.
+    // Session-ended / goal changes still use the normal 5s debounce.
+    const delayMs = isPracticeConditionChange ? 10000 : AUTO_PUSH_DEBOUNCE_MS;
+
+    console.log("[Cloud Sync] auto-sync scheduled in", delayMs, "ms", "reason:", reason);
+
+    if (pendingPushTimer) clearTimeout(pendingPushTimer);
+    pendingPushTimer = setTimeout(async () => {
+      pendingPushTimer = null;
+
+      // If a sync is already running, do not start another upload now.
+      // Mark that another pass is needed, then the current sync will schedule
+      // one final follow-up after it finishes.
+      if (window.__cloudSyncRunningV3) {
+        console.log("[Cloud Sync] sync already running; queue one follow-up sync");
+        window.__cloudSyncNeedsFollowupV3 = true;
+        return;
+      }
+
+      window.__cloudSyncRunningV3 = true;
+      console.log("[New Sync Step 7] old v4 auto-sync merge-push disabled; routing to v5.");
+      if (typeof window.scheduleAutoSyncV5 === "function") {
+        return window.scheduleAutoSyncV5("old-v4-auto-sync-routed-to-v5", { delayMs: 2500 });
+      }
+      return { status: "disabled-old-v4-auto-sync" };
+
+      try {
+        let res = null;
+
+        // Preferred new rule:
+        // Backend refresh-token sync works after reload and does not require
+        // a live browser Google access token.
+        if (typeof window.backendMergeSync === "function") {
+          res = await window.backendMergeSync({ auto: true });
+          console.log("[Cloud Sync] backend auto-sync result:", res);
+
+          if (res && res.status === "pending-auth") {
+            setPendingSync(true);
+            renderSettingsRow();
+            if (typeof toast === "function") toast("⚠ Connect Google Drive to enable auto-sync");
+            return;
+          }
+
+          setPendingSync(false);
+          renderSettingsRow();
+          if (typeof toast === "function") toast("☁ Auto-synced");
+          return;
+        }
+
+        // Fallback old rule only if backend sync client is missing.
+        if (!hasLiveToken()) {
+          console.log("[Cloud Sync] pending: no backend sync and no live token.");
+          setPendingSync(true);
+          renderSettingsRow();
+          return;
+        }
+
+        res = await pushToDrive({ auto: true });
+        console.log("[Cloud Sync] fallback auto-sync result:", res);
+
+        const okStatuses = new Set([
+          "pushed",
+          "merged-pushed",
+          "auto-merged-pushed",
+          "backend-merged-pushed",
+          "auto-backend-merged-pushed"
+        ]);
+
+        if (res && okStatuses.has(res.status)) {
+          setPendingSync(false);
+          renderSettingsRow();
+          if (typeof toast === "function") toast("☁ Auto-synced");
+        } else if (res && res.status === "pending-auth") {
+          setPendingSync(true);
+          renderSettingsRow();
+          if (typeof toast === "function") toast("⚠ Tap Sync now to resume auto-sync");
+        }
+      } catch (err) {
+        console.warn("[Cloud Sync] auto-push failed:", err);
+        setPendingSync(true);
+        renderSettingsRow();
+        if (typeof toast === "function") toast("⚠ Auto-sync failed");
+      } finally {
+        window.__cloudSyncRunningV3 = false;
+
+        // If changes happened during the upload, run only one follow-up sync.
+        if (window.__cloudSyncNeedsFollowupV3) {
+          console.log("[Cloud Sync] running queued follow-up sync");
+          window.__cloudSyncNeedsFollowupV3 = false;
+          schedulePush();
+        }
+      }
+    }, delayMs);
+  }
+
+  // ---------- Sync-relevant data shape ----------
+  function gatherLocalData() {
+    const j = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
+    return {
+      v: 1,
+      updatedAt: getLocalUpdatedAt() || new Date().toISOString(),
+      data: {
+        known: j(LS.KNOWN) || {},
+        progress: j(LS.PROGRESS) || {},
+        needsReview: j(LS.REVIEW) || {},
+        practiceHistory: j(LS.PRACTICE_HISTORY) || [],
+        practiceLastCfg: j(LS.PRACTICE_LAST_CFG) || null,
+        goal: j(LS.GOAL) || null,
+        dailyRecord: j(LS.DAILY_RECORD) || {}
+      }
+    };
+  }
+
+
+  function cloneJson(x) {
+    try { return JSON.parse(JSON.stringify(x == null ? null : x)); }
+    catch { return x; }
+  }
+
+  function latestIso(a, b) {
+    if (!a) return b || "";
+    if (!b) return a || "";
+    return String(a) > String(b) ? a : b;
+  }
+
+  function mergeNumberMax(a, b) {
+    const na = Number(a || 0);
+    const nb = Number(b || 0);
+    return Math.max(na, nb);
+  }
+
+  function mergeKnown(localKnown, remoteKnown) {
+    return {
+      ...(remoteKnown || {}),
+      ...(localKnown || {})
+    };
+  }
+
+  function mergeNeedsReview(localReview, remoteReview, mergedKnown) {
+    const out = {
+      ...(remoteReview || {}),
+      ...(localReview || {})
+    };
+
+    // Known/mastered words should not stay in Needs Review.
+    for (const k of Object.keys(mergedKnown || {})) {
+      if (mergedKnown[k]) delete out[k];
+    }
+
+    return out;
+  }
+
+  function mergeProgressBucket(localBucket, remoteBucket) {
+    const l = localBucket || {};
+    const r = remoteBucket || {};
+    return {
+      ...cloneJson(r),
+      ...cloneJson(l),
+      attempts: mergeNumberMax(l.attempts, r.attempts),
+      correct: mergeNumberMax(l.correct, r.correct),
+      lastAttemptAt: latestIso(l.lastAttemptAt, r.lastAttemptAt),
+      lastCorrectAt: latestIso(l.lastCorrectAt, r.lastCorrectAt)
+    };
+  }
+
+  function mergeProgress(localProgress, remoteProgress) {
+    const out = {};
+    const keys = new Set([
+      ...Object.keys(remoteProgress || {}),
+      ...Object.keys(localProgress || {})
+    ]);
+
+    for (const key of keys) {
+      const l = (localProgress || {})[key] || {};
+      const r = (remoteProgress || {})[key] || {};
+      const row = {
+        ...cloneJson(r),
+        ...cloneJson(l)
+      };
+
+      const bucketKeys = new Set([
+        ...Object.keys(r).filter(k => r[k] && typeof r[k] === "object"),
+        ...Object.keys(l).filter(k => l[k] && typeof l[k] === "object"),
+        "matching",
+        "spelling",
+        "wordToMeaning",
+        "meaningToWord"
+      ]);
+
+      for (const bk of bucketKeys) {
+        if ((l[bk] && typeof l[bk] === "object") || (r[bk] && typeof r[bk] === "object")) {
+          row[bk] = mergeProgressBucket(l[bk], r[bk]);
+        }
+      }
+
+      row._consecCorrect = mergeNumberMax(l._consecCorrect, r._consecCorrect);
+      out[key] = row;
+    }
+
+    return out;
+  }
+
+  function mergePracticeHistory(localHistory, remoteHistory) {
+    const map = new Map();
+
+    function addSession(s) {
+      if (!s || typeof s !== "object") return;
+      const id = String(s.id || s.sessionId || s.startedAt || "");
+      if (!id) return;
+      if (!map.has(id)) {
+        map.set(id, cloneJson(s));
+        return;
+      }
+
+      const old = map.get(id);
+      const merged = {
+        ...old,
+        ...cloneJson(s),
+        wrongKeys: [...new Set([...(old.wrongKeys || []), ...(s.wrongKeys || [])])],
+        endedAt: latestIso(old.endedAt, s.endedAt),
+        updatedAt: latestIso(old.updatedAt, s.updatedAt)
+      };
+      map.set(id, merged);
+    }
+
+    (remoteHistory || []).forEach(addSession);
+    (localHistory || []).forEach(addSession);
+
+    return [...map.values()]
+      .sort((a, b) => String(a.startedAt || a.endedAt || "").localeCompare(String(b.startedAt || b.endedAt || "")))
+      .slice(-100);
+  }
+
+  function mergeArrayUnion(a, b) {
+    return [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])])];
+  }
+
+  function mergeDailyRecord(localDaily, remoteDaily) {
+    const out = {};
+    const dates = new Set([
+      ...Object.keys(remoteDaily || {}),
+      ...Object.keys(localDaily || {})
+    ]);
+
+    for (const date of dates) {
+      const l = (localDaily || {})[date] || {};
+      const r = (remoteDaily || {})[date] || {};
+
+      // Re-evaluate goalMet after merging mastered words
+      const mergedMastered = mergeArrayUnion(r.newWordsMastered, l.newWordsMastered);
+      const goalObj = (() => { try { return JSON.parse(localStorage.getItem(LS.GOAL) || "null"); } catch { return null; } })();
+      const target = (goalObj && goalObj.wordsPerDay) || 5;
+      out[date] = {
+        ...cloneJson(r),
+        ...cloneJson(l),
+        newWordsMastered: mergedMastered,
+        practiceSessions: Math.max(Number(l.practiceSessions || 0), Number(r.practiceSessions || 0)),
+        totalMinutes: Math.max(Number(l.totalMinutes || 0), Number(r.totalMinutes || 0)),
+        goalMet: mergedMastered.length >= target,
+        updatedAt: latestIso(l.updatedAt, r.updatedAt)
+      };
+    }
+
+    return out;
+  }
+
+  function newerObj(localObj, remoteObj) {
+    const l = localObj || null;
+    const r = remoteObj || null;
+    if (!l) return cloneJson(r);
+    if (!r) return cloneJson(l);
+
+    const lt = l.updatedAt || l.goalUpdatedAt || l.changedAt || "";
+    const rt = r.updatedAt || r.goalUpdatedAt || r.changedAt || "";
+
+    if (rt && lt) return rt > lt ? cloneJson(r) : cloneJson(l);
+    return cloneJson(l);
+  }
+
+  function mergeCloudPayloads(localPayload, remotePayload) {
+    return window.mergeCloudSyncPayloadV3(localPayload, remotePayload);
+  }
+
+
+  function applyRemoteData(remote) {
+    if (!remote || typeof remote !== "object") return;
+    applyLeanBackupPayload(remote);
+    const updatedAt = remote.meta?.updatedAt || remote.updatedAt || new Date().toISOString();
+    try { _origSetItem(LS.CLOUD_DATA_UPDATED_AT, updatedAt); } catch {}
+  }
+
+  // ---------- Google Identity Services ----------
+  async function fetchClientId() {
+    if (clientId) return clientId;
+    try {
+      const r = await fetch("/api/config");
+      const j = await r.json();
+      clientId = j.google_oauth_client_id || "";
+    } catch (e) {
+      console.warn("Could not fetch /api/config:", e);
+    }
+    return clientId;
+  }
+
+  function gisReady() {
+    return !!(window.google && window.google.accounts && window.google.accounts.oauth2);
+  }
+  function waitForGis(timeoutMs = 8000) {
+    return new Promise((resolve, reject) => {
+      if (gisReady()) return resolve();
+      const start = Date.now();
+      const t = setInterval(() => {
+        if (gisReady()) { clearInterval(t); resolve(); return; }
+        if (Date.now() - start > timeoutMs) { clearInterval(t); reject(new Error("GIS not loaded")); }
+      }, 100);
+    });
+  }
+
+  async function ensureTokenClient() {
+    await waitForGis();
+    if (!clientId) await fetchClientId();
+    if (!clientId) throw new Error("Google OAuth client ID is not configured on the server");
+    if (tokenClient) return tokenClient;
+    tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SYNC_SCOPES,
+      callback: () => {} // overridden per request
+    });
+    return tokenClient;
+  }
+
+  function requestAccessToken({ silent = false } = {}) {
+    return new Promise((resolve, reject) => {
+      const fire = (client) => {
+        client.callback = (resp) => {
+          if (resp.error) { reject(new Error(resp.error)); return; }
+          accessToken = resp.access_token || "";
+          accessTokenExpiry = Date.now() + ((resp.expires_in || 3600) - 60) * 1000;
+          resolve(accessToken);
+        };
+        try { client.requestAccessToken({ prompt: silent ? "" : "consent" }); }
+        catch (e) { reject(e); }
+      };
+      // SYNCHRONOUS path preserves user-gesture for popups when client is ready
+      if (tokenClient) { fire(tokenClient); return; }
+      ensureTokenClient().then(fire).catch(reject);
+    });
+  }
+
+  async function getValidToken() {
+    if (accessToken && Date.now() < accessTokenExpiry) return accessToken;
+
+    // No silent OAuth. Browser may block non-user-triggered Google popups.
+    // This function should only be reached from user-triggered actions such as
+    // Sign in or Sync now.
+    const token = await requestAccessToken({ silent: false });
+    if (token) signedIn = true;
+    renderSettingsRow();
+    return token;
+  }
+
+  async function fetchUserEmail(token) {
+    try {
+      const r = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!r.ok) return "";
+      const j = await r.json();
+      return j.email || "";
+    } catch { return ""; }
+  }
+
+  // ---------- Drive REST helpers ----------
+  async function driveFindFile(token) {
+    const r = await fetch(`/api/drive/find?name=${encodeURIComponent(DRIVE_FILE_NAME)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!r.ok) {
+      let detail = `Drive find failed: ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const j = await r.json();
+    return j.file || null;
+  }
+
+  async function driveGetContent(token, fileId) {
+    const r = await fetch(`/api/drive/content/${encodeURIComponent(fileId)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!r.ok) {
+      let detail = `Drive get failed: ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    return r.json();
+  }
+
+  async function driveCreateFile(token, content) {
+    const r = await fetch("/api/drive/create", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name: DRIVE_FILE_NAME,
+        content
+      })
+    });
+    if (!r.ok) {
+      let detail = `Drive create failed: ${r.status}`;
+      try { detail = (await r.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    return r.json();
+  }
+
+  async function driveUpdateFile(token, fileId, content) {
+    const r = await fetch(`/api/drive/content/${encodeURIComponent(fileId)}`, {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ content })
+    });
+    if (!r.ok) {
+      let detail = `Drive update failed: ${r.status}`;
+      try {
+        const j = await r.json();
+        detail = j.detail ? `${j.detail}: ${JSON.stringify(j.google_response || j)}` : detail;
+      } catch {}
+      throw new Error(detail);
+    }
+    return r.json();
+  }
+
+  // ---------- Sync operations ----------
+  async function pullFromDrive() {
+    if (isPulling) return;
+    isPulling = true;
+    try {
+      const token = await getValidToken();
+      const file = driveFileId
+        ? { id: driveFileId }
+        : await driveFindFile(token);
+      if (!file) {
+        // No remote file yet — nothing to pull
+        return { status: "no-remote" };
+      }
+      driveFileId = file.id;
+      const remote = await driveGetContent(token, file.id);
+      // Always merge (never overwrite) so local changes are never silently lost.
+      const localPayload = gatherLocalData();
+      const mergedPayload = mergeCloudPayloads(localPayload, remote);
+      applyRemoteData(mergedPayload);
+      setLastSyncAt(new Date().toISOString());
+      return { status: "pulled-merged", updatedAt: mergedPayload.updatedAt };
+    } finally {
+      isPulling = false;
+      renderSettingsRow();
+    }
+  }
+
+  async function pushToDrive(opts = {}) {
+    if (typeof window.backendMergeSync === "function") {
+      return window.backendMergeSync(opts || {});
+    }
+    console.warn("[Cloud Sync] backendMergeSync is missing.");
+    return { status: "backend-sync-client-missing" };
+  }
+
+  async function syncNow() {
+    if (typeof window.backendMergeSync === "function") {
+      try {
+        const res = await window.backendMergeSync({ auto: false });
+        if (res && res.status !== "pending-auth" && typeof toast === "function") toast("✓ Synced via backend");
+        renderSettingsRow();
+        return res;
+      } catch (e) {
+        console.warn("backend syncNow failed:", e);
+        if (typeof toast === "function") toast("Backend sync failed");
+        renderSettingsRow();
+      }
+    } else {
+      if (typeof toast === "function") toast("Backend sync client missing");
+    }
+  }
+
+  // ---------- Sign-in / sign-out ----------
+  async function signIn() {
+    try {
+      if (!clientId) { await fetchClientId(); }
+      if (!clientId) { toast("OAuth not configured — see Settings"); return; }
+      // Fire requestAccessToken SYNCHRONOUSLY (no await before it) to preserve user-gesture for popup
+      const p = requestAccessToken({ silent: false });
+      await p;
+      signedIn = true;
+      userEmail = await fetchUserEmail(accessToken);
+
+      // Persist signed-in state across reloads. If Google userinfo fails,
+      // still save a placeholder so the Settings UI does not fall back to logged out.
+      if (!userEmail) userEmail = "Google account";
+      try { _origSetItem(LS.CLOUD_USER_EMAIL, userEmail); } catch {}
+
+      try { _origSetItem(LS.CLOUD_FIRST_LAUNCH_DONE, "1"); } catch {}
+      renderSettingsRow();
+      toast("✓ Signed in");
+      // Merge-then-push so local data is never lost on first sign-in
+      try {
+        const result = await syncNow();
+        if (result && result.status === "merged-pushed") toast("☁ Data synced with Drive");
+      } catch (e) {
+        console.warn("Post sign-in sync failed:", e);
+      }
+    } catch (e) {
+      console.warn("Sign-in failed:", e);
+      toast("Sign-in failed");
+    }
+  }
+
+  function signOut() {
+    if (accessToken && window.google && window.google.accounts && window.google.accounts.oauth2) {
+      try { window.google.accounts.oauth2.revoke(accessToken, () => {}); } catch {}
+    }
+    accessToken = "";
+    accessTokenExpiry = 0;
+    signedIn = false;
+    driveFileId = "";
+    try { localStorage.removeItem(LS.CLOUD_USER_EMAIL); } catch {}
+    userEmail = "";
+    renderSettingsRow();
+    toast("Signed out");
+  }
+
+  // ---------- Settings UI ----------
+  function fmtRelTime(iso) {
+    if (!iso) return "never";
+    const t = new Date(iso).getTime();
+    const m = Math.round((Date.now() - t) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return m + "m ago";
+    const h = Math.round(m / 60);
+    if (h < 24) return h + "h ago";
+    const d = Math.round(h / 24);
+    return d + "d ago";
+  }
+
+  function renderSettingsRow() {
+    const group = document.getElementById("cloudSyncSettingsGroup");
+    if (!group) return;
+    const lastSync = getLastSyncAt();
+    if (signedIn || userEmail) {
+      const pending = hasPendingSync();
+      group.innerHTML = `
+        <div class="settings-row" onclick="cloudSyncNow()">
+          <div class="l">
+            ${pending ? "⚠️ Sync now (unsaved changes)" : "Sync now"}
+            <div class="desc">Last sync: ${fmtRelTime(lastSync)}</div>
+          </div>
+          <div class="chev">↻</div>
+        </div>
+        <div class="settings-row" onclick="cloudSignOut()">
+          <div class="l">
+            Signed in${userEmail ? ` as ${escapeHtml(userEmail)}` : ""}
+            <div class="desc">Tap to sign out</div>
+          </div>
+          <div class="chev">›</div>
+        </div>
+      `;
+    } else {
+      group.innerHTML = `
+        <div class="settings-row" onclick="cloudSignIn()">
+          <div class="l">
+            Sign in with Google
+            <div class="desc">Back up your progress to Google Drive</div>
+          </div>
+          <div class="chev">›</div>
+        </div>
+      `;
+    }
+  }
+
+  // ---------- Public API ----------
+  window.cloudSignIn = signIn;
+  window.cloudSignOut = signOut;
+  window.cloudSyncNow = syncNow;
+  window.cloudGetStatus = function() {
+    return {
+      signedIn,
+      userEmail,
+      savedEmail: localStorage.getItem(LS.CLOUD_USER_EMAIL) || "",
+      lastSync: getLastSyncAt(),
+      pendingSync: hasPendingSync(),
+      hasLiveToken: hasLiveToken(),
+      accessTokenExpiry: accessTokenExpiry ? new Date(accessTokenExpiry).toISOString() : null,
+      driveFileId
+    };
+  };
+
+  // ---------- App-close push ----------
+  // Disabled intentionally.
+  // Sync should happen after major changes through schedulePush(), or manually via Sync now.
+  // Page-hide/reload is not reliable for Google Drive writes and caused old direct
+  // googleapis.com CORS calls.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden" && (signedIn || userEmail)) {
+      if (typeof setPendingSync === "function") setPendingSync(true);
+      if (typeof renderSettingsRow === "function") renderSettingsRow();
+    }
+  });
+
+  // ---------- Bootstrap: restore signed-in UI only ----------
+  async function bootstrap() {
+    renderSettingsRow();
+
+    // Only preload our backend config. Do NOT call Google token APIs on reload.
+    // OAuth popup/token requests must happen only after a user taps Sign in / Sync now.
+    try { await fetchClientId(); }
+    catch (e) { console.warn("OAuth client ID preload failed:", e); }
+
+    if (!userEmail) return; // never signed in
+
+    signedIn = true;
+    renderSettingsRow();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootstrap);
+  } else {
+    bootstrap();
+  }
+
+  // Hook into goto() to re-render Settings row on navigation
+  const _origGoto = window.goto;
+  if (typeof _origGoto === "function" && !_origGoto.__cloudWrapped) {
+    window.goto = function(page) {
+      const r = _origGoto.apply(this, arguments);
+      if (page === "settings") renderSettingsRow();
+      return r;
+    };
+    window.goto.__cloudWrapped = true;
+  }
+})();
+/* ============================================================
+   FIRST-LAUNCH WELCOME MODAL
+   ============================================================ */
+(function(){
+  if (window.__firstLaunchV1) return;
+  window.__firstLaunchV1 = true;
+  const DONE_KEY = LS.CLOUD_FIRST_LAUNCH_DONE;
+  function isDone() { try { return localStorage.getItem(DONE_KEY) === "1"; } catch { return true; } }
+  function markDone() { try { localStorage.setItem(DONE_KEY, "1"); } catch {} }
+  function removeModal() { const el = document.getElementById("welcomeModal"); if (el) el.remove(); }
+  function showWarningAndContinue() {
+    const el = document.getElementById("welcomeModal"); if (!el) return;
+    el.innerHTML = `<div class="wm-card"><div class="wm-emoji">⚠️</div><div class="wm-title">Local storage only</div><div class="wm-sub">Your progress will be saved on this device and browser only. If you clear your browser data, everything will be lost.</div><label class="wm-check-row" for="wmChk" style="cursor:pointer"><input type="checkbox" id="wmChk" style="width:18px;height:18px;accent-color:var(--purple);flex-shrink:0" /><span style="font-weight:700;font-size:13px;color:var(--ink);line-height:1.4">I understand my data won't be backed up</span></label><button class="wm-btn primary" id="wmConfirmLocal" disabled onclick="firstLaunchConfirmLocal()">Continue without sign-in</button><button class="wm-btn secondary" onclick="firstLaunchShowSignIn()">← Back</button></div>`;
+    document.getElementById("wmChk").addEventListener("change", e => { document.getElementById("wmConfirmLocal").disabled = !e.target.checked; });
+  }
+  window.firstLaunchShowSignIn = function() { renderWelcome(); };
+  window.firstLaunchConfirmLocal = function() { markDone(); removeModal(); if (typeof renderGoalTab === "function") renderGoalTab(); };
+  window.firstLaunchSignIn = async function() {
+    if (typeof cloudSignIn !== "function") { markDone(); removeModal(); if (typeof renderGoalTab === "function") renderGoalTab(); return; }
+    const btn = document.getElementById("wmSignInBtn");
+    if (btn) { btn.disabled = true; btn.textContent = "Signing in…"; }
+    try { await cloudSignIn(); markDone(); removeModal(); if (typeof renderGoalTab === "function") renderGoalTab(); }
+    catch (e) { console.warn("Welcome sign-in failed:", e); if (btn) { btn.disabled = false; btn.textContent = "Sign in with Google"; } }
+  };
+  function renderWelcome() {
+    let el = document.getElementById("welcomeModal");
+    if (!el) { el = document.createElement("div"); el.id = "welcomeModal"; el.className = "wm-overlay"; document.body.appendChild(el); }
+    try { sessionStorage.setItem("ielts_vocab_welcome_shown_this_session_v1", "1"); } catch {}
+    el.innerHTML = `<div class="wm-card"><div class="wm-emoji">📚</div><div class="wm-title">IELTS Vocabulary</div><div class="wm-sub">Sign in with Google to back up your progress to Google Drive — or continue and save locally only.</div><button class="wm-btn primary" id="wmSignInBtn" onclick="firstLaunchSignIn()"><svg style="width:18px;height:18px;flex-shrink:0" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z"/></svg>Sign in with Google</button><button class="wm-btn secondary" onclick="firstLaunchSkip()">Continue without sign-in</button></div>`;
+  }
+  window.firstLaunchSkip = function() { showWarningAndContinue(); };
+  function tryShow() { if (isDone()) return; if (!document.body) return; renderWelcome(); }
+  if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", tryShow); } else { tryShow(); }
+})();
+
+/* ============================================================
+   EASY MODE PRACTICE TRANSLATION PATCH
+   - Word → Meaning: translate answer options
+   - Meaning → Word: translate the question prompt
+   - Spelling: translate the hint
+   ============================================================ */
+(function(){
+  if (window.__easyModePracticeTranslationPatchV1) return;
+  window.__easyModePracticeTranslationPatchV1 = true;
+
+  function isEasyOn() {
+    return !!(window.easyMode || (typeof window.isEasyMode === "function" && window.isEasyMode()));
+  }
+
+  async function getEasyEntryForWord(w) {
+    if (!w) return null;
+    if (typeof window.fetchEasyDefinition === "function") {
+      return await window.fetchEasyDefinition(w);
+    }
+    return null;
+  }
+
+  function firstEasyDefinition(entry) {
+    const d = entry && Array.isArray(entry.definitions) ? entry.definitions[0] : null;
+    if (!d) return { en: "", zh: "" };
+    return {
+      en: d.text || "",
+      zh: d.chinese || ""
+    };
+  }
+
+  function bilingualDefinitionHtml(def) {
+    const en = def && def.en ? String(def.en) : "";
+    const zh = def && def.zh ? String(def.zh) : "";
+    if (!zh) return escapeHtml(en);
+    return `
+      <div class="em-practice-en">${escapeHtml(en)}</div>
+      <div class="em-practice-zh">${escapeHtml(zh)}</div>
+    `;
+  }
+
+  async function ensureEasyEntries(list) {
+    const out = new Map();
+    await Promise.all((list || []).map(async (w) => {
+      if (!w || !w.key) return;
+      const entry = await getEasyEntryForWord(w);
+      out.set(w.key, entry);
+    }));
+    return out;
+  }
+
+  function fallbackDefinitionForWord(w) {
+    try {
+      return (typeof practiceDefinitionForWord === "function") ? practiceDefinitionForWord(w) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  async function renderEasyMCV2(w) {
+    const g = window.game;
+    if (!g || !w) return;
+
+    const isW2M = g.mode === "wordToMeaning";
+    let others = sample((g.pool || []).filter(x => x.key !== w.key), 3);
+
+    if (others.length < 3) {
+      const fallbackOthers = sample((window.words || words || []).filter(x => x.key !== w.key), 3);
+      while (others.length < 3 && fallbackOthers.length) others.push(fallbackOthers.shift());
+    }
+
+    const options = sample([w, ...others], 4);
+    const entries = await ensureEasyEntries([w, ...options]);
+    const targetDef = firstEasyDefinition(entries.get(w.key));
+
+    const promptLabel = isW2M ? "Choose the meaning" : "Choose the word";
+    const promptHtml = isW2M
+      ? escapeHtml(w.word || "")
+      : bilingualDefinitionHtml({
+          en: targetDef.en || fallbackDefinitionForWord(w),
+          zh: targetDef.zh || ""
+        });
+
+    const optHtml = options.map(o => {
+      if (isW2M) {
+        const od = firstEasyDefinition(entries.get(o.key));
+        const en = od.en || fallbackDefinitionForWord(o);
+        return `
+          <button class="game-option em-practice-option" data-key="${escapeHtml(o.key)}">
+            ${bilingualDefinitionHtml({ en, zh: od.zh || "" })}
+          </button>
+        `;
+      }
+
+      return `<button class="game-option" data-key="${escapeHtml(o.key)}">${escapeHtml(o.word || "")}</button>`;
+    }).join("");
+
+    const body = document.getElementById("gameBody");
+    if (!body) return;
+
+    body.innerHTML = `
+      <div class="game-prompt-label">${promptLabel}</div>
+      <div class="game-prompt ${isW2M ? "" : "small"}">${promptHtml}</div>
+      <div class="game-options">${optHtml}</div>
+    `;
+
+    body.querySelectorAll(".game-option").forEach(b => {
+      b.onclick = () => {
+        if (typeof window.answerMCV2 === "function") {
+          window.answerMCV2(b.dataset.key, w.key, w);
+        }
+      };
+    });
+  }
+
+  async function renderEasySpellV2(w) {
+    const body = document.getElementById("gameBody");
+    if (!body || !w) return;
+
+    body.innerHTML = `
+      <div class="game-prompt-label">${spellPromptLabelHtml(w, null)}</div>
+      <div class="game-prompt small">Loading example sentence…</div>
+    `;
+
+    let entry = null;
+    try {
+      entry = await getEasyEntryForWord(w);
+    } catch (err) {
+      console.warn("Easy spelling entry fetch failed:", err);
+    }
+
+    const first = firstEasyDefinition(entry);
+    const fallbackHint = fallbackDefinitionForWord(w);
+    const hintEn = first.en || fallbackHint || "";
+    const hintZh = first.zh || "";
+
+    let q = null;
+    let prompt = "";
+    try {
+      const normalEntry = dictCache[w.key] || null;
+      if (typeof buildSpellingQuestionFromEntry === "function") {
+        q = buildSpellingQuestionFromEntry(w, normalEntry);
+        prompt = q.prompt;
+      }
+    } catch {}
+
+    if (!prompt) {
+      prompt = hintEn ? `${hintEn}\n\nType the base word.` : `${String(w.word || "").length} letters. Type the base word.`;
+    }
+
+    body.innerHTML = `
+      <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q || { partOfSpeech: first.partOfSpeech || "" }, first)}</div>
+      <div class="game-prompt small">${escapeHtml(prompt)}</div>
+      <div id="spellHintBox" class="em-spell-hint-box" style="display:none;">
+        <div class="em-practice-en">${escapeHtml(hintEn)}</div>
+        ${hintZh ? `<div class="em-practice-zh">${escapeHtml(hintZh)}</div>` : ""}
+      </div>
+      <div class="game-spell">
+        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+        <div style="display:flex;gap:10px;">
+          <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
+          <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
+        </div>
+      </div>
+    `;
+
+    const input = document.getElementById("spellInput");
+    if (input) input.focus();
+
+    const hintBtn = document.getElementById("spellHintBtn");
+    if (hintBtn) {
+      hintBtn.onclick = () => {
+        const box = document.getElementById("spellHintBox");
+        if (box) box.style.display = "block";
+      };
+    }
+
+    const checkBtn = document.getElementById("checkSpellBtn");
+    if (checkBtn) checkBtn.onclick = () => window.answerSpellV2(w);
+
+    if (input) {
+      input.addEventListener("keydown", e => {
+        if (e.key === "Enter") window.answerSpellV2(w);
+      });
+    }
+  }
+
+  function installWrappers() {
+    if (typeof window.renderMCV2 === "function" && !window.renderMCV2.__easyTranslateWrapped) {
+      const originalMC = window.renderMCV2;
+      window.renderMCV2 = function(w) {
+        if (!isEasyOn()) return originalMC.apply(this, arguments);
+        renderEasyMCV2(w).catch(err => {
+          console.warn("Easy translated MC render failed:", err);
+          originalMC.apply(this, arguments);
+        });
+      };
+      window.renderMCV2.__easyTranslateWrapped = true;
+    }
+
+    if (typeof window.renderSpellV2 === "function" && !window.renderSpellV2.__easyTranslateWrapped) {
+      const originalSpell = window.renderSpellV2;
+      window.renderSpellV2 = function(w) {
+        if (!isEasyOn()) return originalSpell.apply(this, arguments);
+        renderEasySpellV2(w).catch(err => {
+          console.warn("Easy translated spelling render failed:", err);
+          originalSpell.apply(this, arguments);
+        });
+      };
+      window.renderSpellV2.__easyTranslateWrapped = true;
+    }
+  }
+
+  installWrappers();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    installWrappers();
+    if (tries > 30) clearInterval(timer);
+  }, 200);
+})();
+
+/* ============================================================
+   PRACTICE START + AUDIO FINISH PATCH
+   - Clear old question immediately when a new practice starts
+   - Advance only after real autoplay audio finishes
+   ============================================================ */
+(function(){
+  if (window.__practiceStartAudioFinishPatchV1) return;
+  window.__practiceStartAudioFinishPatchV1 = true;
+
+  // Clear old practice scene as soon as a new session starts.
+  function showPracticeLoadingScene() {
+    const body = document.getElementById("gameBody");
+    if (body) {
+      body.innerHTML = `
+        <div class="game-prompt-label">Preparing practice…</div>
+        <div class="game-prompt small">Loading your next question…</div>
+      `;
+    }
+
+    const dots = document.getElementById("progressDots");
+    if (dots) {
+      dots.innerHTML = `<div class="game-progress-bar"><div style="width:0%"></div></div>`;
+    }
+
+    const streak = document.getElementById("gameStreak");
+    if (streak) streak.textContent = "🔥0";
+  }
+
+  // Wrap startPracticeSession, because new Easy Mode translation may fetch data async.
+  function installStartWrapper() {
+    if (typeof window.startPracticeSession !== "function") return false;
+    if (window.startPracticeSession.__clearOldSceneWrapped) return true;
+
+    const originalStart = window.startPracticeSession;
+    window.startPracticeSession = function() {
+      showPracticeLoadingScene();
+      return originalStart.apply(this, arguments);
+    };
+
+    window.startPracticeSession.__clearOldSceneWrapped = true;
+    return true;
+  }
+
+  // Play the real dictionary audio and call done only when it ends/errors.
+  // If no audio exists, fallback to speechSynthesis and wait for speech end.
+  window.practicePlayPronunciationAndThen = function(key, sourceBtn, done) {
+    let finished = false;
+
+    function finish() {
+      if (finished) return;
+      finished = true;
+      if (sourceBtn && sourceBtn.classList) sourceBtn.classList.remove("playing");
+      if (typeof done === "function") done();
+    }
+
+    if (!key) {
+      finish();
+      return;
+    }
+
+    try {
+      const w = (Array.isArray(words) ? words : []).find(x => x.key === key);
+      const entry = (typeof dictCache !== "undefined" && dictCache) ? (dictCache[key] || {}) : {};
+
+      const audioUrl =
+        entry.audioUrl ||
+        entry.audio ||
+        entry.pronunciationAudio ||
+        entry.usAudio ||
+        entry.ukAudio ||
+        entry.phonetics?.find?.(p => p.audio)?.audio ||
+        "";
+
+      if (audioUrl) {
+        if (window.currentAudio) {
+          try { window.currentAudio.pause(); } catch {}
+        }
+
+        const audio = new Audio(audioUrl);
+        window.currentAudio = audio;
+
+        if (sourceBtn && sourceBtn.classList) sourceBtn.classList.add("playing");
+
+        audio.addEventListener("ended", finish, { once: true });
+        audio.addEventListener("error", finish, { once: true });
+
+        audio.play().catch(() => finish());
+        return;
+      }
+
+      if (w && typeof speechSynthesis !== "undefined") {
+        const utterance = new SpeechSynthesisUtterance(w.word);
+        utterance.lang = "en-US";
+        utterance.onend = finish;
+        utterance.onerror = finish;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utterance);
+
+        // Safety only: if speechSynthesis gets stuck, do not trap the user forever.
+        setTimeout(finish, Math.max(1800, Math.min(4500, String(w.word || "").length * 260)));
+        return;
+      }
+
+      finish();
+    } catch (err) {
+      console.warn("Practice pronunciation wait failed:", err);
+      finish();
+    }
+  };
+
+  // Install now, and retry because Practice v2 defines startPracticeSession inside an IIFE.
+  installStartWrapper();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    const ok = installStartWrapper();
+    if (ok || tries > 40) clearInterval(timer);
+  }, 150);
+})();
+
+
+
+/* ============================================================
+   AUTO-SYNC TRIGGER BRIDGE v3
+   Makes the lean v3 backup auto-sync after real learning changes:
+   - mastered / learning state changes
+   - practice history changes
+   - goal / daily record changes
+   - practice starts and answers
+   It does not upload dictionary caches.
+   ============================================================ */
+(function(){
+  if (window.__autoSyncTriggerBridgeV3) return;
+  window.__autoSyncTriggerBridgeV3 = true;
+
+  const WATCH_KEYS = new Set([
+    LS.KNOWN,
+    LS.REVIEW,
+    LS.PROGRESS,
+    LS.PRACTICE_HISTORY,
+    LS.GOAL,
+    LS.DAILY_RECORD
+  ]);
+
+  function trigger(reason) {
+    try {
+      if (typeof window.cloudMarkChanged === "function") {
+        window.cloudMarkChanged(reason);
+      } else {
+        // Fallback: at least mark pending if cloud module has not exposed the trigger.
+        localStorage.setItem(LS.CLOUD_PENDING_SYNC, "1");
+        localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, new Date().toISOString());
+        console.log("[Cloud Sync] pending marked, but cloudMarkChanged is not available:", reason);
+      }
+    } catch (e) {
+      console.warn("[Cloud Sync] trigger failed:", reason, e);
+    }
+  }
+
+  // Final localStorage observer. This remains useful even if earlier code uses
+  // direct localStorage.setItem rather than saveKnown/saveReview/etc.
+  const prevSetItem = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = function(key, value) {
+    const result = prevSetItem(key, value);
+    try {
+      if (WATCH_KEYS.has(key)) {
+        trigger("localStorage:" + key);
+      }
+    } catch {}
+    return result;
+  };
+  try { setWordFilter = window.setWordFilter; } catch {}
+
+  // Explicitly wrap common state-save functions.
+  function wrapFunction(name, reason) {
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__autoSyncWrappedV3) return;
+    const wrapped = function() {
+      const result = fn.apply(this, arguments);
+      try { trigger(reason || name); } catch {}
+      return result;
+    };
+    wrapped.__autoSyncWrappedV3 = true;
+    window[name] = wrapped;
+  }
+
+  ["saveKnown", "saveReview"].forEach(name => wrapFunction(name, name));
+
+  // Practice start itself does not trigger cloud sync.
+  // The first real condition change in the session triggers sync instead.
+
+  // Every answer can change mastered/learning state; debounce prevents many uploads.
+  wrapFunction("handleAnswer", "practice-answer");
+
+  // Goal functions have varied names across versions, so wrap the common ones if present.
+  [
+    "saveGoal",
+    "setGoal",
+    "openGoalSetup",
+    "confirmGoalSetup",
+    "saveGoalSetup",
+    "goalSave",
+    "onMasteryPromotion"
+  ].forEach(name => wrapFunction(name, name));
+
+  // Backup manual test helper.
+  window.cloudTriggerAutoSyncTest = function(reason = "manual-console-test") {
+    trigger(reason);
+  };
+
+  console.log("[Cloud Sync] Auto-sync trigger bridge v3 installed. Test with cloudTriggerAutoSyncTest().");
+})();
+
+
+
+/* ============================================================
+   BACKEND REFRESH-TOKEN SYNC CLIENT v1
+   Uses Flask backend /api/sync/merge instead of browser Google token.
+   After Google Drive is connected once, auto-sync works after reload.
+   ============================================================ */
+(function(){
+  if (window.__backendRefreshTokenSyncClientV1) return;
+  window.__backendRefreshTokenSyncClientV1 = true;
+
+  function readJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || ""); }
+    catch { return fallback; }
+  }
+
+  function uniqueList(vals) {
+    const out = [];
+    const seen = new Set();
+    for (const v of (Array.isArray(vals) ? vals : [])) {
+      const s = String(v || "").trim().toLowerCase();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out.sort();
+  }
+
+  function trueKeys(obj) {
+    if (!obj || typeof obj !== "object") return [];
+    return Object.keys(obj).filter(k => obj[k]).map(k => String(k).trim().toLowerCase()).filter(Boolean).sort();
+  }
+
+  function cleanSession(s) {
+    const wrong = uniqueList(s.wrongKeys || []);
+    const correctKeys = uniqueList(s.correctKeys || []);
+    const masteredWords = uniqueList(s.masteredWords || []);
+    const learningWords = uniqueList(s.learningWords || wrong);
+    return {
+      id: String(s.id || s.sessionId || s.startedAt || "s_" + Date.now()),
+      startedAt: s.startedAt || "",
+      endedAt: s.endedAt || "",
+      mode: s.mode || "",
+      total: Number(s.total || s.sessionLength || 0),
+      correct: Number(s.correct || s.correctAnswered || 0),
+      // wrong = actual wrong answers in this session.
+      // learningWords / wrongKeys may contain the wider set of words still needing learning.
+      wrong: Math.max(
+        0,
+        Number(s.totalAnswered || 0) - Number(s.correctAnswered || s.correct || 0)
+      ),
+      masteredWords,
+      learningWords,
+      correctKeys,
+      poolConfig: s.poolConfig || null,
+      poolDescription: s.poolDescription || "",
+      poolSize: Number(s.poolSize || 0),
+      sessionLength: Number(s.sessionLength || s.total || 0),
+      studyUntilMastered: !!s.studyUntilMastered,
+      totalAnswered: Number(s.totalAnswered || 0),
+      correctAnswered: Number(s.correctAnswered || s.correct || 0),
+      uniqueWordsCorrect: Number(s.uniqueWordsCorrect || 0),
+      bestStreak: Number(s.bestStreak || 0),
+      wrongKeys: wrong,
+      completed: s.completed !== false
+    };
+  }
+
+  function buildLeanPayload() {
+    const knownObj = readJson(LS.KNOWN, {});
+    const reviewObj = readJson(LS.REVIEW, {});
+    const hist = readJson(LS.PRACTICE_HISTORY, []);
+    const lastLoadedPool = readJson("ielts_vocab_practice_last_loaded_pool_v1", null);
+    const goal = readJson(LS.GOAL, {});
+    const dailyRecord = readJson(LS.DAILY_RECORD, {});
+
+    const mastered = new Set(trueKeys(knownObj));
+    const learning = new Set(trueKeys(reviewObj));
+
+    const sessions = (Array.isArray(hist) ? hist : []).slice(-100).map(cleanSession);
+    for (const s of sessions) {
+      for (const w of s.masteredWords || []) mastered.add(w);
+      for (const w of s.learningWords || s.wrongKeys || []) learning.add(w);
+    }
+    for (const w of mastered) learning.delete(w);
+
+    const now = new Date().toISOString();
+    return {
+      schema: "ielts-vocab-cloud-sync-v3",
+      meta: {
+        exportedAt: now,
+        updatedAt: now,
+        mergedAt: now,
+        app: "IELTS Vocabulary Webapp",
+        storageMode: "lean-user-learning-backup"
+      },
+      wordState: {
+        masteredWords: [...mastered].sort(),
+        learningWords: [...learning].sort()
+      },
+      practice: {
+        sessions,
+        lastLoadedPool: lastLoadedPool || null
+      },
+      goalTracking: {
+        goal: goal || {},
+        dailyRecord: dailyRecord || {}
+      },
+      syncInfo: {
+        masteredCount: mastered.size,
+        learningCount: learning.size,
+        sessionCount: sessions.length
+      }
+    };
+  }
+
+  function objFromList(list) {
+    const obj = {};
+    for (const w of uniqueList(list || [])) obj[w] = true;
+    return obj;
+  }
+
+  function applyLeanPayload(payload) {
+    if (!payload || typeof payload !== "object") return;
+
+    const mastered = uniqueList(payload.wordState?.masteredWords || []);
+    const learning = uniqueList(payload.wordState?.learningWords || []).filter(w => !mastered.includes(w));
+    const sessions = Array.isArray(payload.practice?.sessions) ? payload.practice.sessions.slice(-100) : [];
+    const lastLoadedPool = payload.practice?.lastLoadedPool || null;
+    const goal = payload.goalTracking?.goal || {};
+    const dailyRecord = payload.goalTracking?.dailyRecord || {};
+
+    const knownObj = objFromList(mastered);
+    const reviewObj = objFromList(learning);
+
+    try { localStorage.setItem(LS.KNOWN, JSON.stringify(knownObj)); } catch {}
+    try { localStorage.setItem(LS.REVIEW, JSON.stringify(reviewObj)); } catch {}
+    try { localStorage.setItem(LS.PRACTICE_HISTORY, JSON.stringify(sessions)); } catch {}
+    try { localStorage.setItem("ielts_vocab_practice_last_loaded_pool_v1", JSON.stringify(lastLoadedPool || null)); } catch {}
+    try { localStorage.setItem(LS.GOAL, JSON.stringify(goal)); } catch {}
+    try { localStorage.setItem(LS.DAILY_RECORD, JSON.stringify(dailyRecord)); } catch {}
+
+    try { known = knownObj; } catch {}
+    try { needsReview = reviewObj; } catch {}
+
+    if (typeof renderAll === "function") renderAll();
+    else {
+      try { renderWords(); } catch {}
+      try { renderPracticeRoot(); } catch {}
+      try { renderGoalTab(); } catch {}
+    }
+  }
+
+  async function backendSyncStatus() {
+    const r = await fetch("/api/sync/status", { credentials: "include" });
+    return await r.json();
+  }
+
+  async function backendMergeSync(opts = {}) {
+    const status = await backendSyncStatus();
+    if (!status.connected) {
+      try { localStorage.setItem(LS.CLOUD_PENDING_SYNC, "1"); } catch {}
+      if (!opts.auto) {
+        window.location.href = "/api/google/start";
+      } else {
+        console.log("[Cloud Sync] backend not connected; waiting for Connect Google Drive");
+      }
+      return { status: "pending-auth", backend: true };
+    }
+
+    const payload = buildLeanPayload();
+    const r = await fetch("/api/sync/merge", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload })
+    });
+
+    let j = {};
+    try { j = await r.json(); } catch {}
+
+    if (r.status === 401) {
+      try { localStorage.setItem(LS.CLOUD_PENDING_SYNC, "1"); } catch {}
+      if (!opts.auto) window.location.href = j.connectUrl || "/api/google/start";
+      return { status: "pending-auth", backend: true };
+    }
+
+    if (!r.ok || !j.ok) {
+      throw new Error(j.detail || ("Backend sync failed: " + r.status));
+    }
+
+    if (j.payload) applyLeanPayload(j.payload);
+    try { localStorage.removeItem(LS.CLOUD_PENDING_SYNC); } catch {}
+    try { localStorage.setItem(LS.CLOUD_LAST_SYNC_AT, new Date().toISOString()); } catch {}
+
+    return { status: opts.auto ? "auto-backend-merged-pushed" : "backend-merged-pushed", backend: true };
+  }
+
+  window.backendSyncStatus = backendSyncStatus;
+  window.backendMergeSync = backendMergeSync;
+  window.backendConnectGoogleDrive = function() {
+    window.location.href = "/api/google/start";
+  };
+
+  window.syncNowBackend = async function() {
+    try {
+      const res = await backendMergeSync({ auto: false });
+      if (typeof toast === "function" && res.status !== "pending-auth") toast("✓ Synced via backend");
+      return res;
+    } catch (e) {
+      console.warn("Backend sync failed:", e);
+      if (typeof toast === "function") toast("Backend sync failed");
+      throw e;
+    }
+  };
+
+  console.log("[Cloud Sync] Backend refresh-token sync client installed.");
+})();
+
+
+
+/* ============================================================
+   GOAL RECALC ON GOAL CHANGE v1
+   If daily goal changes, today's dailyRecord.goalMet must be recalculated
+   from newWordsMastered / masteredWords count.
+   ============================================================ */
+(function(){
+  if (window.__goalRecalcOnGoalChangeV1) return;
+  window.__goalRecalcOnGoalChangeV1 = true;
+
+  function todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }
+
+  function readJson(key, fallback) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "");
+    } catch {
+      return fallback;
+    }
+  }
+
+  function uniqueCount(arr) {
+    if (!Array.isArray(arr)) return 0;
+    return new Set(arr.map(x => String(x || "").trim().toLowerCase()).filter(Boolean)).size;
+  }
+
+  function getGoalWordsPerDay() {
+    const goal = readJson(LS.GOAL, {});
+    return Number(goal.wordsPerDay || goal.dailyTarget || goal.target || 0);
+  }
+
+  function recalcTodayGoalMet(reason = "goal-recalc") {
+    const target = getGoalWordsPerDay();
+    if (!target || target <= 0) return false;
+
+    const daily = readJson(LS.DAILY_RECORD, {});
+    const key = todayKey();
+    const row = daily[key] || {};
+
+    const masteredToday = Math.max(
+      uniqueCount(row.newWordsMastered),
+      uniqueCount(row.masteredWords),
+      uniqueCount(row.masteredWordIds)
+    );
+
+    const nextGoalMet = masteredToday >= target;
+
+    daily[key] = {
+      ...row,
+      goalMet: nextGoalMet,
+      updatedAt: new Date().toISOString()
+    };
+
+    try {
+      localStorage.setItem(LS.DAILY_RECORD, JSON.stringify(daily));
+    } catch (e) {
+      console.warn("Goal recalculation failed to save dailyRecord:", e);
+      return false;
+    }
+
+    console.log("[Goal] recalculated today:", {
+      reason,
+      target,
+      masteredToday,
+      goalMet: nextGoalMet
+    });
+
+    try {
+      if (typeof renderGoalTab === "function") renderGoalTab();
+      if (typeof renderHome === "function") renderHome();
+      if (typeof renderAll === "function") renderAll();
+    } catch {}
+
+    try {
+      if (typeof window.cloudMarkChanged === "function") {
+        window.cloudMarkChanged("goal-recalculated");
+      }
+    } catch {}
+
+    return true;
+  }
+
+  window.recalcTodayGoalMet = recalcTodayGoalMet;
+
+  function wrapGoalFunction(name) {
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__goalRecalcWrappedV1) return;
+
+    const wrapped = function() {
+      const result = fn.apply(this, arguments);
+      setTimeout(() => recalcTodayGoalMet(name), 0);
+      return result;
+    };
+
+    wrapped.__goalRecalcWrappedV1 = true;
+    window[name] = wrapped;
+  }
+
+  [
+    "saveGoal",
+    "setGoal",
+    "confirmGoalSetup",
+    "saveGoalSetup",
+    "goalSave"
+  ].forEach(wrapGoalFunction);
+
+  // Also catch direct writes to LS.GOAL, because some versions save goal
+  // directly rather than through a named function.
+  const prevSetItem = localStorage.setItem.bind(localStorage);
+  localStorage.setItem = function(key, value) {
+    const result = prevSetItem(key, value);
+    try {
+      if (key === LS.GOAL) {
+        setTimeout(() => recalcTodayGoalMet("LS.GOAL"), 0);
+      }
+    } catch {}
+    return result;
+  };
+
+  console.log("[Goal] Goal recalculation patch installed. Test with recalcTodayGoalMet().");
+})();
+
+
+
+/* ============================================================
+   PRACTICE FIRST CONDITION CHANGE SYNC v1
+   A new practice should start syncing only when the first word condition changes:
+   - New/Learning -> Mastered
+   - New -> Learning
+   - Mastered -> Learning
+   ============================================================ */
+(function(){
+  if (window.__practiceFirstConditionChangeSyncV1) return;
+  window.__practiceFirstConditionChangeSyncV1 = true;
+
+  window.__practiceConditionSyncStartedV1 = false;
+
+  function resetPracticeConditionSyncFlag(reason) {
+    window.__practiceConditionSyncStartedV1 = false;
+    console.log("[Cloud Sync] practice condition-sync flag reset:", reason);
+  }
+
+  function markConditionChange(reason) {
+    if (typeof window.cloudMarkChanged !== "function") return;
+
+    if (!window.__practiceConditionSyncStartedV1) {
+      window.__practiceConditionSyncStartedV1 = true;
+      window.cloudMarkChanged("practice-first-condition-change:" + reason);
+    } else {
+      window.cloudMarkChanged("practice-condition-change:" + reason);
+    }
+  }
+
+  function wrapReset(name) {
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__practiceConditionResetWrappedV1) return;
+
+    const wrapped = function() {
+      resetPracticeConditionSyncFlag(name);
+      return fn.apply(this, arguments);
+    };
+
+    wrapped.__practiceConditionResetWrappedV1 = true;
+    window[name] = wrapped;
+  }
+
+  function wrapCondition(name) {
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__practiceConditionWrappedV1) return;
+
+    const wrapped = function() {
+      const result = fn.apply(this, arguments);
+      markConditionChange(name);
+      return result;
+    };
+
+    wrapped.__practiceConditionWrappedV1 = true;
+    window[name] = wrapped;
+  }
+
+  // Reset flag when a new practice session begins, but do not sync yet.
+  [
+    "startPracticeSession",
+    "startPractice",
+    "beginPractice",
+    "beginSession",
+    "createPracticeSession"
+  ].forEach(wrapReset);
+
+  // Condition-changing functions. These create the first real practice sync.
+  [
+    "saveKnown",
+    "saveReview",
+    "onMasteryPromotion",
+    "markKnown",
+    "markNeedsReview",
+    "setKnown",
+    "setNeedsReview"
+  ].forEach(wrapCondition);
+
+  // If the app only exposes handleAnswer, this catches condition changes
+  // immediately after the answer logic has run.
+  const answerFn = window.handleAnswer;
+  if (typeof answerFn === "function" && !answerFn.__practiceConditionAnswerWrappedV1) {
+    const wrappedAnswer = function() {
+      const beforeKnown = (() => { try { return JSON.stringify(known || {}); } catch { return ""; } })();
+      const beforeReview = (() => { try { return JSON.stringify(needsReview || {}); } catch { return ""; } })();
+
+      const result = answerFn.apply(this, arguments);
+
+      const afterKnown = (() => { try { return JSON.stringify(known || {}); } catch { return ""; } })();
+      const afterReview = (() => { try { return JSON.stringify(needsReview || {}); } catch { return ""; } })();
+
+      if (beforeKnown !== afterKnown || beforeReview !== afterReview) {
+        markConditionChange("handleAnswer");
+      }
+
+      return result;
+    };
+
+    wrappedAnswer.__practiceConditionAnswerWrappedV1 = true;
+    window.handleAnswer = wrappedAnswer;
+  }
+
+  window.resetPracticeConditionSyncFlag = resetPracticeConditionSyncFlag;
+  console.log("[Cloud Sync] Practice first-condition-change sync installed.");
+})();
+
+
+
+/* ============================================================
+   PRACTICE SESSION END SAVE SAFETY v1
+   Session-ended screen rules:
+   - X / Done = save current session as ended
+   - Retry wrong / Play again = save current session as ended, then new session starts
+   ============================================================ */
+(function(){
+  if (window.__practiceSessionEndSaveSafetyV1) return;
+  window.__practiceSessionEndSaveSafetyV1 = true;
+
+  function txt(el) {
+    return String(el?.textContent || el?.innerText || "").trim().toLowerCase();
+  }
+
+  function isSessionEndedContext(el) {
+    const root = el?.closest?.(
+      ".practice-end, .session-end, .practice-ended, .practice-summary, .modal, .sheet, .panel, .practice-layer"
+    ) || document.body;
+
+    const t = txt(root);
+    return (
+      t.includes("session ended") ||
+      t.includes("practice ended") ||
+      t.includes("session complete") ||
+      t.includes("practice complete") ||
+      t.includes("retry") && t.includes("wrong") ||
+      t.includes("play again")
+    );
+  }
+
+  function isSessionEndAction(el) {
+    const t = txt(el);
+    const aria = String(el?.getAttribute?.("aria-label") || "").trim().toLowerCase();
+    const title = String(el?.getAttribute?.("title") || "").trim().toLowerCase();
+
+    return (
+      t === "done" ||
+      t === "x" ||
+      t === "×" ||
+      aria === "close" ||
+      title === "close" ||
+      t.includes("retry") ||
+      t.includes("wrong") ||
+      t.includes("play again")
+    );
+  }
+
+  function forceSaveCurrentPracticeSession(reason) {
+    try {
+      console.log("[Practice] force save current session:", reason);
+
+      // Prefer existing app functions if present.
+      const candidates = [
+        "savePracticeHistory",
+        "savePracticeSession",
+        "finalizePracticeSession",
+        "finishPracticeSession",
+        "endPracticeSession",
+        "recordPracticeSession",
+        "saveCurrentPracticeSession"
+      ];
+
+      for (const name of candidates) {
+        const fn = window[name];
+        if (typeof fn === "function" && !fn.__sessionEndSafetyCalling) {
+          try {
+            fn.__sessionEndSafetyCalling = true;
+            fn({ reason, completed: false, force: true });
+            fn.__sessionEndSafetyCalling = false;
+            break;
+          } catch (e) {
+            fn.__sessionEndSafetyCalling = false;
+          }
+        }
+      }
+
+      // Mark current session as no longer fresh, so retry/play-again becomes a new session.
+      try { window.__practiceConditionSyncStartedV1 = false; } catch {}
+
+      // Force cloud sync because practice history/session-end is meaningful user data.
+      try {
+        if (typeof window.cloudMarkChanged === "function") {
+          window.cloudMarkChanged("practice-session-ended:" + reason);
+        }
+      } catch {}
+
+    } catch (e) {
+      console.warn("[Practice] force save current session failed:", e);
+    }
+  }
+
+  // Capture click before the original button handler starts retry/play-again.
+  document.addEventListener("click", function(ev) {
+    const btn = ev.target?.closest?.("button, .btn, [role='button'], .practice-close, .sheet-close");
+    if (!btn) return;
+
+    if (!isSessionEndAction(btn)) return;
+    if (!isSessionEndedContext(btn)) return;
+
+    const t = txt(btn) || btn.getAttribute("aria-label") || "session-end-action";
+
+    if (t.includes("retry")) {
+      forceSaveCurrentPracticeSession("retry-wrong-before-new-session");
+      return;
+    }
+
+    if (t.includes("play again")) {
+      forceSaveCurrentPracticeSession("play-again-before-new-session");
+      return;
+    }
+
+    forceSaveCurrentPracticeSession("session-ended-" + t);
+  }, true);
+
+  console.log("[Practice] Session end save safety installed.");
+})();
+
+
+
+/* ============================================================
+   LEAN BACKUP JSON v4
+   Adds timestamp detail for safe future sync decisions:
+   - meta.updatedAt = actual local data changed time
+   - wordState.wordUpdatedAt = per-word state update time
+   - goal.updatedAt
+   - dailyRecord[date].updatedAt
+   - practice.sessions[].updatedAt
+   ============================================================ */
+(function(){
+  if (window.__leanBackupJsonV4) return;
+  window.__leanBackupJsonV4 = true;
+
+  const WORD_TS_KEY = "ielts_vocab_word_state_updated_at_v1";
+
+  function nowIso() {
+    return new Date().toISOString();
+  }
+
+  function readJson(key, fallback) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "");
+    } catch {
+      return fallback;
+    }
+  }
+
+  function writeJson(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      console.warn("[v4] writeJson failed:", key, e);
+      return false;
+    }
+  }
+
+  function uniqueList(vals) {
+    const out = [];
+    const seen = new Set();
+    for (const v of (Array.isArray(vals) ? vals : [])) {
+      const s = String(v || "").trim().toLowerCase();
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      out.push(s);
+    }
+    return out.sort();
+  }
+
+  function trueKeys(obj) {
+    if (!obj || typeof obj !== "object") return [];
+    return Object.keys(obj)
+      .filter(k => obj[k])
+      .map(k => String(k || "").trim().toLowerCase())
+      .filter(Boolean)
+      .sort();
+  }
+
+  function localUpdatedAt() {
+    try {
+      return localStorage.getItem(LS.CLOUD_DATA_UPDATED_AT) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function markLocalUpdatedAt(reason = "") {
+    const t = nowIso();
+    try { localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, t); } catch {}
+    return t;
+  }
+
+  function getWordUpdatedAt() {
+    return readJson(WORD_TS_KEY, {});
+  }
+
+  function saveWordUpdatedAt(obj) {
+    writeJson(WORD_TS_KEY, obj || {});
+  }
+
+  function touchWords(words, reason = "") {
+    const ts = getWordUpdatedAt();
+    const t = markLocalUpdatedAt(reason || "word-state-change");
+
+    for (const w of uniqueList(words || [])) {
+      ts[w] = t;
+    }
+
+    saveWordUpdatedAt(ts);
+  }
+
+  // Rebuild timestamps for existing words if missing.
+  function ensureWordTimestamps() {
+    const ts = getWordUpdatedAt();
+    const knownObj = readJson(LS.KNOWN, {});
+    const reviewObj = readJson(LS.REVIEW, {});
+    const fallback = localUpdatedAt() || nowIso();
+
+    let changed = false;
+    for (const w of [...trueKeys(knownObj), ...trueKeys(reviewObj)]) {
+      if (!ts[w]) {
+        ts[w] = fallback;
+        changed = true;
+      }
+    }
+
+    if (changed) saveWordUpdatedAt(ts);
+    return ts;
+  }
+
+  function normalizeGoal(goal) {
+    const g = goal && typeof goal === "object" ? { ...goal } : {};
+    if (!g.updatedAt) {
+      g.updatedAt = localUpdatedAt() || nowIso();
+    }
+    return g;
+  }
+
+  function normalizeDailyRecord(daily) {
+    const out = {};
+    const fallback = localUpdatedAt() || nowIso();
+
+    for (const [date, row] of Object.entries(daily || {})) {
+      if (!row || typeof row !== "object") {
+        out[date] = row;
+        continue;
+      }
+
+      out[date] = {
+        ...row,
+        updatedAt: row.updatedAt || fallback
+      };
+    }
+
+    return out;
+  }
+
+  function normalizeSession(s) {
+    const wrongKeys = uniqueList(s.wrongKeys || []);
+    const correctKeys = uniqueList(s.correctKeys || []);
+    const masteredWords = uniqueList(s.masteredWords || []);
+    const learningWords = uniqueList(s.learningWords || wrongKeys);
+
+    const totalAnswered = Number(s.totalAnswered || 0);
+    const correctAnswered = Number(s.correctAnswered || s.correct || 0);
+
+    return {
+      id: String(s.id || s.sessionId || s.startedAt || "s_" + Date.now()),
+      startedAt: s.startedAt || "",
+      endedAt: s.endedAt || "",
+      updatedAt: s.updatedAt || s.endedAt || s.startedAt || localUpdatedAt() || nowIso(),
+      mode: s.mode || "",
+      total: Number(s.total || s.sessionLength || 0),
+      totalAnswered,
+      correctAnswered,
+      correct: Number(s.correct || correctAnswered || 0),
+
+      // v4 rule: wrong means actual wrong answers in this session.
+      wrong: Math.max(0, totalAnswered - correctAnswered),
+
+      masteredWords,
+      learningWords,
+      wrongKeys,
+      correctKeys,
+      poolConfig: s.poolConfig || null,
+
+      poolDescription: s.poolDescription || "",
+      poolSize: Number(s.poolSize || 0),
+      sessionLength: Number(s.sessionLength || s.total || 0),
+      studyUntilMastered: !!s.studyUntilMastered,
+      uniqueWordsCorrect: Number(s.uniqueWordsCorrect || 0),
+      bestStreak: Number(s.bestStreak || 0),
+      completed: s.completed !== false
+    };
+  }
+
+  function buildLeanPayloadV4(source = "frontend") {
+    const exportedAt = nowIso();
+    const updatedAt = localUpdatedAt() || exportedAt;
+
+    const knownObj = readJson(LS.KNOWN, {});
+    const reviewObj = readJson(LS.REVIEW, {});
+    const history = readJson(LS.PRACTICE_HISTORY, []);
+    const lastLoadedPool = readJson("ielts_vocab_practice_last_loaded_pool_v1", null);
+    const goal = readJson(LS.GOAL, {});
+    const dailyRecord = readJson(LS.DAILY_RECORD, {});
+    const modeIntroRaw = localStorage.getItem(LS.MODE_INTRO_DONE);
+    const hasSavedGoal = Number(goal.wordsPerDay || goal.dailyTarget || goal.target || 0) > 0;
+    const modeIntroDone = modeIntroRaw === "1" || (modeIntroRaw === null && hasSavedGoal);
+    const modeIntroUpdatedAt = localStorage.getItem(LS.MODE_INTRO_UPDATED_AT) || updatedAt;
+    const dictionarySource = localStorage.getItem(LS.DICT_SOURCE) || "learner";
+    const translationMode = localStorage.getItem(LS.ZH_TRANSLATION_MODE) || "off";
+    const includePreferences = source === "manual-export" || source === "preference-sync";
+    const preferences = includePreferences ? {
+      dictionarySource: dictionarySource === "learner" ? "learner" : "collegiate",
+      dictionarySourceUpdatedAt: localStorage.getItem("ielts_vocab_dict_source_updated_at_v1") || localStorage.getItem(LS.MODE_INTRO_UPDATED_AT) || updatedAt,
+      translationMode: translationMode === "on" || translationMode === "blur" ? translationMode : "off",
+      translationModeUpdatedAt: localStorage.getItem("ielts_vocab_zh_translation_mode_updated_at_v1") || localStorage.getItem(LS.MODE_INTRO_UPDATED_AT) || updatedAt,
+      modeIntroDone,
+      modeIntroUpdatedAt,
+      preferencesUpdatedAt: localStorage.getItem("ielts_vocab_preferences_updated_at_v1") || modeIntroUpdatedAt || updatedAt
+    } : undefined;
+
+    const mastered = new Set(trueKeys(knownObj));
+    const learning = new Set(trueKeys(reviewObj));
+
+    const sessions = (Array.isArray(history) ? history : [])
+      .slice(-100)
+      .map(normalizeSession);
+
+    for (const s of sessions) {
+      for (const w of s.masteredWords || []) mastered.add(w);
+      for (const w of s.learningWords || []) learning.add(w);
+    }
+
+    for (const w of mastered) learning.delete(w);
+
+    const wordUpdatedAt = ensureWordTimestamps();
+    const fallbackTs = updatedAt;
+
+    for (const w of mastered) {
+      if (!wordUpdatedAt[w]) wordUpdatedAt[w] = fallbackTs;
+    }
+
+    for (const w of learning) {
+      if (!wordUpdatedAt[w]) wordUpdatedAt[w] = fallbackTs;
+    }
+
+    saveWordUpdatedAt(wordUpdatedAt);
+
+    return {
+      schema: "ielts-vocab-cloud-sync-v4",
+      meta: {
+        app: "IELTS Vocabulary Webapp",
+        storageMode: "lean-user-learning-backup",
+        exportedAt,
+        updatedAt,
+        mergedAt: exportedAt,
+        source
+      },
+      wordState: {
+        masteredWords: [...mastered].sort(),
+        learningWords: [...learning].sort(),
+        wordUpdatedAt,
+        relatedCreatedWords: loadRelatedCreatedWords()
+      },
+      practice: {
+        sessions,
+        lastLoadedPool: lastLoadedPool || null
+      },
+      goalTracking: {
+        goal: normalizeGoal(goal),
+        dailyRecord: normalizeDailyRecord(dailyRecord)
+      },
+      ...(preferences ? { preferences } : {}),
+      syncInfo: {
+        masteredCount: mastered.size,
+        learningCount: learning.size,
+        sessionCount: sessions.length,
+        schemaVersion: 4,
+        excluded: [
+          "words",
+          "dictCache",
+          "easyDictCache",
+          "progress",
+          "practiceLastCfg",
+          "individualAnswerEvents"
+        ]
+      }
+    };
+  }
+
+  function objectFromWordList(list) {
+    const obj = {};
+    for (const w of uniqueList(list || [])) obj[w] = true;
+    return obj;
+  }
+
+  function applyLeanPayloadV4(payload) {
+    if (!payload || typeof payload !== "object") return false;
+
+    const ws = payload.wordState || {};
+    recreateRelatedCreatedWords(Array.isArray(ws.relatedCreatedWords) ? ws.relatedCreatedWords : []);
+    let mastered = uniqueList(ws.masteredWords || []);
+    let learning = uniqueList(ws.learningWords || []).filter(w => !mastered.includes(w));
+    const wordUpdatedAt = ws.wordUpdatedAt || {};
+    let meaningKnownWords = uniqueList(ws.meaningKnownWords || []);
+    let spellingKnownWords = uniqueList(ws.spellingKnownWords || []);
+    const meaningLearningWords = uniqueList(ws.meaningLearningWords || []);
+    const spellingLearningWords = uniqueList(ws.spellingLearningWords || []);
+    const meaningWordUpdatedAt = ws.meaningWordUpdatedAt && typeof ws.meaningWordUpdatedAt === "object" ? ws.meaningWordUpdatedAt : {};
+    const spellingWordUpdatedAt = ws.spellingWordUpdatedAt && typeof ws.spellingWordUpdatedAt === "object" ? ws.spellingWordUpdatedAt : {};
+    const hasPerSkillState = Array.isArray(ws.meaningKnownWords) || Array.isArray(ws.spellingKnownWords);
+    const hasPerSkillLearning = Array.isArray(ws.meaningLearningWords) || Array.isArray(ws.spellingLearningWords);
+
+    if (hasPerSkillState) {
+      meaningKnownWords = uniqueList([...meaningKnownWords, ...mastered]);
+      spellingKnownWords = uniqueList([...spellingKnownWords, ...mastered]);
+      const meaningSet = new Set(meaningKnownWords);
+      const spellingSet = new Set(spellingKnownWords);
+      mastered = [...meaningSet].filter(k => spellingSet.has(k)).sort();
+      if (hasPerSkillLearning) {
+        const masteredSet = new Set(mastered);
+        learning = uniqueList([...meaningLearningWords, ...spellingLearningWords]).filter(k => !masteredSet.has(k));
+      }
+    }
+
+    const knownObj = {};
+    for (const w of mastered) knownObj[w] = true;
+
+    const reviewObj = {};
+    for (const w of learning) reviewObj[w] = true;
+
+    const sessions = Array.isArray(payload.practice?.sessions)
+      ? payload.practice.sessions.slice(-100).map(normalizeSession)
+      : [];
+    const lastLoadedPool = payload.practice?.lastLoadedPool || null;
+
+    const goal = normalizeGoal(payload.goalTracking?.goal || {});
+    const dailyRecord = normalizeDailyRecord(payload.goalTracking?.dailyRecord || {});
+    const prefs = payload.preferences && typeof payload.preferences === "object"
+      ? payload.preferences
+      : null;
+
+    const wasApplyingRemote = !!window.__cloudApplyingRemotePayloadV4;
+    window.__cloudApplyingRemotePayloadV4 = true;
+    try {
+      writeJson(LS.KNOWN, knownObj);
+      writeJson(LS.REVIEW, reviewObj);
+      writeJson(LS.PRACTICE_HISTORY, sessions);
+      writeJson("ielts_vocab_practice_last_loaded_pool_v1", lastLoadedPool);
+      writeJson(LS.GOAL, goal);
+      writeJson(LS.DAILY_RECORD, dailyRecord);
+      writeJson(WORD_TS_KEY, wordUpdatedAt);
+      if (hasPerSkillState) {
+        const meaningKnownObj = objectFromWordList(meaningKnownWords);
+        const spellingKnownObj = objectFromWordList(spellingKnownWords);
+        writeJson("ielts_vocab_known_meaning_v1", meaningKnownObj);
+        writeJson("ielts_vocab_known_spelling_v1", spellingKnownObj);
+        writeJson("ielts_vocab_meaning_state_updated_at_v1", meaningWordUpdatedAt);
+        writeJson("ielts_vocab_spelling_state_updated_at_v1", spellingWordUpdatedAt);
+        try { window.knownMeaning = meaningKnownObj; } catch {}
+        try { window.knownSpelling = spellingKnownObj; } catch {}
+        try { window.meaningStateUpdatedAt = meaningWordUpdatedAt; } catch {}
+        try { window.spellingStateUpdatedAt = spellingWordUpdatedAt; } catch {}
+        try { localStorage.setItem("ielts_vocab_mastery_migration_v1", "v1-done"); } catch {}
+      }
+    } finally {
+      window.__cloudApplyingRemotePayloadV4 = wasApplyingRemote;
+    }
+
+    if (prefs) {
+      const hasDictSource = Object.prototype.hasOwnProperty.call(prefs, "dictionarySource");
+      const hasZhMode = Object.prototype.hasOwnProperty.call(prefs, "translationMode");
+      const hasModeIntroDone = Object.prototype.hasOwnProperty.call(prefs, "modeIntroDone");
+      const dictSource = prefs.dictionarySource === "learner" ? "learner" : "collegiate";
+      const zhMode = prefs.translationMode === "on" || prefs.translationMode === "blur" ? prefs.translationMode : "off";
+      const modeIntroUpdatedAt = prefs.modeIntroUpdatedAt || payload.meta?.updatedAt || nowIso();
+
+      if (hasDictSource) {
+        try { localStorage.setItem(LS.DICT_SOURCE, dictSource); } catch {}
+      }
+      if (hasZhMode) {
+        try { localStorage.setItem(LS.ZH_TRANSLATION_MODE, zhMode); } catch {}
+        try { localStorage.setItem("ielts_vocab_zh_translation_v1", zhMode === "off" ? "0" : "1"); } catch {}
+      }
+      if (hasModeIntroDone) {
+        try { localStorage.setItem(LS.MODE_INTRO_DONE, prefs.modeIntroDone ? "1" : "0"); } catch {}
+        try { localStorage.setItem(LS.MODE_INTRO_UPDATED_AT, modeIntroUpdatedAt); } catch {}
+      }
+    }
+
+    try { known = knownObj; } catch {}
+    try { needsReview = reviewObj; } catch {}
+    if (sessions.length && typeof window.preparePracticeHistoryHome === "function") {
+      try { window.preparePracticeHistoryHome("drive-apply"); } catch {}
+    }
+
+    try { localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, payload.meta?.updatedAt || nowIso()); } catch {}
+    try { localStorage.removeItem(LS.CLOUD_PENDING_SYNC); } catch {}
+
+    try {
+      if (typeof renderAll === "function") renderAll();
+      else {
+        try { renderGoalTab(); } catch {}
+        try { renderPracticeRoot(); } catch {}
+        try { renderWordList(); } catch {}
+      }
+      try { if (typeof window.renderProgressTab === "function") window.renderProgressTab(); } catch {}
+    } catch {}
+
+    return true;
+  }
+
+  // Track word timestamps whenever condition-changing functions run.
+  function wrapWordStateFunction(name) {
+    const fn = window[name];
+    if (typeof fn !== "function" || fn.__wordTimestampWrappedV4) return;
+
+    const wrapped = function() {
+      const beforeKnown = readJson(LS.KNOWN, {});
+      const beforeReview = readJson(LS.REVIEW, {});
+
+      const result = fn.apply(this, arguments);
+
+      const afterKnown = readJson(LS.KNOWN, {});
+      const afterReview = readJson(LS.REVIEW, {});
+
+      const changed = new Set();
+
+      for (const w of [...trueKeys(beforeKnown), ...trueKeys(afterKnown)]) {
+        if (!!beforeKnown[w] !== !!afterKnown[w]) changed.add(w);
+      }
+
+      for (const w of [...trueKeys(beforeReview), ...trueKeys(afterReview)]) {
+        if (!!beforeReview[w] !== !!afterReview[w]) changed.add(w);
+      }
+
+      if (changed.size) {
+        touchWords([...changed], name);
+      }
+
+      return result;
+    };
+
+    wrapped.__wordTimestampWrappedV4 = true;
+    window[name] = wrapped;
+  }
+
+  [
+    "saveKnown",
+    "saveReview",
+    "markKnown",
+    "markNeedsReview",
+    "setKnown",
+    "setNeedsReview",
+    "onMasteryPromotion"
+  ].forEach(wrapWordStateFunction);
+
+  // Override backend sync client helpers if present.
+  window.buildLeanPayloadV4 = buildLeanPayloadV4;
+  window.applyLeanPayloadV4 = applyLeanPayloadV4;
+
+  // Patch backendMergeSync to use v4 payload/apply if the previous backend client exists.
+  if (typeof window.backendMergeSync === "function" && !window.backendMergeSync.__v4Wrapped) {
+    const oldBackendMergeSync = window.backendMergeSync;
+
+    const wrappedBackendMergeSync = async function(opts = {}) {
+      const status = typeof window.backendSyncStatus === "function"
+        ? await window.backendSyncStatus()
+        : { connected: false };
+
+      if (!status.connected) {
+        if (!opts.auto) {
+          window.location.href = "/api/google/start";
+        }
+        return { status: "pending-auth", backend: true };
+      }
+
+      const payload = buildLeanPayloadV4(opts.auto ? "auto-sync" : "manual-sync");
+
+      const r = await fetch("/api/sync/merge", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload })
+      });
+
+      let j = {};
+      try { j = await r.json(); } catch {}
+
+      if (r.status === 401) {
+        if (!opts.auto) window.location.href = j.connectUrl || "/api/google/start";
+        return { status: "pending-auth", backend: true };
+      }
+
+      if (!r.ok || !j.ok) {
+        throw new Error(j.detail || ("Backend sync failed: " + r.status));
+      }
+
+      if (j.payload) applyLeanPayloadV4(j.payload);
+
+      try { localStorage.setItem(LS.CLOUD_LAST_SYNC_AT, nowIso()); } catch {}
+      try { localStorage.removeItem(LS.CLOUD_PENDING_SYNC); } catch {}
+
+      return {
+        status: opts.auto ? "auto-backend-merged-pushed" : "backend-merged-pushed",
+        backend: true,
+        schema: "v4"
+      };
+    };
+
+    wrappedBackendMergeSync.__v4Wrapped = true;
+    window.backendMergeSync = wrappedBackendMergeSync;
+  }
+
+  console.log("[Backup] Lean JSON v4 installed.");
+})();
+
+
+
+/* ============================================================
+   BACKEND STARTUP RESTORE / MERGE v1
+   New-device and returning-device sync logic:
+   - If connected and local is empty/older: pull Drive and apply
+   - If connected and local is newer/pending: merge-push then apply
+   - After ?cloud=connected callback: run immediately
+   ============================================================ */
+(function(){
+  if (window.__backendStartupRestoreMergeV1) return;
+  window.__backendStartupRestoreMergeV1 = true;
+
+  function readJson(key, fallback) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "");
+    } catch {
+      return fallback;
+    }
+  }
+
+  function localUpdatedAt() {
+    try {
+      return localStorage.getItem(LS.CLOUD_DATA_UPDATED_AT) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function hasPendingSync() {
+    try {
+      return localStorage.getItem(LS.CLOUD_PENDING_SYNC) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function countTrue(obj) {
+    if (!obj || typeof obj !== "object") return 0;
+    return Object.keys(obj).filter(k => obj[k]).length;
+  }
+
+  function hasMeaningfulLocalData() {
+    const knownObj = readJson(LS.KNOWN, {});
+    const reviewObj = readJson(LS.REVIEW, {});
+    const sessions = readJson(LS.PRACTICE_HISTORY, []);
+    const goal = readJson(LS.GOAL, {});
+    const daily = readJson(LS.DAILY_RECORD, {});
+
+    if (countTrue(knownObj) > 0) return true;
+    if (countTrue(reviewObj) > 0) return true;
+    if (Array.isArray(sessions) && sessions.length > 0) return true;
+    if (goal && typeof goal === "object" && Object.keys(goal).length > 0) return true;
+    if (daily && typeof daily === "object" && Object.keys(daily).length > 0) return true;
+
+    return false;
+  }
+
+  function remoteUpdatedAt(payload) {
+    return String(payload?.meta?.updatedAt || payload?.meta?.exportedAt || "");
+  }
+
+  function applyPayload(payload, reason) {
+    if (!payload) return false;
+
+    if (typeof window.applyLeanPayloadV4 === "function") {
+      const ok = window.applyLeanPayloadV4(payload);
+      console.log("[Cloud Sync] applied Drive payload:", reason, {
+        schema: payload.schema,
+        updatedAt: payload?.meta?.updatedAt
+      });
+      return ok;
+    }
+
+    // Fallback for old backend client.
+    if (typeof window.applyLeanPayload === "function") {
+      window.applyLeanPayload(payload);
+      console.log("[Cloud Sync] applied Drive payload with old applyLeanPayload:", reason);
+      return true;
+    }
+
+    console.warn("[Cloud Sync] no payload apply function found");
+    return false;
+  }
+
+  function hasDrivePreferences(payload) {
+    const prefs = payload?.preferences;
+    return !!(prefs && typeof prefs === "object" && Object.keys(prefs).length);
+  }
+
+  function applyDrivePreferencesOnly(payload, reason) {
+    const prefs = payload?.preferences;
+    if (!prefs || typeof prefs !== "object") return false;
+
+    const hasDictSource = Object.prototype.hasOwnProperty.call(prefs, "dictionarySource");
+    const hasZhMode = Object.prototype.hasOwnProperty.call(prefs, "translationMode");
+    const hasModeIntroDone = Object.prototype.hasOwnProperty.call(prefs, "modeIntroDone");
+
+    if (hasDictSource) {
+      const dictSource = prefs.dictionarySource === "learner" ? "learner" : "collegiate";
+      try { localStorage.setItem(LS.DICT_SOURCE, dictSource); } catch {}
+    }
+
+    if (hasZhMode) {
+      const zhMode = prefs.translationMode === "on" || prefs.translationMode === "blur" ? prefs.translationMode : "off";
+      try { localStorage.setItem(LS.ZH_TRANSLATION_MODE, zhMode); } catch {}
+      try { localStorage.setItem("ielts_vocab_zh_translation_v1", zhMode === "off" ? "0" : "1"); } catch {}
+    }
+
+    if (hasModeIntroDone) {
+      try { localStorage.setItem(LS.MODE_INTRO_DONE, prefs.modeIntroDone ? "1" : "0"); } catch {}
+      try { localStorage.setItem(LS.MODE_INTRO_UPDATED_AT, prefs.modeIntroUpdatedAt || payload.meta?.updatedAt || nowIso()); } catch {}
+    }
+
+    console.log("[Cloud Sync] Drive preferences applied before merge:", reason, {
+      dictionarySource: prefs.dictionarySource,
+      translationMode: prefs.translationMode,
+      modeIntroDone: prefs.modeIntroDone
+    });
+    return true;
+  }
+
+  async function backendPullPayload() {
+    const r = await fetch("/api/sync/pull", {
+      method: "GET",
+      credentials: "include"
+    });
+
+    let j = {};
+    try { j = await r.json(); } catch {}
+
+    if (r.status === 401) {
+      return { connected: false, status: "pending-auth", payload: null };
+    }
+
+    if (!r.ok || !j.ok) {
+      throw new Error(j.detail || ("Backend pull failed: " + r.status));
+    }
+
+    return {
+      connected: true,
+      status: "pulled",
+      payload: j.payload || null,
+      file: j.file || null
+    };
+  }
+
+  async function backendStartupRestoreOrMerge(reason = "startup") {
+    if (window.__backendStartupRestoreRunningV1) {
+      console.log("[Cloud Sync] startup restore already running");
+      return { status: "already-running" };
+    }
+
+    window.__backendStartupRestoreRunningV1 = true;
+
+    try {
+      if (typeof window.backendSyncStatus !== "function") {
+        console.log("[Cloud Sync] backendSyncStatus not ready");
+        return { status: "backend-client-missing" };
+      }
+
+      const status = await window.backendSyncStatus();
+
+      if (!status.connected) {
+        console.log("[Cloud Sync] startup restore skipped: not connected");
+        return { status: "not-connected" };
+      }
+
+      const localHasData = hasMeaningfulLocalData();
+      const localTs = localUpdatedAt();
+      const pending = hasPendingSync();
+
+      console.log("[Cloud Sync] startup restore check:", {
+        reason,
+        localHasData,
+        localTs,
+        pending,
+        email: status.email
+      });
+
+      const pull = await backendPullPayload();
+      const remotePayload = pull.payload || null;
+      const remoteTs = remoteUpdatedAt(remotePayload);
+      const remoteHasPreferences = hasDrivePreferences(remotePayload);
+
+      // Preferences are no longer blindly applied before merge.
+      // They are resolved by per-field timestamps inside applyLeanPayloadV4.
+      // This prevents a stale tab/window from forcing old preferences back.
+      if (remoteHasPreferences) {
+        console.log("[Cloud Sync] Drive preferences detected; timestamp merge will decide", {
+          dictionarySource: remotePayload?.preferences?.dictionarySource,
+          translationMode: remotePayload?.preferences?.translationMode,
+          dictionarySourceUpdatedAt: remotePayload?.preferences?.dictionarySourceUpdatedAt,
+          translationModeUpdatedAt: remotePayload?.preferences?.translationModeUpdatedAt
+        });
+      }
+
+      // No remote data/file yet.
+      if (!remotePayload || !remotePayload.schema) {
+        if (localHasData && typeof window.backendMergeSync === "function") {
+          console.log("[Cloud Sync] no Drive payload; uploading local data");
+          return await window.backendMergeSync({ auto: false });
+        }
+        console.log("[Cloud Sync] no Drive payload and no local data");
+        return { status: "no-data" };
+      }
+
+      // First login callback: if local has real data and is newer, merge.
+      const isCallback = location.search.includes("cloud=connected");
+
+      // Local empty: restore Drive.
+      if (!localHasData) {
+        applyPayload(remotePayload, "local-empty-use-drive");
+        return { status: "drive-applied-local-empty", remoteTs };
+      }
+
+      // Pending local changes should merge only if local timestamp is newer than Drive.
+      if ((pending || isCallback) && localTs && (!remoteTs || localTs > remoteTs)) {
+        console.log("[Cloud Sync] local newer than Drive; merge-push then apply merged", { localTs, remoteTs, pending, isCallback });
+        if (typeof window.backendMergeSync === "function") {
+          return await window.backendMergeSync({ auto: false });
+        }
+      }
+
+      // If Drive is newer or equal, Drive is source of truth.
+      if (remoteTs && (!localTs || remoteTs >= localTs)) {
+        applyPayload(remotePayload, "drive-newer-or-equal");
+        return { status: "drive-applied-newer-or-equal", localTs, remoteTs };
+      }
+
+      // Local newer but not pending/callback: merge carefully.
+      if (localTs && (!remoteTs || localTs > remoteTs)) {
+        console.log("[Cloud Sync] local newer; merge-push", { localTs, remoteTs });
+        if (typeof window.backendMergeSync === "function") {
+          return await window.backendMergeSync({ auto: false });
+        }
+      }
+
+      // Final safe fallback.
+      applyPayload(remotePayload, "fallback-drive-apply");
+      return { status: "drive-applied-fallback", localTs, remoteTs };
+
+    } catch (e) {
+      console.warn("[Cloud Sync] startup restore failed:", e);
+      return { status: "failed", error: String(e?.message || e) };
+    } finally {
+      window.__backendStartupRestoreRunningV1 = false;
+    }
+  }
+
+  window.backendPullPayload = backendPullPayload;
+  window.backendStartupRestoreOrMerge = backendStartupRestoreOrMerge;
+
+  function runSoon(reason) {
+    console.log("[New Sync Step 4.6] old startup runSoon disabled:", reason);
+    return Promise.resolve({
+      status: "disabled-old-startup-runSoon",
+      reason,
+      use: "startupSyncV5"
+    });
+  }
+
+  // Run after page load / app boot. This is safe because it only acts if backend connected.
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => runSoon("DOMContentLoaded"));
+  } else {
+    runSoon("already-loaded");
+  }
+
+  // If Google OAuth redirected back with ?cloud=connected, run an extra immediate restore.
+  if (location.search.includes("cloud=connected")) {
+    runSoon("google-callback-connected");
+  }
+
+  console.log("[Cloud Sync] Startup restore/merge logic installed.");
+})();
+
+
+
+/* ============================================================
+   PWA RESUME DRIVE REFRESH v1
+   For iPhone home-screen webapp:
+   - page load already restores Drive
+   - this also refreshes when app resumes from background
+   ============================================================ */
+(function(){
+  if (window.__pwaResumeDriveRefreshV1) return;
+  window.__pwaResumeDriveRefreshV1 = true;
+
+  const MIN_REFRESH_GAP_MS = 30000;
+  let lastRefreshAt = 0;
+  let refreshTimer = null;
+
+  async function runResumeRefresh(reason) {
+    const now = Date.now();
+
+    if (now - lastRefreshAt < MIN_REFRESH_GAP_MS) {
+      console.log("[Cloud Sync] PWA resume refresh skipped: too soon", reason);
+      return { status: "skipped-too-soon", reason };
+    }
+
+    lastRefreshAt = now;
+
+    if (typeof window.backendStartupRestoreOrMerge !== "function") {
+      console.log("[Cloud Sync] PWA resume refresh skipped: startup restore not ready");
+      return { status: "startup-restore-not-ready", reason };
+    }
+
+    console.log("[Cloud Sync] PWA resume refresh started:", reason);
+
+    try {
+      const res = await window.backendStartupRestoreOrMerge("pwa-resume:" + reason);
+      console.log("[Cloud Sync] PWA resume refresh result:", res);
+      return res;
+    } catch (e) {
+      console.warn("[Cloud Sync] PWA resume refresh failed:", e);
+      return { status: "failed", reason, error: String(e?.message || e) };
+    }
+  }
+
+  function scheduleResumeRefresh(reason) {
+    console.log("[New Sync Step 4.6] old PWA resume refresh disabled:", reason);
+    return Promise.resolve({
+      status: "disabled-old-pwa-resume-refresh",
+      reason,
+      use: "runAutoStartupSyncV5"
+    });
+  }
+
+  // iOS Safari/PWA often fires pageshow when returning from app switcher.
+  window.addEventListener("pageshow", function(ev) {
+    scheduleResumeRefresh(ev.persisted ? "pageshow-bfcache" : "pageshow");
+  });
+
+  // Handles normal browser tab/app visibility changes.
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "visible") {
+      scheduleResumeRefresh("visibility-visible");
+    }
+  });
+
+  // Extra fallback for desktop/browser focus.
+  window.addEventListener("focus", function() {
+    scheduleResumeRefresh("window-focus");
+  });
+
+  window.runPwaResumeRefresh = runResumeRefresh;
+
+  console.log("[Cloud Sync] PWA resume Drive refresh installed.");
+})();
+
+
+
+/* ============================================================
+   SETTINGS SIGN-IN USES BACKEND ONLY v1
+   Fixes remaining double-login bug in Settings tab:
+   - Settings Sign in / Connect / Sync login buttons route to /api/google/start
+   - old frontend Google token signIn() is bypassed for Settings buttons
+   ============================================================ */
+(function(){
+  if (window.__settingsBackendSignInOnlyV1) return;
+  window.__settingsBackendSignInOnlyV1 = true;
+
+  function goBackendLogin(reason = "settings") {
+    console.log("[Cloud Sync] Settings sign-in routed to backend OAuth:", reason);
+    window.location.href = "/api/google/start";
+  }
+
+  function norm(s) {
+    return String(s || "").trim().toLowerCase();
+  }
+
+  function isSettingsArea(el) {
+    const root = el?.closest?.(
+      "#settings, #settingsTab, .settings, .settings-tab, [data-tab='settings'], [data-panel='settings']"
+    );
+    if (root) return true;
+
+    // Fallback: detect visible nearby settings text.
+    const near = el?.closest?.(".card, .panel, .sheet, section, div") || el;
+    const t = norm(near?.textContent || "");
+    return t.includes("settings") || t.includes("sync") || t.includes("cloud");
+  }
+
+  function isSettingsLoginButton(el) {
+    if (!el) return false;
+
+    const t = norm(el.textContent || el.innerText || el.value || "");
+    const aria = norm(el.getAttribute?.("aria-label"));
+    const id = norm(el.id);
+    const cls = norm(el.className);
+
+    const hay = [t, aria, id, cls].join(" ");
+
+    const looksLikeLogin =
+      hay.includes("sign in") ||
+      hay.includes("signin") ||
+      hay.includes("log in") ||
+      hay.includes("login") ||
+      hay.includes("connect google") ||
+      hay.includes("connect drive") ||
+      hay.includes("google drive") ||
+      hay.includes("sync now");
+
+    const looksCloudRelated =
+      hay.includes("google") ||
+      hay.includes("drive") ||
+      hay.includes("cloud") ||
+      hay.includes("sync") ||
+      hay.includes("sign") ||
+      hay.includes("login");
+
+    return looksLikeLogin && looksCloudRelated && isSettingsArea(el);
+  }
+
+  function patchSettingsButtons() {
+    document.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']").forEach(el => {
+      if (!isSettingsLoginButton(el)) return;
+      if (el.__settingsBackendSignInOnlyV1) return;
+
+      el.__settingsBackendSignInOnlyV1 = true;
+
+      el.addEventListener("click", function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        goBackendLogin("settings-button");
+      }, true);
+
+      if (el.tagName === "A") {
+        try { el.setAttribute("href", "/api/google/start"); } catch {}
+      }
+
+      console.log("[Cloud Sync] patched Settings login button:", el);
+    });
+  }
+
+  // Strong capture fallback: catches Settings buttons even if old handler is also attached.
+  document.addEventListener("click", function(ev) {
+    const btn = ev.target?.closest?.("button, a, [role='button'], input[type='button'], input[type='submit']");
+    if (!btn) return;
+    if (!isSettingsLoginButton(btn)) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    goBackendLogin("settings-capture");
+  }, true);
+
+  // Patch current and later-rendered Settings UI.
+  setTimeout(patchSettingsButtons, 100);
+  setTimeout(patchSettingsButtons, 800);
+  setTimeout(patchSettingsButtons, 1800);
+  setTimeout(patchSettingsButtons, 3000);
+
+  const obs = new MutationObserver(() => {
+    if (window.__settingsBackendSignInPatchTimerV1) clearTimeout(window.__settingsBackendSignInPatchTimerV1);
+    window.__settingsBackendSignInPatchTimerV1 = setTimeout(patchSettingsButtons, 120);
+  });
+
+  try {
+    obs.observe(document.documentElement, { childList: true, subtree: true });
+  } catch {}
+
+  window.goBackendLoginFromSettings = goBackendLogin;
+
+  console.log("[Cloud Sync] Settings backend-only sign-in patch installed.");
+})();
+
+
+
+/* ============================================================
+   FINAL SINGLE GOAL SYNC GUARD v1
+   One source of truth for Goal setup + Drive restore.
+
+   Rules:
+   - Offline / no-login + no goal: show original goal setup normally.
+   - OAuth callback / backend restore + no local goal: show restoring message.
+   - Restored Drive goal exists: close setup overlay and render Goal content.
+   ============================================================ */
+(function(){
+  if (window.__finalSingleGoalSyncGuardV1) return;
+  window.__finalSingleGoalSyncGuardV1 = true;
+
+  let backendConnected = false;
+  let statusChecked = false;
+  let statusChecking = false;
+  let originalOpenGoalSetup = null;
+  let originalRenderGoalTab = null;
+
+  function readJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || ""); }
+    catch { return fallback; }
+  }
+
+  function hasGoal() {
+    const g = readJson(LS.GOAL, {});
+    return Number(g.wordsPerDay || g.dailyTarget || g.target || 0) > 0;
+  }
+
+  function isOAuthCallback() {
+    return location.search.includes("cloud=connected");
+  }
+
+  function firstLaunchWelcomeActive() {
+    try {
+      const doneKey = LS && LS.CLOUD_FIRST_LAUNCH_DONE;
+      if (doneKey && localStorage.getItem(doneKey) !== "1") return true;
+    } catch {}
+    return !!document.getElementById("welcomeModal");
+  }
+
+  function isRestoreRunning() {
+    return !!window.__backendStartupRestoreRunningV1;
+  }
+
+  async function refreshBackendStatus(reason = "") {
+    if (statusChecking) return backendConnected;
+    statusChecking = true;
+
+    try {
+      if (typeof window.backendSyncStatus === "function") {
+        const st = await window.backendSyncStatus();
+        backendConnected = !!(st && st.connected);
+      } else {
+        backendConnected = false;
+      }
+      statusChecked = true;
+      console.log("[Goal] final guard backend status:", { reason, backendConnected });
+      return backendConnected;
+    } catch {
+      backendConnected = false;
+      statusChecked = true;
+      return false;
+    } finally {
+      statusChecking = false;
+    }
+  }
+
+  function closeGoalSetup(reason = "") {
+    const el = document.getElementById("goalSetupOverlay");
+    if (el) {
+      try {
+        el.classList.add("hide");
+        el.style.setProperty("display", "none", "important");
+        el.style.setProperty("visibility", "hidden", "important");
+        el.style.setProperty("opacity", "0", "important");
+        el.style.setProperty("pointer-events", "none", "important");
+        el.setAttribute("aria-hidden", "true");
+      } catch {}
+    }
+    try {
+      document.body?.classList?.remove("goal-setup-open", "modal-open", "cloud-restoring", "cloud-connected-ready");
+      document.documentElement.classList.remove("goal-setup-open", "modal-open", "cloud-restoring", "cloud-connected-ready");
+    } catch {}
+    if (reason) console.log("[Goal] final guard closed setup:", reason);
+  }
+
+  function renderRestoringGoal(reason = "") {
+    const root = document.getElementById("goalRoot");
+    if (!root) return false;
+
+    root.innerHTML = `
+      <div class="g-page">
+        <div class="g-hero">
+          <div class="g-title">Goal</div>
+          <div class="g-sub" style="margin-top:8px;color:var(--muted);font-weight:700;">
+            Restoring your goal from Drive…
+          </div>
+        </div>
+        <div class="g-today-card" style="opacity:.74;">
+          <div class="g-today-left">
+            <div class="g-today-label">Cloud sync</div>
+            <div class="g-today-value">Syncing</div>
+            <div class="g-today-sub">Your saved goal will appear in a moment.</div>
+          </div>
+          <div class="g-today-right">
+            <div class="g-streak-fire">☁️</div>
+            <div class="g-streak-l">Drive</div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    closeGoalSetup("restore-loading:" + reason);
+    return true;
+  }
+
+  function shouldWaitForDrive() {
+    // Only wait during real cloud situations.
+    if (hasGoal()) return false;
+    if (isOAuthCallback()) return true;
+    if (isRestoreRunning()) return true;
+    if (backendConnected) return true;
+    return false;
+  }
+
+  function renderGoalFinal(reason = "") {
+    if (hasGoal()) {
+      closeGoalSetup("goal-exists:" + reason);
+      if (originalRenderGoalTab) return originalRenderGoalTab();
+      return false;
+    }
+
+    if (shouldWaitForDrive()) {
+      return renderRestoringGoal(reason);
+    }
+
+    // Offline/no-login mode: restore original behavior.
+    if (originalRenderGoalTab) return originalRenderGoalTab();
+    return false;
+  }
+
+  function installWrappers() {
+    if (typeof window.openGoalSetup === "function" && !originalOpenGoalSetup) {
+      originalOpenGoalSetup = window.openGoalSetup;
+    }
+
+    if (typeof window.renderGoalTab === "function" && !originalRenderGoalTab) {
+      originalRenderGoalTab = window.renderGoalTab;
+    }
+
+    if (originalOpenGoalSetup && !window.openGoalSetup.__finalSingleGoalSyncGuardV1) {
+      const wrappedOpen = function(initial) {
+        // Clean rule:
+        // - Explicit Edit goal calls pass the current target number.
+        // - Edit must always open the original setup modal.
+        // - Guard only blocks automatic first-launch setup during Drive restore.
+        const value = Number(initial || 0);
+        const isExplicitEdit = hasGoal() && value > 0;
+
+        if (isExplicitEdit) {
+          try {
+            document.body?.classList?.remove("cloud-restoring", "cloud-connected-ready");
+            document.documentElement.classList.remove("cloud-restoring", "cloud-connected-ready");
+          } catch {}
+
+          closeGoalSetup("prepare-edit-reopen");
+          return originalOpenGoalSetup.apply(this, arguments);
+        }
+
+        if (hasGoal()) {
+          closeGoalSetup("open-blocked-goal-exists");
+          return false;
+        }
+
+        if (shouldWaitForDrive()) {
+          renderRestoringGoal("open-blocked-drive-restore");
+          return false;
+        }
+
+        try {
+          document.body?.classList?.remove("cloud-restoring", "cloud-connected-ready");
+          document.documentElement.classList.remove("cloud-restoring", "cloud-connected-ready");
+        } catch {}
+
+        return originalOpenGoalSetup.apply(this, arguments);
+      };
+
+      wrappedOpen.__finalSingleGoalSyncGuardV1 = true;
+      window.openGoalSetup = wrappedOpen;
+      console.log("[Goal] final guard wrapped openGoalSetup");
+    }
+
+    if (originalRenderGoalTab && !window.renderGoalTab.__finalSingleGoalSyncGuardV1) {
+      const wrappedRender = function() {
+        return renderGoalFinal("renderGoalTab");
+      };
+
+      wrappedRender.__finalSingleGoalSyncGuardV1 = true;
+      window.renderGoalTab = wrappedRender;
+      console.log("[Goal] final guard wrapped renderGoalTab");
+    }
+  }
+
+  installWrappers();
+  [100, 500, 1200, 2500].forEach(ms => setTimeout(installWrappers, ms));
+
+  // After Drive payload applies, render goal immediately if goal is restored.
+  if (typeof window.applyLeanPayloadV4 === "function" && !window.applyLeanPayloadV4.__finalSingleGoalSyncGuardV1) {
+    const oldApply = window.applyLeanPayloadV4;
+    const wrappedApply = function() {
+      const result = oldApply.apply(this, arguments);
+      setTimeout(() => {
+        installWrappers();
+        renderGoalFinal("after-drive-apply");
+      }, 0);
+      return result;
+    };
+    wrappedApply.__finalSingleGoalSyncGuardV1 = true;
+    window.applyLeanPayloadV4 = wrappedApply;
+  }
+
+  // After startup restore finishes, render goal again.
+  if (typeof window.backendStartupRestoreOrMerge === "function" && !window.backendStartupRestoreOrMerge.__finalSingleGoalSyncGuardV1) {
+    const oldRestore = window.backendStartupRestoreOrMerge;
+    const wrappedRestore = async function() {
+      const result = await oldRestore.apply(this, arguments);
+      setTimeout(() => {
+        installWrappers();
+        renderGoalFinal("after-startup-restore");
+      }, 0);
+      return result;
+    };
+    wrappedRestore.__finalSingleGoalSyncGuardV1 = true;
+    window.backendStartupRestoreOrMerge = wrappedRestore;
+  }
+
+  // Initial decision.
+  setTimeout(async () => {
+    await refreshBackendStatus("startup-600ms");
+    installWrappers();
+
+    if (!backendConnected && !isOAuthCallback() && !hasGoal()) {
+      // True offline/no-login mode.
+      if (originalRenderGoalTab) originalRenderGoalTab();
+      console.log("[Goal] final guard: offline mode, original setup allowed");
+    } else {
+      renderGoalFinal("startup-600ms");
+    }
+  }, 600);
+
+  setTimeout(async () => {
+    await refreshBackendStatus("startup-2200ms");
+    installWrappers();
+    renderGoalFinal("startup-2200ms");
+  }, 2200);
+
+  window.finalGoalGuardStatus = function() {
+    return {
+      hasGoal: hasGoal(),
+      backendConnected,
+      statusChecked,
+      oauthCallback: isOAuthCallback(),
+      restoreRunning: isRestoreRunning(),
+      shouldWaitForDrive: shouldWaitForDrive()
+    };
+  };
+
+  window.finalGoalGuardRender = renderGoalFinal;
+
+  console.log("[Goal] Final single goal sync guard installed.");
+})();
+
+
+
+/* ============================================================
+   OFFLINE GOAL SETUP FORCE VISIBLE v1
+   Fixes no-login mode after cloud guards:
+   - previous guards may leave #goalSetupOverlay with hidden inline !important styles
+   - original openGoalSetup only sets display:flex
+   - this restores visibility/opacity/pointer-events in true offline mode
+   ============================================================ */
+(function(){
+  if (window.__offlineGoalSetupForceVisibleV1) return;
+  window.__offlineGoalSetupForceVisibleV1 = true;
+
+  let backendConnectedCache = null;
+  let checkedAt = 0;
+
+  function readJson(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || ""); }
+    catch { return fallback; }
+  }
+
+  function hasGoal() {
+    const g = readJson(LS.GOAL, {});
+    return Number(g.wordsPerDay || g.dailyTarget || g.target || 0) > 0;
+  }
+
+  function isOAuthCallback() {
+    return location.search.includes("cloud=connected");
+  }
+
+  async function isBackendConnected() {
+    const now = Date.now();
+    if (backendConnectedCache !== null && now - checkedAt < 2500) {
+      return backendConnectedCache;
+    }
+
+    checkedAt = now;
+
+    try {
+      if (typeof window.backendSyncStatus !== "function") {
+        backendConnectedCache = false;
+        return false;
+      }
+
+      const st = await window.backendSyncStatus();
+      backendConnectedCache = !!(st && st.connected);
+      return backendConnectedCache;
+    } catch {
+      backendConnectedCache = false;
+      return false;
+    }
+  }
+
+  function ensureOfflineGoalOverlay() {
+    let el = document.getElementById("goalSetupOverlay");
+
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "goalSetupOverlay";
+      el.className = "g-setup-overlay";
+      el.innerHTML = `
+        <div class="g-setup-card">
+          <div class="g-setup-emoji">🎯</div>
+          <div class="g-setup-title">Set your daily goal</div>
+          <div class="g-setup-sub">How many new words do you want to master each day?</div>
+          <div class="g-setup-value"><span id="goalSetupValue">5</span> <span class="u">words / day</span></div>
+          <input id="goalSetupSlider" type="range" min="1" max="30" value="5" class="g-setup-slider"
+            oninput="goalSetupSliderChange(this.value)" />
+          <div class="g-setup-ends"><span>1</span><span>30</span></div>
+          <div class="g-setup-chips">
+            <button class="g-setup-chip" onclick="goalSetupQuickPick(3)">3</button>
+            <button class="g-setup-chip" onclick="goalSetupQuickPick(5)">5</button>
+            <button class="g-setup-chip" onclick="goalSetupQuickPick(10)">10</button>
+            <button class="g-setup-chip" onclick="goalSetupQuickPick(20)">20</button>
+          </div>
+          <div class="g-setup-hint">Master = answer right on first try, or 3 correct in a row.<br>You can change this anytime.</div>
+          <button class="g-setup-btn" onclick="goalSetupConfirm()">Continue ›</button>
+        </div>
+      `;
+      document.body.appendChild(el);
+    }
+
+    return el;
+  }
+
+  function makeOverlayVisible() {
+    if (firstLaunchWelcomeActive()) return;
+
+    if (typeof window.__myOpenGoalSetup === "function") {
+      try {
+        window.__myOpenGoalSetup(1);
+        return;
+      } catch {}
+    }
+
+    const el = ensureOfflineGoalOverlay();
+
+    try {
+      el.classList.remove("hide", "hidden", "closed");
+      el.classList.add("show");
+      el.removeAttribute("aria-hidden");
+
+      el.style.removeProperty("display");
+      el.style.removeProperty("visibility");
+      el.style.removeProperty("opacity");
+      el.style.removeProperty("pointer-events");
+
+      el.style.setProperty("display", "flex", "important");
+      el.style.setProperty("visibility", "visible", "important");
+      el.style.setProperty("opacity", "1", "important");
+      el.style.setProperty("pointer-events", "auto", "important");
+
+      document.documentElement.classList.remove("cloud-restoring", "cloud-connected-ready");
+      document.body?.classList?.remove("cloud-restoring", "cloud-connected-ready");
+      document.body?.classList?.add("goal-setup-open");
+    } catch {}
+
+    const root = document.getElementById("goalRoot");
+    if (root && !root.innerHTML.trim()) {
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+    }
+
+    console.log("[Goal] offline goal setup forced visible");
+  }
+
+  async function restoreOfflineGoalSetup(reason = "") {
+    if (hasGoal()) return false;
+    if (isOAuthCallback()) return false;
+    if (firstLaunchWelcomeActive()) return false;
+
+    const connected = await isBackendConnected();
+    if (connected) return false;
+
+    if (typeof window.__myOpenGoalSetup === "function") {
+      try {
+        window.__myOpenGoalSetup(1);
+        console.log("[Goal] offline V2 goal setup restored:", reason);
+        return true;
+      } catch {}
+    }
+
+    // Let original code run first if available.
+    try {
+      if (typeof window.openGoalSetup === "function") {
+        window.openGoalSetup(5);
+      }
+    } catch {}
+
+    makeOverlayVisible();
+
+    console.log("[Goal] offline goal setup restored:", reason);
+    return true;
+  }
+
+  // Patch goal confirm so no-login mode shows goal content immediately after choosing.
+  if (typeof window.goalSetupConfirm === "function" && !window.goalSetupConfirm.__offlineForceVisibleWrappedV1) {
+    const oldConfirm = window.goalSetupConfirm;
+
+    const wrappedConfirm = function() {
+      const result = oldConfirm.apply(this, arguments);
+
+      setTimeout(() => {
+        const el = document.getElementById("goalSetupOverlay");
+        if (el) el.remove();
+
+        if (typeof window.renderGoalTab === "function") {
+          try { window.renderGoalTab(); } catch {}
+        }
+      }, 0);
+
+      return result;
+    };
+
+    wrappedConfirm.__offlineForceVisibleWrappedV1 = true;
+    window.goalSetupConfirm = wrappedConfirm;
+  }
+
+  // Run after backend status decides not connected.
+  [800, 1800, 3200, 5200].forEach(ms => {
+    setTimeout(() => restoreOfflineGoalSetup("timer-" + ms), ms);
+  });
+
+  // If user manually opens Goal tab in no-login mode, force the setup visible.
+  document.addEventListener("click", function(ev) {
+    const nav = ev.target?.closest?.("[data-nav='home'], [data-page='home'], .navbtn, button, a");
+    if (!nav) return;
+
+    const txt = String(nav.textContent || "").toLowerCase();
+    const isGoalNav =
+      nav.getAttribute?.("data-nav") === "home" ||
+      nav.getAttribute?.("data-page") === "home" ||
+      txt.includes("goal");
+
+    if (!isGoalNav) return;
+
+    setTimeout(() => restoreOfflineGoalSetup("goal-tab-click"), 250);
+  }, true);
+
+  window.forceOfflineGoalSetupVisible = function(reason = "manual") {
+    return restoreOfflineGoalSetup(reason);
+  };
+
+  console.log("[Goal] Offline goal setup force-visible patch installed.");
+})();
+
+
+
+/* ============================================================
+   STABLE BACKEND LOGIN UI v1
+   Replaces old mutation-observer login patches.
+   Fixes infinite logs:
+   - backend connected; skipped original login window: mutation
+   - entering main app: mutation
+
+   Rules:
+   - Keep original welcome/login window for first-time users.
+   - Its Google button routes to backend OAuth.
+   - After backend connected, close welcome modal once.
+   - No global MutationObserver loops.
+   ============================================================ */
+(function(){
+  if (window.__stableBackendLoginUiV1) return;
+  window.__stableBackendLoginUiV1 = true;
+
+  let enteredOnce = false;
+  let statusCache = null;
+  let statusCheckedAt = 0;
+
+  function goBackendLogin(reason = "") {
+    console.log("[Cloud Sync] backend OAuth login:", reason);
+    window.location.href = "/api/google/start";
+  }
+
+  async function backendStatusCached() {
+    const now = Date.now();
+    if (statusCache && now - statusCheckedAt < 2500) return statusCache;
+
+    statusCheckedAt = now;
+
+    try {
+      if (typeof window.backendSyncStatus !== "function") {
+        statusCache = { connected: false };
+        return statusCache;
+      }
+
+      statusCache = await window.backendSyncStatus();
+      return statusCache || { connected: false };
+    } catch {
+      statusCache = { connected: false };
+      return statusCache;
+    }
+  }
+
+  function closeWelcomeModal(reason = "") {
+    const selectors = [
+      "#welcomeModal",
+      ".wm-overlay",
+      ".wm-modal",
+      "#welcome",
+      "#welcomeScreen",
+      "#firstLaunch",
+      "#firstLaunchScreen",
+      "#loginScreen",
+      "#signinScreen",
+      "#signInScreen",
+      "#cloudWelcome"
+    ];
+
+    for (const sel of selectors) {
+      document.querySelectorAll(sel).forEach(el => {
+        try {
+          el.classList.add("hide");
+          el.classList.remove("show", "active", "open");
+          el.style.setProperty("display", "none", "important");
+          el.style.setProperty("visibility", "hidden", "important");
+          el.style.setProperty("pointer-events", "none", "important");
+          el.setAttribute("aria-hidden", "true");
+        } catch {}
+      });
+    }
+
+    try {
+      document.body?.classList?.remove("welcome-open", "modal-open", "wm-open", "first-launch", "login-open");
+      document.documentElement.classList.remove("welcome-open", "modal-open", "wm-open", "first-launch", "login-open");
+      document.body?.classList?.add("app-ready");
+    } catch {}
+
+    try { localStorage.setItem(LS.CLOUD_FIRST_LAUNCH_DONE, "1"); } catch {}
+    try { localStorage.setItem("ielts_vocab_first_launch_done_v1", "1"); } catch {}
+    try { localStorage.setItem("ielts_vocab_welcome_done_v1", "1"); } catch {}
+
+    if (!window.__stableBackendLoginClosedLogOnceV1) {
+      console.log("[Cloud Sync] stable login UI closed welcome modal:", reason);
+      window.__stableBackendLoginClosedLogOnceV1 = true;
+    }
+  }
+
+  function showMainAppOnce(reason = "") {
+    if (enteredOnce) return;
+    enteredOnce = true;
+
+    closeWelcomeModal(reason);
+
+    const showSelectors = [
+      "#app",
+      "#main",
+      "#shell",
+      "#appShell",
+      "#mainApp",
+      ".app",
+      ".app-shell",
+      ".main-app",
+      ".tabbar",
+      ".bottom-nav",
+      ".nav"
+    ];
+
+    for (const sel of showSelectors) {
+      document.querySelectorAll(sel).forEach(el => {
+        try {
+          el.classList.remove("hide");
+          el.style.removeProperty("display");
+          el.removeAttribute("aria-hidden");
+        } catch {}
+      });
+    }
+
+    try {
+      if (location.search.includes("cloud=connected")) {
+        history.replaceState({}, document.title, location.origin + location.pathname + location.hash);
+      }
+    } catch {}
+
+    try {
+      if (typeof renderAll === "function") renderAll();
+      else {
+        try { renderGoalTab(); } catch {}
+        try { renderPracticeRoot(); } catch {}
+        try { renderWordList(); } catch {}
+        try { renderSettingsRow(); } catch {}
+      }
+    } catch {}
+
+    console.log("[Cloud Sync] stable login UI entered main app:", reason);
+  }
+
+  async function enterIfConnectedOnce(reason = "") {
+    const st = await backendStatusCached();
+    if (!st.connected) return false;
+
+    try { signedIn = true; } catch {}
+    try { userEmail = st.email || "backend-connected"; } catch {}
+    try { localStorage.setItem(LS.CLOUD_USER_EMAIL, st.email || "backend-connected"); } catch {}
+
+    showMainAppOnce(reason);
+    return true;
+  }
+
+  function isGoogleLoginButton(el) {
+    if (!el) return false;
+
+    const t = String(el.textContent || el.innerText || el.value || "").toLowerCase();
+    const aria = String(el.getAttribute?.("aria-label") || "").toLowerCase();
+    const id = String(el.id || "").toLowerCase();
+    const cls = String(el.className || "").toLowerCase();
+    const hay = `${t} ${aria} ${id} ${cls}`;
+
+    return (
+      id === "wmsigninbtn" ||
+      hay.includes("sign in with google") ||
+      hay.includes("login with google") ||
+      hay.includes("connect google") ||
+      hay.includes("google drive")
+    );
+  }
+
+  function patchLoginButtons() {
+    document.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']").forEach(el => {
+      if (!isGoogleLoginButton(el)) return;
+      if (el.__stableBackendLoginButtonV1) return;
+
+      el.__stableBackendLoginButtonV1 = true;
+
+      try { el.removeAttribute("onclick"); } catch {}
+
+      el.addEventListener("click", function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+        goBackendLogin("login-button");
+      }, true);
+
+      if (el.tagName === "A") {
+        try { el.setAttribute("href", "/api/google/start"); } catch {}
+      }
+
+      console.log("[Cloud Sync] stable login UI patched Google login button");
+    });
+  }
+
+  // Capture fallback, but no MutationObserver.
+  document.addEventListener("click", function(ev) {
+    const btn = ev.target?.closest?.("button, a, [role='button'], input[type='button'], input[type='submit']");
+    if (!btn || !isGoogleLoginButton(btn)) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    goBackendLogin("capture");
+  }, true);
+
+  // Timed checks only. No DOM mutation loop.
+  [50, 300, 1000, 2200, 4500, 7000].forEach(ms => {
+    setTimeout(() => {
+      patchLoginButtons();
+      enterIfConnectedOnce("timer-" + ms);
+    }, ms);
+  });
+
+  // Callback path: try a few times after OAuth redirects back.
+  if (location.search.includes("cloud=connected")) {
+    [250, 800, 1800, 3500, 6000].forEach(ms => {
+      setTimeout(() => enterIfConnectedOnce("oauth-callback-" + ms), ms);
+    });
+  }
+
+  window.stableBackendLoginEnterIfConnected = enterIfConnectedOnce;
+  window.stableBackendLoginCloseWelcome = closeWelcomeModal;
+
+  console.log("[Cloud Sync] Stable backend login UI patch installed.");
+})();
+
+
+
+/* ============================================================
+   SETTINGS LOGIN BUTTON BACKEND-ONLY FINAL v1
+   Fixes final bug:
+   - In no-login mode, Settings Sign in button opens double login.
+   Cause:
+   - old Settings button still has old frontend Google login handler.
+   Fix:
+   - identify Settings login/sync/connect buttons
+   - clone button to remove old listeners/onclick
+   - attach backend OAuth only
+   ============================================================ */
+(function(){
+  if (window.__settingsLoginBackendOnlyFinalV1) return;
+  window.__settingsLoginBackendOnlyFinalV1 = true;
+
+  function goBackendLogin(reason = "") {
+    console.log("[Cloud Sync] Settings backend-only login:", reason);
+    window.location.href = "/api/google/start";
+  }
+
+  function norm(v) {
+    return String(v || "").trim().toLowerCase();
+  }
+
+  function isInsideSettings(el) {
+    if (!el || !el.closest) return false;
+
+    if (el.closest("#settings, #settingsTab, .settings, .settings-tab, [data-page='settings'], [data-tab='settings'], [data-panel='settings']")) {
+      return true;
+    }
+
+    const page = el.closest(".page, section, main, .panel, .card, div");
+    const txt = norm(page?.textContent || "");
+    return txt.includes("settings") && (txt.includes("sync") || txt.includes("google") || txt.includes("cloud"));
+  }
+
+  function isSettingsLoginButton(el) {
+    if (!el) return false;
+
+    const hay = [
+      el.textContent,
+      el.innerText,
+      el.value,
+      el.id,
+      el.className,
+      el.getAttribute?.("aria-label"),
+      el.getAttribute?.("title"),
+      el.getAttribute?.("onclick")
+    ].map(norm).join(" ");
+
+    const loginLike =
+      hay.includes("sign in") ||
+      hay.includes("signin") ||
+      hay.includes("log in") ||
+      hay.includes("login") ||
+      hay.includes("connect") ||
+      hay.includes("sync now") ||
+      hay.includes("google") ||
+      hay.includes("drive");
+
+    const cloudLike =
+      hay.includes("google") ||
+      hay.includes("drive") ||
+      hay.includes("cloud") ||
+      hay.includes("sync") ||
+      hay.includes("sign") ||
+      hay.includes("login") ||
+      hay.includes("connect");
+
+    return loginLike && cloudLike && isInsideSettings(el);
+  }
+
+  function backendOnlyCloneButton(btn) {
+    if (!btn || btn.__settingsBackendOnlyFinalV1) return;
+
+    const clone = btn.cloneNode(true);
+    clone.__settingsBackendOnlyFinalV1 = true;
+
+    try { clone.removeAttribute("onclick"); } catch {}
+    try { clone.setAttribute("href", "/api/google/start"); } catch {}
+
+    clone.addEventListener("click", function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      goBackendLogin("settings-cloned-button");
+    }, true);
+
+    btn.replaceWith(clone);
+
+    console.log("[Cloud Sync] Settings login button replaced with backend-only clone");
+  }
+
+  function patchSettingsButtons() {
+    document.querySelectorAll("button, a, [role='button'], input[type='button'], input[type='submit']").forEach(btn => {
+      if (isSettingsLoginButton(btn)) {
+        backendOnlyCloneButton(btn);
+      }
+    });
+  }
+
+  // Capture fallback in case the Settings UI re-renders after cloning.
+  document.addEventListener("click", function(ev) {
+    const btn = ev.target?.closest?.("button, a, [role='button'], input[type='button'], input[type='submit']");
+    if (!btn) return;
+    if (!isSettingsLoginButton(btn)) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+    goBackendLogin("settings-capture-final");
+  }, true);
+
+  // No mutation observer; use safe timed patches only.
+  [100, 500, 1200, 2500, 4500].forEach(ms => {
+    setTimeout(patchSettingsButtons, ms);
+  });
+
+  // Patch whenever Settings tab is clicked/opened.
+  document.addEventListener("click", function(ev) {
+    const t = norm(ev.target?.textContent || "");
+    const id = norm(ev.target?.id || "");
+    const cls = norm(ev.target?.className || "");
+
+    if (t.includes("settings") || id.includes("settings") || cls.includes("settings")) {
+      setTimeout(patchSettingsButtons, 100);
+      setTimeout(patchSettingsButtons, 500);
+    }
+  }, true);
+
+  window.patchSettingsBackendOnlyLogin = patchSettingsButtons;
+
+  console.log("[Cloud Sync] Settings backend-only final login patch installed.");
+})();
+
+
+
+/* ============================================================
+   SETTINGS DIV ROW BACKEND SYNC/LOGIN FINAL v1
+   Fixes Settings tab rows because they are clickable divs:
+   - <div class="settings-row" onclick="cloudSyncNow()">
+   - <div class="settings-row" onclick="cloudSignIn()"> / old signIn()
+   Rules:
+   - Sync now uses backendMergeSync only.
+   - Sign in / connect uses /api/google/start only.
+   - Sign out remains cloudSignOut().
+   ============================================================ */
+(function(){
+  if (window.__settingsDivRowBackendFinalV1) return;
+  window.__settingsDivRowBackendFinalV1 = true;
+
+  function goBackendLogin(reason = "") {
+    console.log("[Cloud Sync] Settings div-row backend login:", reason);
+    window.location.href = "/api/google/start";
+  }
+
+  async function backendSyncFromSettings(reason = "settings-row") {
+    console.log("[Cloud Sync] Settings div-row backend sync:", reason);
+
+    try {
+      if (typeof window.backendMergeSync === "function") {
+        const res = await window.backendMergeSync({ auto: false });
+        try {
+          if (typeof renderSettingsRow === "function") renderSettingsRow();
+        } catch {}
+        try {
+          if (typeof toast === "function") toast("✓ Synced");
+        } catch {}
+        return res;
+      }
+
+      // If backend client is somehow missing, login/connect through backend.
+      goBackendLogin("backendMergeSync-missing");
+      return { status: "backend-client-missing" };
+
+    } catch (e) {
+      console.warn("[Cloud Sync] Settings backend sync failed:", e);
+      try {
+        if (typeof toast === "function") toast("Sync failed");
+      } catch {}
+      return { status: "failed", error: String(e?.message || e) };
+    }
+  }
+
+  // Override old global functions used by Settings inline onclick.
+  window.cloudSyncNow = function() {
+    return backendSyncFromSettings("cloudSyncNow-override");
+  };
+
+  window.cloudSignIn = function() {
+    return goBackendLogin("cloudSignIn-override");
+  };
+
+  window.cloudConnect = function() {
+    return goBackendLogin("cloudConnect-override");
+  };
+
+  window.signInFromSettings = function() {
+    return goBackendLogin("signInFromSettings-override");
+  };
+
+  function norm(v) {
+    return String(v || "").trim().toLowerCase();
+  }
+
+  function isSettingsCloudRow(el) {
+    if (!el) return false;
+
+    const txt = norm(el.textContent || "");
+    const onclick = norm(el.getAttribute?.("onclick") || "");
+    const cls = norm(el.className || "");
+    const id = norm(el.id || "");
+
+    const isRow = cls.includes("settings-row") || el.closest?.("#cloudSyncSettingsGroup");
+
+    const isCloud =
+      txt.includes("sync") ||
+      txt.includes("sign in") ||
+      txt.includes("signed in") ||
+      txt.includes("google") ||
+      txt.includes("drive") ||
+      txt.includes("cloud") ||
+      onclick.includes("cloudsync") ||
+      onclick.includes("cloudsignin") ||
+      onclick.includes("signin") ||
+      id.includes("cloud");
+
+    return isRow && isCloud;
+  }
+
+  function patchSettingsRows() {
+    document.querySelectorAll("div.settings-row, #cloudSyncSettingsGroup .settings-row, [onclick]").forEach(row => {
+      if (!isSettingsCloudRow(row)) return;
+      if (row.__settingsDivRowBackendFinalV1) return;
+
+      const txt = norm(row.textContent || "");
+      const onclick = norm(row.getAttribute("onclick") || "");
+
+      // Do not touch sign-out row.
+      if (txt.includes("tap to sign out") || onclick.includes("cloudsignout")) {
+        return;
+      }
+
+      row.__settingsDivRowBackendFinalV1 = true;
+
+      // Remove old inline handler that may trigger old frontend OAuth.
+      try { row.removeAttribute("onclick"); } catch {}
+
+      row.addEventListener("click", function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+
+        const currentText = norm(row.textContent || "");
+
+        if (
+          currentText.includes("sync now") ||
+          currentText.includes("unsaved changes") ||
+          currentText.includes("last sync") ||
+          onclick.includes("cloudsyncnow")
+        ) {
+          backendSyncFromSettings("patched-settings-sync-row");
+          return;
+        }
+
+        goBackendLogin("patched-settings-login-row");
+      }, true);
+
+      console.log("[Cloud Sync] patched Settings div row:", {
+        text: (row.textContent || "").trim().slice(0, 80),
+        oldOnclick: onclick
+      });
+    });
+  }
+
+  // Capture fallback for clickable div rows.
+  document.addEventListener("click", function(ev) {
+    const row = ev.target?.closest?.("div.settings-row, #cloudSyncSettingsGroup .settings-row, [onclick]");
+    if (!row) return;
+    if (!isSettingsCloudRow(row)) return;
+
+    const txt = norm(row.textContent || "");
+    const onclick = norm(row.getAttribute("onclick") || "");
+
+    // Allow sign-out.
+    if (txt.includes("tap to sign out") || onclick.includes("cloudsignout")) return;
+
+    ev.preventDefault();
+    ev.stopPropagation();
+    ev.stopImmediatePropagation();
+
+    if (
+      txt.includes("sync now") ||
+      txt.includes("unsaved changes") ||
+      txt.includes("last sync") ||
+      onclick.includes("cloudsyncnow")
+    ) {
+      backendSyncFromSettings("capture-settings-sync-row");
+      return;
+    }
+
+    goBackendLogin("capture-settings-login-row");
+  }, true);
+
+  [100, 500, 1200, 2500, 4500].forEach(ms => {
+    setTimeout(patchSettingsRows, ms);
+  });
+
+  // Patch when Settings page opens.
+  document.addEventListener("click", function(ev) {
+    const t = norm(ev.target?.textContent || "");
+    const id = norm(ev.target?.id || "");
+    const cls = norm(ev.target?.className || "");
+
+    if (t.includes("settings") || id.includes("settings") || cls.includes("settings")) {
+      setTimeout(patchSettingsRows, 100);
+      setTimeout(patchSettingsRows, 500);
+    }
+  }, true);
+
+  window.patchSettingsDivRowsBackendFinal = patchSettingsRows;
+  window.backendSyncFromSettings = backendSyncFromSettings;
+
+  console.log("[Cloud Sync] Settings div-row backend final patch installed.");
+})();
+
+
+
+/* ============================================================
+   ORIGINAL SETTINGS CLOUD SYNC REFRESH v1
+   Do NOT replace the Cloud Sync card HTML manually.
+   Use the original renderSettingsRow() already in the app.
+
+   Rule:
+   - backend connected -> set signedIn/userEmail
+   - call original renderSettingsRow()
+   - patch row clicks after original UI renders
+   ============================================================ */
+(function(){
+  if (window.__originalSettingsCloudSyncRefreshV1) return;
+  window.__originalSettingsCloudSyncRefreshV1 = true;
+
+  let refreshTimer = null;
+
+  async function getBackendStatus() {
+    try {
+      if (typeof window.backendSyncStatus !== "function") return { connected: false };
+      return await window.backendSyncStatus();
+    } catch {
+      return { connected: false };
+    }
+  }
+
+  async function refreshOriginalSettingsCloudSync(reason = "") {
+    const st = await getBackendStatus();
+
+    if (!st.connected) {
+      // In no-login mode, let original renderSettingsRow() show Sign in with Google.
+      try {
+        signedIn = false;
+      } catch {}
+
+      try {
+        userEmail = "";
+      } catch {}
+
+      try {
+        if (typeof renderSettingsRow === "function") renderSettingsRow();
+      } catch {}
+
+      try {
+        if (typeof window.patchSettingsDivRowsBackendFinal === "function") {
+          window.patchSettingsDivRowsBackendFinal();
+        }
+      } catch {}
+
+      console.log("[Cloud Sync] original Settings refresh: not connected", reason);
+      return false;
+    }
+
+    // This is the key: update the state that original renderSettingsRow() already uses.
+    try {
+      signedIn = true;
+    } catch {}
+
+    try {
+      userEmail = st.email || "Google account";
+    } catch {}
+
+    try {
+      localStorage.setItem(LS.CLOUD_USER_EMAIL, st.email || "Google account");
+      localStorage.setItem(LS.CLOUD_FIRST_LAUNCH_DONE, "1");
+    } catch {}
+
+    // Use the original Settings UI renderer. Do not replace the section/card manually.
+    try {
+      if (typeof renderSettingsRow === "function") renderSettingsRow();
+    } catch (e) {
+      console.warn("[Cloud Sync] original renderSettingsRow failed:", e);
+    }
+
+    // After original render, only patch row actions, not layout.
+    try {
+      if (typeof window.patchSettingsDivRowsBackendFinal === "function") {
+        window.patchSettingsDivRowsBackendFinal();
+      }
+    } catch {}
+
+    try {
+      if (typeof window.patchSettingsBackendOnlyLogin === "function") {
+        window.patchSettingsBackendOnlyLogin();
+      }
+    } catch {}
+
+    console.log("[Cloud Sync] original Settings Cloud Sync refreshed:", reason, st.email);
+    return true;
+  }
+
+  function scheduleOriginalSettingsRefresh(reason = "") {
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      refreshTimer = null;
+      refreshOriginalSettingsCloudSync(reason);
+    }, 200);
+  }
+
+  // Wrap restore: after backend restore/login, update the original Settings row.
+  if (typeof window.backendStartupRestoreOrMerge === "function" && !window.backendStartupRestoreOrMerge.__originalSettingsRefreshWrappedV1) {
+    const oldRestore = window.backendStartupRestoreOrMerge;
+
+    const wrappedRestore = async function() {
+      const result = await oldRestore.apply(this, arguments);
+      scheduleOriginalSettingsRefresh("after-startup-restore");
+      return result;
+    };
+
+    wrappedRestore.__originalSettingsRefreshWrappedV1 = true;
+    window.backendStartupRestoreOrMerge = wrappedRestore;
+  }
+
+  // Wrap backend sync: after sync, original Last sync text should update.
+  if (typeof window.backendMergeSync === "function" && !window.backendMergeSync.__originalSettingsRefreshWrappedV1) {
+    const oldMerge = window.backendMergeSync;
+
+    const wrappedMerge = async function() {
+      const result = await oldMerge.apply(this, arguments);
+      scheduleOriginalSettingsRefresh("after-backend-merge-sync");
+      return result;
+    };
+
+    wrappedMerge.__originalSettingsRefreshWrappedV1 = true;
+    window.backendMergeSync = wrappedMerge;
+  }
+
+  // OAuth callback without reload.
+  if (location.search.includes("cloud=connected")) {
+    [300, 900, 1800, 3500, 6000, 9000].forEach(ms => {
+      setTimeout(() => scheduleOriginalSettingsRefresh("oauth-callback-" + ms), ms);
+    });
+  }
+
+  // When opening Settings, re-render the original row.
+  document.addEventListener("click", function(ev) {
+    const txt = String(ev.target?.textContent || "").toLowerCase();
+    const id = String(ev.target?.id || "").toLowerCase();
+    const cls = String(ev.target?.className || "").toLowerCase();
+
+    if (txt.includes("settings") || id.includes("settings") || cls.includes("settings")) {
+      setTimeout(() => scheduleOriginalSettingsRefresh("settings-opened"), 120);
+      setTimeout(() => scheduleOriginalSettingsRefresh("settings-opened-late"), 700);
+    }
+  }, true);
+
+  // PWA resume / already connected.
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "visible") {
+      scheduleOriginalSettingsRefresh("visibility-visible");
+    }
+  });
+
+  [800, 2500, 5000].forEach(ms => {
+    setTimeout(() => scheduleOriginalSettingsRefresh("startup-" + ms), ms);
+  });
+
+  window.refreshOriginalSettingsCloudSync = refreshOriginalSettingsCloudSync;
+
+  console.log("[Cloud Sync] Original Settings Cloud Sync refresh patch installed.");
+})();
+
+
+/* ============================================================
+   STEP 1: Replace visible Easy Mode with Learning Settings
+   - Dictionary Source: collegiate | learner
+   - Traditional Chinese translations: off | on
+   - Migrates old Easy Mode once
+   - Removes/hides old Easy Mode Settings row
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep1Installed) return;
+  window.__learningSettingsStep1Installed = true;
+
+  const DICT_SOURCE_KEY = "ielts_vocab_dict_source_v1";
+  const ZH_TRANSLATION_KEY = "ielts_vocab_zh_translation_v1";
+  const MIGRATION_KEY = "ielts_vocab_learning_settings_migrated_from_easy_v1";
+
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function safeSet(key, value) {
+    try { localStorage.setItem(key, value); } catch {}
+  }
+
+  function migrateFromEasyModeOnce() {
+    if (safeGet(MIGRATION_KEY) === "1") return;
+
+    let oldEasy = null;
+    try {
+      const raw = localStorage.getItem(LS.EASY_MODE);
+      if (raw !== null) oldEasy = raw === "1";
+    } catch {}
+
+    // Missing old value becomes the current app default: Learner + Chinese off.
+    if (oldEasy === true) {
+      if (!safeGet(DICT_SOURCE_KEY)) safeSet(DICT_SOURCE_KEY, "learner");
+      if (!safeGet(ZH_TRANSLATION_KEY)) safeSet(ZH_TRANSLATION_KEY, "1");
+    } else {
+      if (!safeGet(DICT_SOURCE_KEY)) safeSet(DICT_SOURCE_KEY, "learner");
+      if (!safeGet(ZH_TRANSLATION_KEY)) safeSet(ZH_TRANSLATION_KEY, "0");
+    }
+
+    safeSet(MIGRATION_KEY, "1");
+  }
+
+  migrateFromEasyModeOnce();
+
+  window.getDictionarySource = function() {
+    const v = safeGet(DICT_SOURCE_KEY);
+    return v === "collegiate" ? "collegiate" : "learner";
+  };
+
+  window.usesLearnerDictionary = function() {
+    return window.getDictionarySource() === "learner";
+  };
+
+  window.usesCollegiateDictionary = function() {
+    return window.getDictionarySource() === "collegiate";
+  };
+
+  // Storage: "0"=off  "1"=on  "2"=blur
+  // All legacy zhOn() checks (=== "1") keep working: on→true, off/blur→false.
+  window.getChineseTranslationMode = function() {
+    const v = safeGet(ZH_TRANSLATION_KEY);
+    if (v === "2") return "blur";
+    if (v === "1") return "on";
+    return "off";
+  };
+
+  // Both "on" and "blur" fetch/render translations.
+  window.useTraditionalChineseTranslations = function() {
+    const v = safeGet(ZH_TRANSLATION_KEY);
+    return v === "1" || v === "2";
+  };
+
+  window.isChineseBlurMode = function() {
+    return safeGet(ZH_TRANSLATION_KEY) === "2";
+  };
+
+  window.setChineseTranslationMode = function(mode, opts = {}) {
+    const val = mode === "on" ? "1" : mode === "blur" ? "2" : "0";
+    safeSet(ZH_TRANSLATION_KEY, val);
+    try {
+      window.easyMode = false;
+      if (LS && LS.EASY_MODE) localStorage.setItem(LS.EASY_MODE, "0");
+      document.body.classList.remove("easy-mode");
+    } catch {}
+    renderLearningSettings();
+    const labels = { off: "Chinese: Off", blur: "Chinese: Blur — swipe to reveal", on: "Chinese: Always on" };
+    if (opts.userToast && typeof toast === "function") toast(labels[mode] || "Chinese translations updated");
+  };
+
+  window.setDictionarySource = function(source, opts = {}) {
+    const next = source === "learner" ? "learner" : "collegiate";
+    const prev = safeGet(DICT_SOURCE_KEY) === "learner" ? "learner" : "collegiate";
+    safeSet(DICT_SOURCE_KEY, next);
+
+    // Keep old Easy Mode OFF visually and behaviourally for Step 1.
+    // Step 2 will connect source choice to dictionary fetching.
+    try {
+      window.easyMode = false;
+      if (LS && LS.EASY_MODE) localStorage.setItem(LS.EASY_MODE, "0");
+      document.body.classList.remove("easy-mode");
+    } catch {}
+
+    renderLearningSettings();
+    if (opts.userToast && prev !== next && typeof toast === "function") {
+      toast(next === "learner" ? "Dictionary Source: Learner" : "Dictionary Source: Collegiate");
+    }
+  };
+
+  window.setTraditionalChineseTranslations = function(on) {
+    window.setChineseTranslationMode(on ? "on" : "off");
+  };
+
+  window.toggleTraditionalChineseTranslations = function() {
+    const cur = window.getChineseTranslationMode();
+    window.setChineseTranslationMode(cur === "off" ? "on" : "off");
+  };
+
+  function removeOldEasyModeSettingsGroup() {
+    const old = document.getElementById("easyModeSettingsGroup");
+    if (old) old.remove();
+    document.body.classList.remove("easy-mode");
+  }
+
+  window.renderLearningSettings = function() {
+    removeOldEasyModeSettingsGroup();
+
+    const source = window.getDictionarySource();
+    const zhOn = window.useTraditionalChineseTranslations();
+
+    const colBtn = document.getElementById("dictSourceCollegiateBtn");
+    const learnerBtn = document.getElementById("dictSourceLearnerBtn");
+    const sourceDesc = document.getElementById("dictSourceDesc");
+    const zhDesc    = document.getElementById("zhTranslateDesc");
+    const zhMode    = window.getChineseTranslationMode
+      ? window.getChineseTranslationMode()
+      : (zhOn ? "on" : "off");
+    const zhOffBtn  = document.getElementById("zhModeOffBtn");
+    const zhBlurBtn = document.getElementById("zhModeBlurBtn");
+    const zhOnBtn   = document.getElementById("zhModeOnBtn");
+
+    if (colBtn) colBtn.classList.toggle("active", source === "collegiate");
+    if (learnerBtn) learnerBtn.classList.toggle("active", source === "learner");
+
+    if (sourceDesc) {
+      sourceDesc.textContent = source === "learner"
+        ? "Learner dictionary — simpler English definitions"
+        : "Collegiate dictionary — fuller dictionary details";
+    }
+
+    if (zhDesc) {
+      const descMap = {
+        off:  "Off — English only",
+        blur: "Blur — swipe right to reveal translation",
+        on:   "On — always show Traditional Chinese"
+      };
+      zhDesc.textContent = descMap[zhMode] || "Off — English only";
+    }
+
+    if (zhOffBtn)  zhOffBtn.classList.toggle("active",  zhMode === "off");
+    if (zhBlurBtn) zhBlurBtn.classList.toggle("active", zhMode === "blur");
+    if (zhOnBtn)   zhOnBtn.classList.toggle("active",   zhMode === "on");
+  };
+
+  // Override the old Easy Mode settings renderer so it cannot re-add the toggle.
+  window.renderEasyModeSettingsRow = function() {
+    removeOldEasyModeSettingsGroup();
+    renderLearningSettings();
+  };
+
+  // Keep old Easy Mode disabled at Step 1. The new settings exist,
+  // but Step 2 will connect them to practice/dictionary behaviour.
+  try {
+    window.easyMode = false;
+    if (LS && LS.EASY_MODE) localStorage.setItem(LS.EASY_MODE, "0");
+    document.body.classList.remove("easy-mode");
+  } catch {}
+
+  function install() {
+    removeOldEasyModeSettingsGroup();
+    renderLearningSettings();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", install);
+  } else {
+    install();
+  }
+
+  const oldGoto = window.goto;
+  if (typeof oldGoto === "function" && !oldGoto.__learningSettingsWrapped) {
+    window.goto = function(page) {
+      const r = oldGoto.apply(this, arguments);
+      if (page === "settings") {
+        setTimeout(renderLearningSettings, 0);
+      }
+      return r;
+    };
+    window.goto.__learningSettingsWrapped = true;
+  }
+
+  // Defensive retry because the older Easy Mode block also injects later.
+  let tries = 0;
+  const t = setInterval(() => {
+    tries++;
+    install();
+    if (tries > 20) clearInterval(t);
+  }, 200);
+})();
+
+
+/* ============================================================
+   STEP 2: Connect Learning Settings to practice behaviour
+   - Dictionary Source controls Collegiate vs Learner content
+   - Traditional Chinese translation is independent
+   - Wrong answers: full-screen teaching overlay by default
+   - Correct answers: inline More Info + Continue by default
+   - More Info: Collegiate opens Word Details Sheet; Learner opens teaching overlay
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep2Installed) return;
+  window.__learningSettingsStep2Installed = true;
+
+  const DICT_SOURCE_KEY = "ielts_vocab_dict_source_v1";
+  const ZH_TRANSLATION_KEY = "ielts_vocab_zh_translation_v1";
+
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function currentSource() {
+    if (typeof window.getDictionarySource === "function") {
+      return window.getDictionarySource();
+    }
+    return safeGet(DICT_SOURCE_KEY) === "learner" ? "learner" : "collegiate";
+  }
+
+  function zhOn() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    return safeGet(ZH_TRANSLATION_KEY) === "1";
+  }
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  function wordKey(w) {
+    return w && (w.key || (typeof normalizeKey === "function" ? normalizeKey(w.word) : String(w.word || "").toLowerCase()));
+  }
+
+  // ---------- Dictionary fetching ----------
+  async function fetchLearnerEntry(w) {
+    if (!w) return null;
+
+    if (!window.easyDictCache) window.easyDictCache = {};
+
+    const key = wordKey(w);
+    if (key && window.easyDictCache[key]) return window.easyDictCache[key];
+
+    if (typeof window.fetchEasyDefinition === "function") {
+      const data = await window.fetchEasyDefinition(w);
+      if (data && key) window.easyDictCache[key] = data;
+      return data;
+    }
+
+    try {
+      const query = encodeURIComponent(w.word || w.key);
+      const r = await fetch(`/api/define-easy?word=${query}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      if (key) window.easyDictCache[key] = data;
+      return data;
+    } catch (err) {
+      console.warn("Learner dictionary fetch failed:", err);
+      return null;
+    }
+  }
+
+  async function fetchCollegiateEntry(w) {
+    if (!w) return null;
+
+    const key = wordKey(w);
+    if (key && typeof dictCache !== "undefined" && dictCache[key]) return dictCache[key];
+
+    if (typeof fetchDefinition === "function") {
+      try {
+        return await fetchDefinition(w);
+      } catch (err) {
+        console.warn("Collegiate dictionary fetch failed:", err);
+      }
+    }
+
+    return null;
+  }
+
+  window.fetchLearningDefinition = async function(w) {
+    return currentSource() === "learner"
+      ? fetchLearnerEntry(w)
+      : fetchCollegiateEntry(w);
+  };
+
+  // ---------- Normalise entries for teaching UI ----------
+  function firstCollegiateDefinition(entry) {
+    if (!entry) return "";
+
+    if (Array.isArray(entry.definitions) && entry.definitions.length) {
+      const d = entry.definitions[0];
+      if (typeof d === "string") return d;
+      if (d && typeof d.definition === "string") return d.definition;
+    }
+
+    if (Array.isArray(entry.shortDefinitions) && entry.shortDefinitions.length) {
+      return entry.shortDefinitions[0] || "";
+    }
+
+    const main = entry.mainEntries || [];
+    for (const ent of main) {
+      for (const meaning of (ent.meanings || [])) {
+        for (const seg of (meaning.definitionSegments || [])) {
+          if (seg.definition) return seg.definition;
+        }
+      }
+      if (Array.isArray(ent.shortDefinitions) && ent.shortDefinitions[0]) {
+        return ent.shortDefinitions[0];
+      }
+    }
+
+    return "";
+  }
+
+  function collectCollegiateDefinitions(entry) {
+    const out = [];
+
+    if (!entry) return out;
+
+    const main = entry.mainEntries || [];
+    for (const ent of main) {
+      const pos = ent.functionalLabel || ent.fl || "";
+      for (const meaning of (ent.meanings || [])) {
+        for (const seg of (meaning.definitionSegments || [])) {
+          if (!seg.definition) continue;
+          out.push({
+            text: seg.definition,
+            chinese: "",
+            partOfSpeech: pos,
+            examples: (seg.examples || []).map(ex => ex.text || String(ex || "")).filter(Boolean)
+          });
+        }
+      }
+      if (!out.length && Array.isArray(ent.shortDefinitions)) {
+        for (const d of ent.shortDefinitions) {
+          if (d) out.push({ text: d, chinese: "", partOfSpeech: pos, examples: [] });
+        }
+      }
+    }
+
+    if (!out.length && Array.isArray(entry.definitions)) {
+      for (const d of entry.definitions) {
+        const text = typeof d === "string" ? d : (d && d.definition) || "";
+        if (text) out.push({ text, chinese: "", partOfSpeech: entry.functionalLabel || "", examples: [] });
+      }
+    }
+
+    if (!out.length && Array.isArray(entry.shortDefinitions)) {
+      for (const d of entry.shortDefinitions) {
+        if (d) out.push({ text: d, chinese: "", partOfSpeech: entry.functionalLabel || "", examples: [] });
+      }
+    }
+
+    return out.slice(0, 8);
+  }
+
+  function collectLearnerDefinitions(entry, includeChinese) {
+    if (!entry || !Array.isArray(entry.definitions)) return [];
+    return entry.definitions.map(d => ({
+      text: d.text || d.definition || "",
+      chinese: includeChinese ? (d.chinese || "") : "",
+      partOfSpeech: d.partOfSpeech || d.functionalLabel || "",
+      examples: Array.isArray(d.examples) ? d.examples : []
+    })).filter(d => d.text).slice(0, 8);
+  }
+
+  async function collectLearningDefinitions(w) {
+    const source = currentSource();
+    const wantZh = zhOn();
+
+    if (source === "learner") {
+      const learner = await fetchLearnerEntry(w);
+      return {
+        source,
+        entry: learner,
+        defs: collectLearnerDefinitions(learner, wantZh),
+        pronunciation: learner?.pronunciation || "",
+        audioUrl: learner?.audio || learner?.audioUrl || ""
+      };
+    }
+
+    const collegiate = await fetchCollegiateEntry(w);
+    let defs = collectCollegiateDefinitions(collegiate);
+
+    // Current available Chinese logic comes from the Learner endpoint.
+    // For Collegiate + Chinese ON, keep the Collegiate English definition,
+    // and attach Learner Chinese lines by index as the best available translation support.
+    let learner = null;
+    if (wantZh) {
+      learner = await fetchLearnerEntry(w);
+      const zhDefs = collectLearnerDefinitions(learner, true);
+      defs = defs.map((d, i) => ({ ...d, chinese: zhDefs[i]?.chinese || "" }));
+    }
+
+    return {
+      source,
+      entry: collegiate,
+      learnerEntry: learner,
+      defs,
+      pronunciation: collegiate?.pronunciation || learner?.pronunciation || "",
+      audioUrl: collegiate?.audioUrl || collegiate?.audio || learner?.audio || learner?.audioUrl || ""
+    };
+  }
+
+  async function learningDefinitionText(w, allowChinese) {
+    const data = await collectLearningDefinitions(w);
+    const first = data.defs[0];
+    if (!first) return "No definition found.";
+    if (allowChinese && zhOn() && first.chinese) {
+      return `${first.text}\n${first.chinese}`;
+    }
+    return first.text;
+  }
+
+  function renderLearningDefinitionsHtml(data) {
+    const defs = data?.defs || [];
+    if (!defs.length) {
+      return `<div class="em-empty">No definition found for this word.</div>`;
+    }
+
+    return defs.map((d, i) => {
+      const examples = (d.examples || []).map(ex =>
+        `<div class="em-example">${h(ex)}</div>`
+      ).join("");
+      const pos = d.partOfSpeech ? `<span class="em-pos">${h(d.partOfSpeech)}</span>` : "";
+      const zh = zhOn() && d.chinese ? `<div class="em-def-zh">${h(d.chinese)}</div>` : "";
+      return `
+        <div class="em-def-item">
+          <div class="em-def-num">${i + 1}</div>
+          <div class="em-def-body">
+            ${pos}
+            <div class="em-def-en">${h(d.text || "")}</div>
+            ${zh}
+            ${examples ? `<div class="em-examples">${examples}</div>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // ---------- Full-screen teaching overlay ----------
+  function ensureLearningOverlay() {
+    let el = document.getElementById("easyAnswerOverlay");
+    if (el) return el;
+
+    el = document.createElement("div");
+    el.id = "easyAnswerOverlay";
+    el.className = "easy-answer-overlay";
+    el.innerHTML = `
+      <div class="em-header" id="emHeader">
+        <button class="em-close" onclick="closeEasyAnswerOverlay()">✕</button>
+        <div class="em-header-text" id="emHeaderText">—</div>
+        <button class="em-audio" id="emAudioBtn">🔊</button>
+      </div>
+      <div class="em-scroll" id="emScroll">
+        <div class="em-content" id="emContent"></div>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  window.openLearningAnswerOverlay = async function(opts) {
+    opts = opts || {};
+    const word = opts.word;
+    const isWrong = !!opts.isWrong;
+    const onContinue = opts.onContinue;
+    if (!word) return;
+
+    const el = ensureLearningOverlay();
+    const header = document.getElementById("emHeader");
+    const headerText = document.getElementById("emHeaderText");
+    const content = document.getElementById("emContent");
+    const audioBtn = document.getElementById("emAudioBtn");
+    const closeBtn = document.querySelector("#easyAnswerOverlay .em-close");
+
+    header.classList.toggle("wrong", isWrong);
+    header.classList.toggle("correct", !isWrong);
+
+    // Wrong answer must be read before continuing.
+    if (closeBtn) {
+      closeBtn.style.visibility = isWrong ? "hidden" : "";
+      closeBtn.disabled = isWrong;
+      closeBtn.setAttribute("aria-hidden", isWrong ? "true" : "false");
+    }
+
+    const sourceLabel = currentSource() === "learner" ? "Learner" : "Collegiate";
+    headerText.innerHTML = isWrong
+      ? `✗ The correct answer was<br><b>${h(word.word)}</b><br><span style="font-size:11px;font-weight:800;opacity:.75">${sourceLabel}${zhOn() ? " · 中文" : ""}</span>`
+      : `✓ More info<br><b>${h(word.word)}</b><br><span style="font-size:11px;font-weight:800;opacity:.75">${sourceLabel}${zhOn() ? " · 中文" : ""}</span>`;
+
+    content.innerHTML = `<div class="em-shimmer"></div><div class="em-shimmer" style="width:80%"></div><div class="em-shimmer" style="width:60%"></div>`;
+    el.classList.add("show");
+
+    const scrollEl = document.getElementById("emScroll");
+    if (scrollEl) scrollEl.scrollTop = 0;
+
+    let data = null;
+    try {
+      data = await collectLearningDefinitions(word);
+    } catch (err) {
+      console.warn("Learning overlay dictionary fetch failed:", err);
+    }
+
+    const audioUrl = data?.audioUrl || "";
+    audioBtn.disabled = !audioUrl;
+    audioBtn.onclick = () => {
+      if (audioUrl) {
+        try { new Audio(audioUrl).play(); } catch {}
+      } else if (typeof playAudioFor === "function") {
+        playAudioFor(word.key, audioBtn);
+      }
+    };
+
+    // Auto-play immediately after wrong answer.
+    if (isWrong) {
+      if (audioUrl) {
+        try { new Audio(audioUrl).play(); } catch {}
+      } else if (typeof playAudioFor === "function") {
+        try { playAudioFor(word.key, audioBtn); } catch {}
+      }
+    }
+
+    const pron = data?.pronunciation || "";
+    const pronHtml = pron ? `<div class="em-pron">/${h(pron)}/</div>` : "";
+    content.innerHTML = `
+      ${pronHtml}
+      <div class="em-def-list">${renderLearningDefinitionsHtml(data)}</div>
+      <button class="em-continue-btn" id="learningOverlayContinueBtn">Continue ›</button>
+    `;
+
+    const contBtn = document.getElementById("learningOverlayContinueBtn");
+    if (contBtn) {
+      contBtn.onclick = () => {
+        window.closeEasyAnswerOverlay();
+        if (typeof onContinue === "function") onContinue();
+      };
+    }
+  };
+
+  window.openEasyAnswerOverlay = window.openLearningAnswerOverlay;
+
+  window.closeEasyAnswerOverlay = function() {
+    const el = document.getElementById("easyAnswerOverlay");
+    if (el) el.classList.remove("show");
+  };
+
+  // ---------- Correct-answer inline actions ----------
+  function renderLearningCorrectActions(w) {
+    const body = document.getElementById("gameBody");
+    if (!body) return;
+    if (body.querySelector(".em-correct-actions")) return;
+
+    const row = document.createElement("div");
+    row.className = "em-correct-actions";
+    row.innerHTML = `
+      <button class="em-action-btn secondary" id="learningMoreInfoBtn">📖 More Info</button>
+      <button class="em-action-btn primary" id="learningContinueBtn">Continue ›</button>
+    `;
+    body.appendChild(row);
+
+    const more = document.getElementById("learningMoreInfoBtn");
+    const cont = document.getElementById("learningContinueBtn");
+
+    if (more) {
+      more.onclick = () => {
+        if (currentSource() === "collegiate" && typeof openSheet === "function") {
+          openSheet(w.key);
+        } else {
+          window.openLearningAnswerOverlay({
+            word: w,
+            isWrong: false,
+            onContinue: () => {}
+          });
+        }
+      };
+    }
+
+    if (cont) cont.onclick = () => {
+      if (typeof nextQuestionV2 === "function") nextQuestionV2();
+      else if (typeof nextQuestion === "function") nextQuestion();
+    };
+
+    // Correct answer can still play pronunciation once, but it does not block.
+    if (typeof practicePlayPronunciationAndThen === "function") {
+      practicePlayPronunciationAndThen(w.key, null, () => {});
+    } else if (typeof playAudioFor === "function") {
+      try { playAudioFor(w.key, null); } catch {}
+    }
+  }
+
+  // ---------- Practice render: use selected dictionary source in MC content ----------
+  function installRenderMCWrapper() {
+    const current = window.renderMCV2;
+    if (typeof current !== "function" || current.__learningStep2RenderWrapped) return false;
+
+    window.renderMCV2 = async function(w) {
+      const g = window.game;
+      if (!g || !w) return current.apply(this, arguments);
+
+      const others = (() => {
+        if (typeof sample === "function") {
+          return sample((g.pool || []).filter(x => x.key !== w.key), 3);
+        }
+        return (g.pool || []).filter(x => x.key !== w.key).slice(0, 3);
+      })();
+
+      while (others.length < 3) {
+        const extra = (words || []).find(x => x.key !== w.key && !others.some(o => o.key === x.key));
+        if (!extra) break;
+        others.push(extra);
+      }
+
+      const options = typeof sample === "function" ? sample([w, ...others], 4) : [w, ...others].slice(0, 4);
+      const isW2M = g.mode === "wordToMeaning";
+
+      const body = document.getElementById("gameBody");
+      if (!body) return;
+
+      body.innerHTML = `
+        <div class="game-prompt-label">${isW2M ? "Choose the meaning" : "Choose the word"}</div>
+        <div class="game-prompt small">Loading selected dictionary…</div>
+      `;
+
+      let prompt = "";
+      if (isW2M) {
+        prompt = w.word;
+      } else {
+        prompt = await learningDefinitionText(w, true);
+      }
+
+      const renderedOptions = await Promise.all(options.map(async o => {
+        if (isW2M) {
+          const text = await learningDefinitionText(o, true);
+          if (zhOn() && text.includes("\n")) {
+            const [en, ...zh] = text.split("\n");
+            return `<button class="game-option em-practice-option" data-key="${h(o.key)}"><div class="em-practice-en">${h(en)}</div><div class="em-practice-zh">${h(zh.join("\n"))}</div></button>`;
+          }
+          return `<button class="game-option" data-key="${h(o.key)}">${h(text)}</button>`;
+        }
+        return `<button class="game-option" data-key="${h(o.key)}">${h(o.word)}</button>`;
+      }));
+
+      const promptHtml = (!isW2M && zhOn() && prompt.includes("\n"))
+        ? (() => {
+            const [en, ...zh] = prompt.split("\n");
+            return `<div class="em-practice-en">${h(en)}</div><div class="em-practice-zh">${h(zh.join("\n"))}</div>`;
+          })()
+        : h(prompt);
+
+      body.innerHTML = `
+        <div class="game-prompt-label">${isW2M ? "Choose the meaning" : "Choose the word"}</div>
+        <div class="game-prompt ${isW2M ? "" : "small"}">${promptHtml}</div>
+        <div class="game-options">${renderedOptions.join("")}</div>
+      `;
+
+      body.querySelectorAll(".game-option").forEach(btn => {
+        btn.onclick = () => window.answerMCV2(btn.dataset.key, w.key, w);
+      });
+    };
+
+    window.renderMCV2.__learningStep2RenderWrapped = true;
+    return true;
+  }
+
+  // ---------- Answer handlers: default overlay/actions for all users ----------
+  function installAnswerWrappers() {
+    const mc = window.answerMCV2;
+    const sp = window.answerSpellV2;
+
+    if (typeof mc === "function" && !mc.__learningStep2AnswerWrapped) {
+      window.answerMCV2 = function(picked, correctKey, w) {
+        const ok = picked === correctKey;
+
+        if (typeof handleAnswer === "function") handleAnswer(w, ok);
+
+        let correctBtn = null;
+        document.querySelectorAll(".game-option").forEach(btn => {
+          if (btn.dataset.key === correctKey) {
+            btn.classList.add("correct");
+            correctBtn = btn;
+          } else if (btn.dataset.key === picked) {
+            btn.classList.add("wrong");
+          }
+          btn.disabled = true;
+        });
+
+        if (typeof renderGameTopbar === "function") renderGameTopbar();
+
+        if (ok) {
+          const body = document.getElementById("gameBody");
+          if (body && !body.querySelector(".learning-correct-result")) {
+            const result = document.createElement("div");
+            result.className = "learning-correct-result";
+            result.style.cssText = "margin-top:12px;text-align:center;color:#3F6212;font-weight:800";
+            result.textContent = "✓ Correct!";
+            body.appendChild(result);
+          }
+          renderLearningCorrectActions(w);
+        } else {
+          window.openLearningAnswerOverlay({
+            word: w,
+            isWrong: true,
+            onContinue: () => {
+              if (typeof nextQuestionV2 === "function") nextQuestionV2();
+              else if (typeof nextQuestion === "function") nextQuestion();
+            }
+          });
+        }
+      };
+      window.answerMCV2.__learningStep2AnswerWrapped = true;
+    }
+
+    if (typeof sp === "function" && !sp.__learningStep2AnswerWrapped) {
+      window.answerSpellV2 = function(w) {
+        const inp = document.getElementById("spellInput");
+        if (!inp) return;
+
+        const ans = inp.value;
+        const ok = typeof normalizeSpelling === "function"
+          ? normalizeSpelling(ans) === normalizeSpelling(w.word)
+          : String(ans || "").trim().toLowerCase() === String(w.word || "").trim().toLowerCase();
+
+        if (typeof handleAnswer === "function") handleAnswer(w, ok);
+
+        inp.classList.add(ok ? "correct" : "wrong");
+        inp.disabled = true;
+
+        document.getElementById("checkSpellBtn")?.remove();
+        document.getElementById("spellHintBtn")?.remove();
+
+        if (typeof renderGameTopbar === "function") renderGameTopbar();
+
+        if (ok) {
+          const body = document.getElementById("gameBody");
+          if (body && !body.querySelector(".learning-correct-result")) {
+            const result = document.createElement("div");
+            result.className = "learning-correct-result";
+            result.style.cssText = "margin-top:12px;text-align:center;color:#3F6212;font-weight:800";
+            result.textContent = "✓ Correct!";
+            body.appendChild(result);
+          }
+          renderLearningCorrectActions(w);
+        } else {
+          const body = document.getElementById("gameBody");
+          if (body && !body.querySelector(".learning-wrong-result")) {
+            const result = document.createElement("div");
+            result.className = "learning-wrong-result";
+            result.style.cssText = "margin-top:12px;text-align:center;color:#9F1239;font-weight:800";
+            result.innerHTML = `Correct: <b>${h(w.word)}</b>`;
+            body.appendChild(result);
+          }
+          window.openLearningAnswerOverlay({
+            word: w,
+            isWrong: true,
+            onContinue: () => {
+              if (typeof nextQuestionV2 === "function") nextQuestionV2();
+              else if (typeof nextQuestion === "function") nextQuestion();
+            }
+          });
+        }
+      };
+      window.answerSpellV2.__learningStep2AnswerWrapped = true;
+    }
+
+    return !!(window.answerMCV2?.__learningStep2AnswerWrapped && window.answerSpellV2?.__learningStep2AnswerWrapped);
+  }
+
+  // ---------- Settings changes should refresh relevant open views ----------
+  const oldSetSource = window.setDictionarySource;
+  if (typeof oldSetSource === "function" && !oldSetSource.__learningStep2Wrapped) {
+    window.setDictionarySource = function(source) {
+      const r = oldSetSource.apply(this, arguments);
+      if (typeof renderLearningSettings === "function") renderLearningSettings();
+      if (window.currentWord && document.getElementById("sheet")?.classList.contains("show")) {
+        if (typeof showWord === "function") showWord(window.currentWord.key);
+      }
+      return r;
+    };
+    window.setDictionarySource.__learningStep2Wrapped = true;
+  }
+
+  const oldSetZh = window.setTraditionalChineseTranslations;
+  if (typeof oldSetZh === "function" && !oldSetZh.__learningStep2Wrapped) {
+    window.setTraditionalChineseTranslations = function(on) {
+      const r = oldSetZh.apply(this, arguments);
+      if (typeof renderLearningSettings === "function") renderLearningSettings();
+      return r;
+    };
+    window.setTraditionalChineseTranslations.__learningStep2Wrapped = true;
+  }
+
+  // Do not use body.easy-mode as the controlling state anymore.
+  // It only affects old CSS. Keep it off so Collegiate sheets keep their tabs.
+  try {
+    document.body.classList.remove("easy-mode");
+    window.easyMode = false;
+  } catch {}
+
+  installRenderMCWrapper();
+  installAnswerWrappers();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    const a = installRenderMCWrapper();
+    const b = installAnswerWrappers();
+    try {
+      document.body.classList.remove("easy-mode");
+      window.easyMode = false;
+    } catch {}
+    if ((a && b) || tries > 40) clearInterval(timer);
+  }, 200);
+})();
+
+
+/* ============================================================
+   STEP 3: Connect Words tab info sheet to Learning Settings
+   - Collegiate source: keep normal full Word Details Sheet
+   - Learner source: show learner definitions in the same sheet
+   - Chinese translation setting works in Words tab too
+   - Related/Synonym tabs are hidden only when Learner source is selected
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep3WordsInstalled) return;
+  window.__learningSettingsStep3WordsInstalled = true;
+
+  const DICT_SOURCE_KEY = "ielts_vocab_dict_source_v1";
+  const ZH_TRANSLATION_KEY = "ielts_vocab_zh_translation_v1";
+
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function sourceNow() {
+    if (typeof window.getDictionarySource === "function") {
+      return window.getDictionarySource();
+    }
+    return safeGet(DICT_SOURCE_KEY) === "learner" ? "learner" : "collegiate";
+  }
+
+  function zhNow() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    return safeGet(ZH_TRANSLATION_KEY) === "1";
+  }
+
+  function isLearnerSource() {
+    return sourceNow() === "learner";
+  }
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  function k(w) {
+    if (!w) return "";
+    if (w.key) return w.key;
+    if (typeof normalizeKey === "function") return normalizeKey(w.word);
+    return String(w.word || "").trim().toLowerCase();
+  }
+
+  async function getLearnerEntryForWordsSheet(w) {
+    if (!w) return null;
+    const key = k(w);
+
+    if (!window.easyDictCache) window.easyDictCache = {};
+    if (key && window.easyDictCache[key]) return window.easyDictCache[key];
+
+    if (typeof window.fetchEasyDefinition === "function") {
+      try {
+        const data = await window.fetchEasyDefinition(w);
+        if (data && key) window.easyDictCache[key] = data;
+        return data;
+      } catch (err) {
+        console.warn("Words tab Learner fetchEasyDefinition failed:", err);
+      }
+    }
+
+    try {
+      const r = await fetch(`/api/define-easy?word=${encodeURIComponent(w.word || w.key)}`);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      if (key) window.easyDictCache[key] = data;
+      return data;
+    } catch (err) {
+      console.warn("Words tab Learner dictionary fetch failed:", err);
+      return null;
+    }
+  }
+
+  function learnerDefinitions(entry) {
+    if (!entry || !Array.isArray(entry.definitions)) return [];
+    return entry.definitions.map(d => ({
+      text: d.text || d.definition || "",
+      chinese: d.chinese || "",
+      partOfSpeech: d.partOfSpeech || d.functionalLabel || "",
+      examples: Array.isArray(d.examples) ? d.examples : []
+    })).filter(d => d.text).slice(0, 10);
+  }
+
+  function learnerSheetHtml(w, entry) {
+    const defs = learnerDefinitions(entry);
+    const pron = entry?.pronunciation || "";
+    const pronHtml = pron ? `<div class="em-pron">/${h(pron)}/</div>` : "";
+
+    if (!defs.length) {
+      return `
+        ${pronHtml}
+        <div class="empty-state" style="padding:20px 10px">
+          <div class="emoji">📭</div>
+          <div class="t">No Learner definition found</div>
+          <div class="d">Try Collegiate dictionary source in Settings.</div>
+        </div>
+        ${typeof tabBottomHtml === "function" ? tabBottomHtml(w) : ""}
+      `;
+    }
+
+    const html = defs.map((d, i) => {
+      const pos = d.partOfSpeech ? `<span class="em-pos">${h(d.partOfSpeech)}</span>` : "";
+      const zh = zhNow() && d.chinese ? `<div class="em-def-zh">${h(d.chinese)}</div>` : "";
+      const examples = (d.examples || []).map(ex => `<div class="em-example">${h(ex)}</div>`).join("");
+
+      return `
+        <div class="em-def-item">
+          <div class="em-def-num">${i + 1}</div>
+          <div class="em-def-body">
+            ${pos}
+            <div class="em-def-en">${h(d.text)}</div>
+            ${zh}
+            ${examples ? `<div class="em-examples">${examples}</div>` : ""}
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div class="dict-block-title">Learner dictionary${zhNow() ? " · Traditional Chinese" : ""}</div>
+      ${pronHtml}
+      <div class="em-def-list em-sheet-def-list">${html}</div>
+      ${typeof tabBottomHtml === "function" ? tabBottomHtml(w) : ""}
+    `;
+  }
+
+  function updateSheetTabsForSource() {
+    const sheet = document.getElementById("sheet");
+    if (!sheet) return;
+
+    const learner = isLearnerSource();
+    sheet.classList.toggle("learner-source", learner);
+
+    const relatedBtn = sheet.querySelector('.tab-row button[data-tab="related"]');
+    const synBtn = sheet.querySelector('.tab-row button[data-tab="synonyms"]');
+
+    if (relatedBtn) relatedBtn.style.display = learner ? "none" : "";
+    if (synBtn) synBtn.style.display = learner ? "none" : "";
+
+    // Learner source has no Related/Synonym data in this sheet.
+    if (learner && (window.sheetTab === "related" || window.sheetTab === "synonyms")) {
+      window.sheetTab = "meaning";
+      if (typeof setSheetActiveTabButton === "function") {
+        setSheetActiveTabButton("meaning");
+      }
+    }
+  }
+
+  const oldRenderSheetTab = window.renderSheetTab || (typeof renderSheetTab === "function" ? renderSheetTab : null);
+
+  if (typeof oldRenderSheetTab === "function" && !oldRenderSheetTab.__step3WordsWrapped) {
+    const wrapped = function(){
+      updateSheetTabsForSource();
+
+      // Collegiate source keeps the existing full word-details sheet.
+      if (!isLearnerSource()) {
+        return oldRenderSheetTab.apply(this, arguments);
+      }
+
+      // Learner source replaces the Meaning tab content only.
+      if (!window.currentWord && typeof currentWord !== "undefined") {
+        window.currentWord = currentWord;
+      }
+
+      const w = window.currentWord || (typeof currentWord !== "undefined" ? currentWord : null);
+      const c = document.getElementById("tabContent");
+      if (!w || !c) return oldRenderSheetTab.apply(this, arguments);
+
+      const activeTab = window.sheetTab || (typeof sheetTab !== "undefined" ? sheetTab : "meaning");
+      if (activeTab !== "meaning") {
+        window.sheetTab = "meaning";
+        if (typeof sheetTab !== "undefined") sheetTab = "meaning";
+        if (typeof setSheetActiveTabButton === "function") setSheetActiveTabButton("meaning");
+      }
+
+      c.innerHTML = `
+        <div class="dict-block-title">Learner dictionary</div>
+        <div class="shimmer tall"></div>
+        <div class="shimmer" style="width:80%"></div>
+        <div class="shimmer" style="width:60%"></div>
+        ${typeof tabBottomHtml === "function" ? tabBottomHtml(w) : ""}
+      `;
+
+      getLearnerEntryForWordsSheet(w).then(entry => {
+        const stillCurrent =
+          (window.currentWord && window.currentWord.key === w.key) ||
+          (typeof currentWord !== "undefined" && currentWord && currentWord.key === w.key);
+
+        if (!stillCurrent) return;
+
+        // Put learner data into old cache too, so existing audio button can work if needed.
+        if (entry && w.key) {
+          if (!window.easyDictCache) window.easyDictCache = {};
+          window.easyDictCache[w.key] = entry;
+        }
+
+        c.innerHTML = learnerSheetHtml(w, entry);
+
+        const audioBtn = document.getElementById("audioBtn");
+        if (audioBtn) {
+          audioBtn.disabled = !(entry?.audio || entry?.audioUrl);
+          audioBtn.onclick = () => {
+            const audioUrl = entry?.audio || entry?.audioUrl || "";
+            if (audioUrl) {
+              try { new Audio(audioUrl).play(); } catch {}
+            } else if (typeof playAudioFor === "function") {
+              playAudioFor(w.key, audioBtn);
+            }
+          };
+        }
+
+        const heroPron = document.getElementById("heroPron");
+        if (heroPron) heroPron.textContent = entry?.pronunciation ? `/${entry.pronunciation}/` : "";
+
+        const heroChips = document.getElementById("heroChips");
+        if (heroChips) {
+          const defs = learnerDefinitions(entry);
+          const pos = [...new Set(defs.map(d => d.partOfSpeech).filter(Boolean))];
+          heroChips.innerHTML = pos.length
+            ? pos.map(label => `<span class="gram-chip ${typeof gramClass === "function" ? gramClass(label) : "gram-other"}">${h(label)}</span>`).join("")
+            : "";
+        }
+      }).catch(err => {
+        console.warn("Learner Words sheet render failed:", err);
+        c.innerHTML = `
+          <div class="empty-state" style="padding:20px 10px">
+            <div class="emoji">📭</div>
+            <div class="t">Learner dictionary failed</div>
+            <div class="d">Try again or switch to Collegiate dictionary.</div>
+          </div>
+          ${typeof tabBottomHtml === "function" ? tabBottomHtml(w) : ""}
+        `;
+      });
+    };
+
+    wrapped.__step3WordsWrapped = true;
+    window.renderSheetTab = wrapped;
+
+    // Also update local binding when possible.
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  const oldShowWord = window.showWord || (typeof showWord === "function" ? showWord : null);
+  })();
+
+(function(){
+  if (window.__learningSettingsStep3ShowWordRefreshInstalled) return;
+  window.__learningSettingsStep3ShowWordRefreshInstalled = true;
+
+  function sourceNow3() {
+    if (typeof window.getDictionarySource === "function") return window.getDictionarySource();
+    try { return localStorage.getItem("ielts_vocab_dict_source_v1") === "collegiate" ? "collegiate" : "learner"; }
+    catch { return "learner"; }
+  }
+
+  function applyTabVisibility3() {
+    const learner = sourceNow3() === "learner";
+    const sheet = document.getElementById("sheet");
+    if (!sheet) return;
+
+    const relatedBtn = sheet.querySelector('.tab-row button[data-tab="related"]');
+    const synBtn = sheet.querySelector('.tab-row button[data-tab="synonyms"]');
+
+    if (relatedBtn) relatedBtn.style.display = learner ? "none" : "";
+    if (synBtn) synBtn.style.display = learner ? "none" : "";
+
+    if (learner && typeof sheetTab !== "undefined" && (sheetTab === "related" || sheetTab === "synonyms")) {
+      sheetTab = "meaning";
+      if (typeof setSheetActiveTabButton === "function") setSheetActiveTabButton("meaning");
+    }
+  }
+
+  const oldShow = window.showWord || (typeof showWord === "function" ? showWord : null);
+  if (typeof oldShow === "function" && !oldShow.__step3WordsShowWrapped) {
+    const wrappedShow = function(){
+      const r = oldShow.apply(this, arguments);
+      setTimeout(() => {
+        applyTabVisibility3();
+        if (typeof renderSheetTab === "function") renderSheetTab();
+      }, 0);
+      return r;
+    };
+    wrappedShow.__step3WordsShowWrapped = true;
+    window.showWord = wrappedShow;
+    try { showWord = wrappedShow; } catch {}
+  }
+
+  const oldSetTab = window.setSheetTab || (typeof setSheetTab === "function" ? setSheetTab : null);
+  if (typeof oldSetTab === "function" && !oldSetTab.__step3WordsTabWrapped) {
+    const wrappedTab = function(tabName){
+      if (sourceNow3() === "learner" && (tabName === "related" || tabName === "synonyms")) {
+        tabName = "meaning";
+      }
+      return oldSetTab.call(this, tabName);
+    };
+    wrappedTab.__step3WordsTabWrapped = true;
+    window.setSheetTab = wrappedTab;
+    try { setSheetTab = wrappedTab; } catch {}
+  }
+
+  const oldSetSource = window.setDictionarySource;
+  if (typeof oldSetSource === "function" && !oldSetSource.__step3WordsRefreshWrapped) {
+    window.setDictionarySource = function(){
+      const r = oldSetSource.apply(this, arguments);
+      setTimeout(() => {
+        applyTabVisibility3();
+        const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+        if (sheetOpen && typeof renderSheetTab === "function") renderSheetTab();
+      }, 0);
+      return r;
+    };
+    window.setDictionarySource.__step3WordsRefreshWrapped = true;
+  }
+
+  const oldSetZh = window.setTraditionalChineseTranslations;
+  if (typeof oldSetZh === "function" && !oldSetZh.__step3WordsRefreshWrapped) {
+    window.setTraditionalChineseTranslations = function(){
+      const r = oldSetZh.apply(this, arguments);
+      setTimeout(() => {
+        const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+        if (sheetOpen && typeof renderSheetTab === "function") renderSheetTab();
+      }, 0);
+      return r;
+    };
+    window.setTraditionalChineseTranslations.__step3WordsRefreshWrapped = true;
+  }
+
+  setTimeout(applyTabVisibility3, 200);
+})();
+
+
+/* ============================================================
+   STEP 4: Show Traditional Chinese in Words tab for Collegiate source
+   - Keeps original Collegiate Word Details Sheet
+   - When Chinese translation is ON, fetches Learner/translation data
+   - Adds Chinese lines under Collegiate definitions by order
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep4CollegiateChineseInstalled) return;
+  window.__learningSettingsStep4CollegiateChineseInstalled = true;
+
+  function sourceNow() {
+    if (typeof window.getDictionarySource === "function") {
+      return window.getDictionarySource();
+    }
+    try {
+      return localStorage.getItem("ielts_vocab_dict_source_v1") === "collegiate" ? "collegiate" : "learner";
+    } catch {
+      return "learner";
+    }
+  }
+
+  function zhOn() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    try {
+      return localStorage.getItem("ielts_vocab_zh_translation_v1") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  function wordKey(w) {
+    if (!w) return "";
+    if (w.key) return w.key;
+    if (typeof normalizeKey === "function") return normalizeKey(w.word);
+    return String(w.word || "").trim().toLowerCase();
+  }
+
+  async function fetchChineseLinesForWord(w) {
+    if (!w) return [];
+    const key = wordKey(w);
+
+    if (!window.__collegiateZhCache) window.__collegiateZhCache = {};
+    if (key && window.__collegiateZhCache[key]) return window.__collegiateZhCache[key];
+
+    let data = null;
+
+    if (window.easyDictCache && key && window.easyDictCache[key]) {
+      data = window.easyDictCache[key];
+    }
+
+    if (!data && typeof window.fetchEasyDefinition === "function") {
+      try {
+        data = await window.fetchEasyDefinition(w);
+      } catch (err) {
+        console.warn("Step 4 fetchEasyDefinition failed:", err);
+      }
+    }
+
+    if (!data) {
+      try {
+        const r = await fetch(`/api/define-easy?word=${encodeURIComponent(w.word || w.key)}`);
+        if (r.ok) data = await r.json();
+      } catch (err) {
+        console.warn("Step 4 /api/define-easy failed:", err);
+      }
+    }
+
+    const lines = [];
+    if (data && Array.isArray(data.definitions)) {
+      for (const d of data.definitions) {
+        const zh = d && (d.chinese || d.zh || d.translation || d.chineseTraditional);
+        if (zh) lines.push(String(zh).trim());
+      }
+    }
+
+    if (key) window.__collegiateZhCache[key] = lines;
+    return lines;
+  }
+
+  function addChineseToExistingCollegiateSheet(lines) {
+    const c = document.getElementById("tabContent");
+    if (!c || !Array.isArray(lines) || !lines.length) return;
+
+    // Remove old injected Chinese lines before refreshing.
+    c.querySelectorAll(".collegiate-zh-line").forEach(el => el.remove());
+
+    // Main Collegiate definitions in your sheet usually use .meaning-def.
+    let targets = Array.from(c.querySelectorAll(".meaning-def"));
+
+    // Fallback for older/simple sheet definitions.
+    if (!targets.length) {
+      targets = Array.from(c.querySelectorAll(".def-text"));
+    }
+
+    if (!targets.length) return;
+
+    targets.forEach((el, i) => {
+      const zh = lines[i];
+      if (!zh) return;
+
+      const div = document.createElement("div");
+      div.className = "collegiate-zh-line";
+      div.textContent = zh;
+
+      // Insert directly after the English definition.
+      el.insertAdjacentElement("afterend", div);
+    });
+  }
+
+  async function refreshCollegiateChineseForOpenSheet() {
+    if (sourceNow() !== "collegiate" || !zhOn()) return;
+
+    const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+    if (!sheetOpen) return;
+
+    const activeTab =
+      window.sheetTab ||
+      (typeof sheetTab !== "undefined" ? sheetTab : "meaning");
+
+    if (activeTab && activeTab !== "meaning") return;
+
+    const w =
+      window.currentWord ||
+      (typeof currentWord !== "undefined" ? currentWord : null);
+
+    if (!w) return;
+
+    const lines = await fetchChineseLinesForWord(w);
+
+    // Confirm user has not opened another word while fetch was running.
+    const still =
+      (window.currentWord && window.currentWord.key === w.key) ||
+      (typeof currentWord !== "undefined" && currentWord && currentWord.key === w.key);
+
+    if (!still) return;
+
+    addChineseToExistingCollegiateSheet(lines);
+  }
+
+  function removeCollegiateChineseLinesIfNeeded() {
+    if (sourceNow() === "collegiate" && zhOn()) return;
+    document.querySelectorAll(".collegiate-zh-line").forEach(el => el.remove());
+  }
+
+  // Wrap renderSheetTab so every normal Collegiate render gets Chinese afterward.
+  const oldRender =
+    window.renderSheetTab ||
+    (typeof renderSheetTab === "function" ? renderSheetTab : null);
+
+  if (typeof oldRender === "function" && !oldRender.__step4CollegiateZhWrapped) {
+    const wrapped = function(){
+      const r = oldRender.apply(this, arguments);
+      setTimeout(() => {
+        removeCollegiateChineseLinesIfNeeded();
+        refreshCollegiateChineseForOpenSheet();
+      }, 60);
+      return r;
+    };
+    wrapped.__step4CollegiateZhWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  // Wrap showWord as extra insurance because some code renders the sheet directly.
+  const oldShow =
+    window.showWord ||
+    (typeof showWord === "function" ? showWord : null);
+
+  if (typeof oldShow === "function" && !oldShow.__step4CollegiateZhWrapped) {
+    const wrappedShow = function(){
+      const r = oldShow.apply(this, arguments);
+      setTimeout(() => {
+        removeCollegiateChineseLinesIfNeeded();
+        refreshCollegiateChineseForOpenSheet();
+      }, 120);
+      return r;
+    };
+    wrappedShow.__step4CollegiateZhWrapped = true;
+    window.showWord = wrappedShow;
+    try { showWord = wrappedShow; } catch {}
+  }
+
+  // Refresh immediately when user toggles Chinese.
+  const oldSetZh = window.setTraditionalChineseTranslations;
+  if (typeof oldSetZh === "function" && !oldSetZh.__step4CollegiateZhWrapped) {
+    window.setTraditionalChineseTranslations = function(on) {
+      const r = oldSetZh.apply(this, arguments);
+      setTimeout(() => {
+        removeCollegiateChineseLinesIfNeeded();
+        if (on) refreshCollegiateChineseForOpenSheet();
+      }, 80);
+      return r;
+    };
+    window.setTraditionalChineseTranslations.__step4CollegiateZhWrapped = true;
+  }
+
+  // Refresh immediately when user changes source back to Collegiate.
+  const oldSetSource = window.setDictionarySource;
+  if (typeof oldSetSource === "function" && !oldSetSource.__step4CollegiateZhWrapped) {
+    window.setDictionarySource = function(source) {
+      const r = oldSetSource.apply(this, arguments);
+      setTimeout(() => {
+        removeCollegiateChineseLinesIfNeeded();
+        refreshCollegiateChineseForOpenSheet();
+      }, 120);
+      return r;
+    };
+    window.setDictionarySource.__step4CollegiateZhWrapped = true;
+  }
+
+  // Also retry briefly after load because several previous patches wrap sheet rendering late.
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    removeCollegiateChineseLinesIfNeeded();
+    refreshCollegiateChineseForOpenSheet();
+    if (tries > 12) clearInterval(timer);
+  }, 300);
+})();
+
+
+/* ============================================================
+   STEP 5 DISABLED: old /api/translate Related + Synonym tabs
+   - Works when Dictionary Source = Collegiate
+   - Works when Traditional Chinese translations = On
+   - Related tab: adds Chinese under related word pills and preview-card words
+   - Synonym tab: adds Chinese under overview, synonym explanations, examples
+   ============================================================ */
+(function(){
+  return; // disabled by Step 5B because /api/translate is not available
+  if (window.__learningSettingsStep5RelatedSynonymChineseInstalled) return;
+  window.__learningSettingsStep5RelatedSynonymChineseInstalled = true;
+
+  const CACHE_KEY = "ielts_vocab_tab_translation_cache_v1";
+
+  function sourceNow() {
+    if (typeof window.getDictionarySource === "function") return window.getDictionarySource();
+    try {
+      return localStorage.getItem("ielts_vocab_dict_source_v1") === "collegiate" ? "collegiate" : "learner";
+    } catch {
+      return "learner";
+    }
+  }
+
+  function zhOn() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    try {
+      return localStorage.getItem("ielts_vocab_zh_translation_v1") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function activeTab() {
+    return window.sheetTab || (typeof sheetTab !== "undefined" ? sheetTab : "meaning");
+  }
+
+  function currentOpenWord() {
+    return window.currentWord || (typeof currentWord !== "undefined" ? currentWord : null);
+  }
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  function loadCache() {
+    try {
+      return JSON.parse(localStorage.getItem(CACHE_KEY) || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveCache(cache) {
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify(cache || {}));
+    } catch {}
+  }
+
+  const translationCache = loadCache();
+
+  function cacheKey(text) {
+    return String(text || "").trim().replace(/\s+/g, " ").slice(0, 800);
+  }
+
+  function alreadyChinese(s) {
+    return /[\u3400-\u9fff]/.test(String(s || ""));
+  }
+
+  function cleanText(s) {
+    return String(s || "")
+      .replace(/\s+/g, " ")
+      .replace(/^["“”]+|["“”]+$/g, "")
+      .trim();
+  }
+
+  async function tryFetchJson(url, opts) {
+    try {
+      const r = await fetch(url, opts);
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  }
+
+  function extractTranslation(data) {
+    if (!data) return "";
+    if (typeof data === "string") return data;
+    if (data.translatedText) return data.translatedText;
+    if (data.translation) return data.translation;
+    if (data.chinese) return data.chinese;
+    if (data.zh) return data.zh;
+    if (data.text && alreadyChinese(data.text)) return data.text;
+    if (Array.isArray(data.translations) && data.translations[0]) {
+      return extractTranslation(data.translations[0]);
+    }
+    if (data.data && Array.isArray(data.data.translations) && data.data.translations[0]) {
+      return extractTranslation(data.data.translations[0]);
+    }
+    return "";
+  }
+
+  async function translateToZh(text) {
+    const raw = cleanText(text);
+    if (!raw || raw.length < 2 || alreadyChinese(raw)) return "";
+    const key = cacheKey(raw);
+
+    if (translationCache[key]) return translationCache[key];
+
+    let zh = "";
+
+    // Try common backend shapes. Only one needs to exist.
+    const postBodies = [
+      { text: raw, target: "zh-TW" },
+      { text: raw, target_language: "zh-TW" },
+      { q: raw, target: "zh-TW" },
+      { texts: [raw], target: "zh-TW" }
+    ];
+
+    for (const body of postBodies) {
+      const data = await tryFetchJson("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      zh = extractTranslation(data);
+      if (zh) break;
+    }
+
+    if (!zh) {
+      const qs1 = `/api/translate?text=${encodeURIComponent(raw)}&target=zh-TW`;
+      zh = extractTranslation(await tryFetchJson(qs1));
+    }
+
+    if (!zh) {
+      const qs2 = `/api/translate?q=${encodeURIComponent(raw)}&target=zh-TW`;
+      zh = extractTranslation(await tryFetchJson(qs2));
+    }
+
+    // Final fallback for single words: ask the existing Learner endpoint.
+    if (!zh && /^[A-Za-z][A-Za-z -]{1,40}$/.test(raw) && typeof window.fetchEasyDefinition === "function") {
+      try {
+        const fake = {
+          word: raw,
+          key: typeof normalizeKey === "function" ? normalizeKey(raw) : raw.toLowerCase()
+        };
+        const entry = await window.fetchEasyDefinition(fake);
+        const d = entry && Array.isArray(entry.definitions) ? entry.definitions[0] : null;
+        zh = d && (d.chinese || d.zh || d.translation || "");
+      } catch {}
+    }
+
+    if (zh && !alreadyChinese(raw)) {
+      translationCache[key] = zh;
+      saveCache(translationCache);
+    }
+
+    return zh || "";
+  }
+
+  function removeInjectedLines() {
+    document.querySelectorAll(".related-zh-line, .syn-zh-line, .tab-zh-loading").forEach(el => el.remove());
+  }
+
+  function appendZh(parent, zh, cls) {
+    if (!parent || !zh) return;
+    const old = parent.querySelector(":scope > ." + cls);
+    if (old) old.remove();
+
+    const div = document.createElement("div");
+    div.className = cls;
+    div.textContent = zh;
+    parent.appendChild(div);
+  }
+
+  async function injectRelatedChinese() {
+    const c = document.getElementById("tabContent");
+    if (!c) return;
+
+    const pillTargets = Array.from(c.querySelectorAll(".related-pill"))
+      .filter(el => !el.querySelector(".related-zh-line"))
+      .slice(0, 24);
+
+    for (const el of pillTargets) {
+      const en = cleanText(el.childNodes[0]?.textContent || el.textContent);
+      if (!en) continue;
+      const zh = await translateToZh(en);
+      if (zh) appendZh(el, zh, "related-zh-line");
+    }
+
+    const previewTargets = Array.from(c.querySelectorAll(".preview-card"))
+      .filter(card => !card.querySelector(".related-zh-line"))
+      .slice(0, 12);
+
+    for (const card of previewTargets) {
+      const wordEl = card.querySelector(".pc-word, .word");
+      const defEl = card.querySelector(".pc-def, .desc");
+      const mainText = cleanText(defEl?.textContent || wordEl?.textContent || "");
+      if (!mainText) continue;
+      const zh = await translateToZh(mainText);
+      if (zh) {
+        const host = defEl || wordEl || card;
+        const div = document.createElement("div");
+        div.className = "related-zh-line preview";
+        div.textContent = zh;
+        host.insertAdjacentElement("afterend", div);
+      }
+    }
+  }
+
+  async function injectSynonymChinese() {
+    const c = document.getElementById("tabContent");
+    if (!c) return;
+
+    const overviewTargets = Array.from(c.querySelectorAll(".syn-overview"))
+      .filter(el => !el.querySelector(".syn-zh-line"))
+      .slice(0, 4);
+
+    for (const el of overviewTargets) {
+      const zh = await translateToZh(el.textContent);
+      if (zh) appendZh(el, zh, "syn-zh-line");
+    }
+
+    const cardTargets = Array.from(c.querySelectorAll(".syn-card"))
+      .filter(card => !card.querySelector(".syn-zh-line"))
+      .slice(0, 16);
+
+    for (const card of cardTargets) {
+      const wordEl = card.querySelector(".syn-word");
+      const textEl = card.querySelector(".syn-text");
+      const exEl = card.querySelector(".syn-example");
+
+      if (wordEl) {
+        const zhWord = await translateToZh(wordEl.textContent);
+        if (zhWord) appendZh(wordEl, zhWord, "syn-zh-line word");
+      }
+
+      if (textEl) {
+        const zhText = await translateToZh(textEl.textContent);
+        if (zhText) appendZh(textEl, zhText, "syn-zh-line");
+      }
+
+      if (exEl) {
+        const zhEx = await translateToZh(exEl.textContent);
+        if (zhEx) appendZh(exEl, zhEx, "syn-zh-line example");
+      }
+    }
+  }
+
+  async function refreshTabChinese() {
+    if (!zhOn() || sourceNow() !== "collegiate") {
+      removeInjectedLines();
+      return;
+    }
+
+    const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+    if (!sheetOpen) return;
+
+    const tab = activeTab();
+    if (tab !== "related" && tab !== "synonyms") return;
+
+    const w = currentOpenWord();
+    if (!w) return;
+
+    const wordKeyBefore = w.key;
+    const tabBefore = tab;
+
+    // Let the original renderer finish first.
+    await new Promise(resolve => setTimeout(resolve, 120));
+
+    const stillWord = currentOpenWord();
+    if (!stillWord || stillWord.key !== wordKeyBefore || activeTab() !== tabBefore) return;
+
+    if (tabBefore === "related") {
+      await injectRelatedChinese();
+    } else if (tabBefore === "synonyms") {
+      await injectSynonymChinese();
+    }
+  }
+
+  // Wrap renderSheetTab, because Related/Synonym content is recreated each time.
+  const oldRender =
+    window.renderSheetTab ||
+    (typeof renderSheetTab === "function" ? renderSheetTab : null);
+
+  if (typeof oldRender === "function" && !oldRender.__step5RelatedSynZhWrapped) {
+    const wrapped = function(){
+      const r = oldRender.apply(this, arguments);
+      setTimeout(refreshTabChinese, 160);
+      return r;
+    };
+    wrapped.__step5RelatedSynZhWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  // Wrap tab switching directly for reliability.
+  const oldSetTab =
+    window.setSheetTab ||
+    (typeof setSheetTab === "function" ? setSheetTab : null);
+
+  if (typeof oldSetTab === "function" && !oldSetTab.__step5RelatedSynZhWrapped) {
+    const wrappedTab = function(tabName) {
+      const r = oldSetTab.apply(this, arguments);
+      setTimeout(refreshTabChinese, 220);
+      return r;
+    };
+    wrappedTab.__step5RelatedSynZhWrapped = true;
+    window.setSheetTab = wrappedTab;
+    try { setSheetTab = wrappedTab; } catch {}
+  }
+
+  // Refresh if user toggles Chinese while a Related/Synonym tab is open.
+  const oldSetZh = window.setTraditionalChineseTranslations;
+  if (typeof oldSetZh === "function" && !oldSetZh.__step5RelatedSynZhWrapped) {
+    window.setTraditionalChineseTranslations = function(on) {
+      const r = oldSetZh.apply(this, arguments);
+      setTimeout(() => {
+        if (!on) removeInjectedLines();
+        else refreshTabChinese();
+      }, 180);
+      return r;
+    };
+    window.setTraditionalChineseTranslations.__step5RelatedSynZhWrapped = true;
+  }
+
+  // Refresh if user changes source back to Collegiate.
+  const oldSetSource = window.setDictionarySource;
+  if (typeof oldSetSource === "function" && !oldSetSource.__step5RelatedSynZhWrapped) {
+    window.setDictionarySource = function(source) {
+      const r = oldSetSource.apply(this, arguments);
+      setTimeout(refreshTabChinese, 240);
+      return r;
+    };
+    window.setDictionarySource.__step5RelatedSynZhWrapped = true;
+  }
+
+  setTimeout(refreshTabChinese, 500);
+})();
+
+
+/* ============================================================
+   STEP 5B: Related + Synonym Chinese via Learner dictionary only
+   - Does NOT call /api/translate
+   - Uses existing fetchEasyDefinition() or /api/define-easy
+   - Prevents duplicate Chinese lines
+   - Works when Collegiate + Traditional Chinese is ON
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep5BLearnerChineseInstalled) return;
+  window.__learningSettingsStep5BLearnerChineseInstalled = true;
+
+  function sourceNow() {
+    if (typeof window.getDictionarySource === "function") return window.getDictionarySource();
+    try {
+      return localStorage.getItem("ielts_vocab_dict_source_v1") === "collegiate" ? "collegiate" : "learner";
+    } catch {
+      return "learner";
+    }
+  }
+
+  function zhOn() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    try {
+      return localStorage.getItem("ielts_vocab_zh_translation_v1") === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function activeTab() {
+    return window.sheetTab || (typeof sheetTab !== "undefined" ? sheetTab : "meaning");
+  }
+
+  function currentOpenWord() {
+    return window.currentWord || (typeof currentWord !== "undefined" ? currentWord : null);
+  }
+
+  function cleanText(s) {
+    return String(s || "")
+      .replace(/\s+/g, " ")
+      .replace(/^["“”]+|["“”]+$/g, "")
+      .trim();
+  }
+
+  function normalizeWordText(s) {
+    return cleanText(s)
+      .replace(/^[^A-Za-z]+/, "")
+      .replace(/[^A-Za-z -]+$/g, "")
+      .trim();
+  }
+
+  function alreadyChinese(s) {
+    return /[\u3400-\u9fff]/.test(String(s || ""));
+  }
+
+  function wordKeyFromText(text) {
+    if (typeof normalizeKey === "function") return normalizeKey(text);
+    return String(text || "").trim().toLowerCase();
+  }
+
+  function getFirstChineseFromLearnerEntry(entry) {
+    if (!entry || !Array.isArray(entry.definitions)) return "";
+
+    for (const d of entry.definitions) {
+      const zh = d && (d.chinese || d.zh || d.translation || d.chineseTraditional);
+      if (zh && alreadyChinese(zh)) return cleanText(zh);
+    }
+
+    return "";
+  }
+
+  async function getLearnerChineseForWord(wordText) {
+    const word = normalizeWordText(wordText);
+    if (!word || word.length < 2 || alreadyChinese(word)) return "";
+
+    if (!window.__learnerWordZhCache) window.__learnerWordZhCache = {};
+    const key = wordKeyFromText(word);
+    if (window.__learnerWordZhCache[key]) return window.__learnerWordZhCache[key];
+
+    let entry = null;
+
+    if (window.easyDictCache && window.easyDictCache[key]) {
+      entry = window.easyDictCache[key];
+    }
+
+    if (!entry && typeof window.fetchEasyDefinition === "function") {
+      try {
+        entry = await window.fetchEasyDefinition({ word, key });
+      } catch (err) {
+        console.warn("Step 5B fetchEasyDefinition failed:", word, err);
+      }
+    }
+
+    if (!entry) {
+      try {
+        const r = await fetch(`/api/define-easy?word=${encodeURIComponent(word)}`);
+        if (r.ok) entry = await r.json();
+      } catch (err) {
+        console.warn("Step 5B /api/define-easy failed:", word, err);
+      }
+    }
+
+    const zh = getFirstChineseFromLearnerEntry(entry);
+    if (zh) window.__learnerWordZhCache[key] = zh;
+    return zh || "";
+  }
+
+  function removeStep5OldDuplicates() {
+    const root = document.getElementById("tabContent") || document;
+
+    // Remove duplicate Chinese lines under the same parent.
+    const groups = new WeakMap();
+
+    root.querySelectorAll(".related-zh-line, .syn-zh-line").forEach(el => {
+      const parent = el.parentElement;
+      if (!parent) return;
+
+      let seen = groups.get(parent);
+      if (!seen) {
+        seen = new Set();
+        groups.set(parent, seen);
+      }
+
+      const text = cleanText(el.textContent);
+      if (!text) {
+        el.remove();
+        return;
+      }
+
+      if (seen.has(text)) {
+        el.remove();
+      } else {
+        seen.add(text);
+      }
+    });
+  }
+
+  function appendOnce(parent, className, text) {
+    if (!parent || !text) return;
+
+    const zh = cleanText(text);
+    if (!zh) return;
+
+    const existing = Array.from(parent.querySelectorAll(":scope > ." + className))
+      .some(el => cleanText(el.textContent) === zh);
+
+    if (existing) return;
+
+    const div = document.createElement("div");
+    div.className = className;
+    div.textContent = zh;
+    parent.appendChild(div);
+
+    removeStep5OldDuplicates();
+  }
+
+  async function injectRelatedChinese() {
+    const c = document.getElementById("tabContent");
+    if (!c) return;
+
+    const relatedPills = Array.from(c.querySelectorAll(".related-pill")).slice(0, 30);
+
+    for (const pill of relatedPills) {
+      const raw = cleanText(pill.childNodes[0]?.textContent || pill.textContent);
+      const word = normalizeWordText(raw);
+      if (!word) continue;
+
+      const zh = await getLearnerChineseForWord(word);
+      if (zh) appendOnce(pill, "related-zh-line", zh);
+    }
+
+    const previewCards = Array.from(c.querySelectorAll(".preview-card")).slice(0, 16);
+
+    for (const card of previewCards) {
+      const wordEl = card.querySelector(".pc-word, .word");
+      const host = wordEl || card;
+      const word = normalizeWordText(wordEl?.textContent || "");
+      if (!word) continue;
+
+      const zh = await getLearnerChineseForWord(word);
+      if (zh) appendOnce(host, "related-zh-line preview", zh);
+    }
+  }
+
+  async function injectSynonymChinese() {
+    const c = document.getElementById("tabContent");
+    if (!c) return;
+
+    const synCards = Array.from(c.querySelectorAll(".syn-card")).slice(0, 24);
+
+    for (const card of synCards) {
+      const wordEl = card.querySelector(".syn-word");
+      if (!wordEl) continue;
+
+      const word = normalizeWordText(wordEl.textContent);
+      if (!word) continue;
+
+      const zh = await getLearnerChineseForWord(word);
+      if (zh) appendOnce(wordEl, "syn-zh-line word", zh);
+    }
+  }
+
+  async function refreshRelatedSynonymChinese() {
+    if (!zhOn() || sourceNow() !== "collegiate") {
+      document.querySelectorAll(".related-zh-line, .syn-zh-line").forEach(el => el.remove());
+      return;
+    }
+
+    const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+    if (!sheetOpen) return;
+
+    const tab = activeTab();
+    if (tab !== "related" && tab !== "synonyms") return;
+
+    const w = currentOpenWord();
+    if (!w) return;
+
+    const wordBefore = w.key;
+    const tabBefore = tab;
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    const still = currentOpenWord();
+    if (!still || still.key !== wordBefore || activeTab() !== tabBefore) return;
+
+    if (tabBefore === "related") {
+      await injectRelatedChinese();
+    } else {
+      await injectSynonymChinese();
+    }
+
+    removeStep5OldDuplicates();
+  }
+
+  // Wrap renderSheetTab.
+  const oldRender =
+    window.renderSheetTab ||
+    (typeof renderSheetTab === "function" ? renderSheetTab : null);
+
+  if (typeof oldRender === "function" && !oldRender.__step5BLearnerChineseWrapped) {
+    const wrapped = function() {
+      const r = oldRender.apply(this, arguments);
+      setTimeout(refreshRelatedSynonymChinese, 220);
+      setTimeout(removeStep5OldDuplicates, 500);
+      return r;
+    };
+    wrapped.__step5BLearnerChineseWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  // Wrap tab switching.
+  const oldSetTab =
+    window.setSheetTab ||
+    (typeof setSheetTab === "function" ? setSheetTab : null);
+
+  if (typeof oldSetTab === "function" && !oldSetTab.__step5BLearnerChineseWrapped) {
+    const wrappedTab = function() {
+      const r = oldSetTab.apply(this, arguments);
+      setTimeout(refreshRelatedSynonymChinese, 260);
+      setTimeout(removeStep5OldDuplicates, 600);
+      return r;
+    };
+    wrappedTab.__step5BLearnerChineseWrapped = true;
+    window.setSheetTab = wrappedTab;
+    try { setSheetTab = wrappedTab; } catch {}
+  }
+
+  // Wrap Chinese setting.
+  const oldSetZh = window.setTraditionalChineseTranslations;
+  if (typeof oldSetZh === "function" && !oldSetZh.__step5BLearnerChineseWrapped) {
+    window.setTraditionalChineseTranslations = function(on) {
+      const r = oldSetZh.apply(this, arguments);
+      setTimeout(() => {
+        if (!on) {
+          document.querySelectorAll(".related-zh-line, .syn-zh-line").forEach(el => el.remove());
+        } else {
+          refreshRelatedSynonymChinese();
+        }
+      }, 240);
+      return r;
+    };
+    window.setTraditionalChineseTranslations.__step5BLearnerChineseWrapped = true;
+  }
+
+  // MutationObserver dedupe, because tab content is rendered asynchronously.
+  function installObserver() {
+    const c = document.getElementById("tabContent");
+    if (!c || c.__step5BLearnerChineseObserved) return;
+
+    const obs = new MutationObserver(() => {
+      clearTimeout(c.__step5BDedupeTimer);
+      c.__step5BDedupeTimer = setTimeout(removeStep5OldDuplicates, 80);
+    });
+
+    obs.observe(c, { childList: true, subtree: true });
+    c.__step5BLearnerChineseObserved = true;
+  }
+
+  installObserver();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    installObserver();
+    refreshRelatedSynonymChinese();
+    removeStep5OldDuplicates();
+    if (tries > 15) clearInterval(timer);
+  }, 400);
+})();
+
+
+/* ============================================================
+   STEP 6: Remove left/right swipe navigation globally
+   - No sheet swipe left/right to mark Need Practice / Known
+   - No word-card horizontal swipe marking
+   - Keeps normal tap, vertical scroll, buttons, and sheet reading
+   ============================================================ */
+(function(){
+  if (window.__removeSwipeNavigationStep6Installed) return;
+  window.__removeSwipeNavigationStep6Installed = true;
+
+  function noopSwipeAction(ev) {
+    if (ev && typeof ev.preventDefault === "function") {
+      // Do not prevent vertical scroll; only old direct callers are neutralised.
+    }
+    return false;
+  }
+
+  // 1) Disable common old swipe action function names if they exist.
+  const names = [
+    "doSwipeLeft",
+    "doSwipeRight",
+    "handleSwipeLeft",
+    "handleSwipeRight",
+    "sheetSwipeLeft",
+    "sheetSwipeRight",
+    "markCurrentWordKnown",
+    "markCurrentWordNeedPractice",
+    "swipeMarkKnown",
+    "swipeMarkLearning"
+  ];
+
+  for (const name of names) {
+    try {
+      if (typeof window[name] === "function") {
+        window[name] = noopSwipeAction;
+      }
+    } catch {}
+  }
+
+  // 2) Hide and reset the sheet swipe overlay.
+  function hideSwipeUi() {
+    const overlay = document.getElementById("swipeOverlay");
+    if (overlay) {
+      overlay.style.display = "none";
+      overlay.style.opacity = "0";
+      overlay.classList.remove("left", "right", "show");
+    }
+
+    const left = document.getElementById("swipeLabelLeft");
+    const right = document.getElementById("swipeLabelRight");
+    if (left) left.style.display = "none";
+    if (right) right.style.display = "none";
+
+    document.querySelectorAll(".swipe-hint, .swipe-feedback").forEach(el => {
+      el.style.display = "none";
+      el.classList.remove("show", "unknown");
+    });
+
+    const sheet = document.getElementById("sheet");
+    if (sheet) {
+      sheet.classList.remove("swiping");
+      sheet.style.transition = "";
+      if (sheet.classList.contains("show")) {
+        sheet.style.transform = "translateY(0)";
+      }
+    }
+  }
+
+  // 3) Stop old touch handlers from turning horizontal movement into actions.
+  // This does NOT block normal clicking or vertical scrolling.
+  function installSwipeBlockers() {
+    const sheet = document.getElementById("sheet");
+    const sheetBody = document.getElementById("sheetBody");
+    const wordsBody = document.getElementById("wordsBody");
+
+    [sheet, sheetBody, wordsBody].forEach(el => {
+      if (!el || el.__step6SwipeBlockInstalled) return;
+
+      let sx = 0;
+      let sy = 0;
+      let horizontal = false;
+
+      el.addEventListener("touchstart", e => {
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+        sx = t.clientX;
+        sy = t.clientY;
+        horizontal = false;
+      }, { passive: true, capture: true });
+
+      el.addEventListener("touchmove", e => {
+        const t = e.touches && e.touches[0];
+        if (!t) return;
+
+        const dx = t.clientX - sx;
+        const dy = t.clientY - sy;
+
+        // If the gesture is clearly horizontal, stop old swipe handlers.
+        // If it is vertical, allow normal scrolling.
+        if (Math.abs(dx) > 22 && Math.abs(dx) > Math.abs(dy) * 1.25) {
+          horizontal = true;
+          e.stopImmediatePropagation();
+          hideSwipeUi();
+        }
+      }, { passive: true, capture: true });
+
+      el.addEventListener("touchend", e => {
+        if (horizontal) {
+          e.stopImmediatePropagation();
+          hideSwipeUi();
+        }
+        horizontal = false;
+      }, { passive: true, capture: true });
+
+      el.__step6SwipeBlockInstalled = true;
+    });
+  }
+
+  // 4) Disable left/right keyboard navigation if old code uses arrow keys.
+  document.addEventListener("keydown", e => {
+    const tag = (e.target && e.target.tagName || "").toLowerCase();
+    const typing = tag === "input" || tag === "textarea" || e.target?.isContentEditable;
+    if (typing) return;
+
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const sheetOpen = document.getElementById("sheet")?.classList.contains("show");
+      if (sheetOpen) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        hideSwipeUi();
+      }
+    }
+  }, true);
+
+  // 5) Add class for CSS-level blocking/hiding.
+  try {
+    document.documentElement.classList.add("no-swipe-navigation");
+    document.body.classList.add("no-swipe-navigation");
+  } catch {}
+
+  hideSwipeUi();
+  installSwipeBlockers();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    hideSwipeUi();
+    installSwipeBlockers();
+
+    // Re-disable functions in case older patches reassign them late.
+    for (const name of names) {
+      try {
+        if (typeof window[name] === "function" && window[name] !== noopSwipeAction) {
+          window[name] = noopSwipeAction;
+        }
+      } catch {}
+    }
+
+    if (tries > 20) clearInterval(timer);
+  }, 300);
+})();
+
+
+/* ============================================================
+   STEP 7: Lock legacy Easy Mode OFF
+   - Removes visible Easy Mode behaviour
+   - Keeps reused overlay/classes available for new Learning Settings
+   - Prevents old Easy Mode code from hiding Related/Synonym tabs
+   - Prevents old Easy Mode toggle from coming back
+   ============================================================ */
+(function(){
+  if (window.__learningSettingsStep7LockEasyModeOffInstalled) return;
+  window.__learningSettingsStep7LockEasyModeOffInstalled = true;
+
+  function safeSet(key, value) {
+    try { localStorage.setItem(key, value); } catch {}
+  }
+
+  function removeEasyModeBodyClass() {
+    try {
+      document.body.classList.remove("easy-mode");
+      document.documentElement.classList.remove("easy-mode");
+    } catch {}
+  }
+
+  function removeOldEasyModeRows() {
+    document.querySelectorAll(
+      "#easyModeSettingsGroup, .easy-mode-settings-group, [data-easy-mode-setting='1']"
+    ).forEach(el => el.remove());
+
+    // Remove any settings row whose visible label is exactly Easy Mode.
+    document.querySelectorAll(".settings-row").forEach(row => {
+      const label = row.querySelector(".l");
+      const text = (label?.childNodes?.[0]?.textContent || label?.textContent || "").trim();
+      if (/^Easy Mode$/i.test(text)) row.remove();
+    });
+
+    // Remove old group label if it becomes empty and was only for Easy Mode.
+    document.querySelectorAll(".settings-group-label").forEach(label => {
+      const text = (label.textContent || "").trim();
+      if (/^Easy Mode$/i.test(text)) label.remove();
+    });
+  }
+
+  function keepNewLearningSettingsVisible() {
+    const group = document.getElementById("learningSettingsGroup");
+    const label = document.getElementById("learningSettingsLabel");
+
+    if (label) label.style.display = "";
+    if (group) group.style.display = "";
+
+    if (typeof renderLearningSettings === "function") {
+      try { renderLearningSettings(); } catch {}
+    }
+  }
+
+  function enforce() {
+    try {
+      window.easyMode = false;
+
+      if (typeof LS !== "undefined" && LS && LS.EASY_MODE) {
+        safeSet(LS.EASY_MODE, "0");
+      }
+
+      // Some previous code uses this cache key. Keep it harmless.
+      if (typeof LS !== "undefined" && LS && LS.EASY_DICT) {
+        // Do not clear cache; just do not let it imply Easy Mode.
+      }
+    } catch {}
+
+    removeEasyModeBodyClass();
+    removeOldEasyModeRows();
+    keepNewLearningSettingsVisible();
+  }
+
+  // Neutralise old toggle/setters if they exist.
+  window.isEasyMode = function(){ return false; };
+  window.setEasyMode = function(){
+    enforce();
+    if (typeof toast === "function") {
+      toast("Easy Mode was replaced by Learning options");
+    }
+    return false;
+  };
+  window.toggleEasyMode = function(){
+    enforce();
+    if (typeof toast === "function") {
+      toast("Use Dictionary Source and Chinese translations in Settings");
+    }
+    return false;
+  };
+  window.renderEasyModeSettingsRow = function(){
+    enforce();
+  };
+
+  // Do not allow any code to re-add body.easy-mode.
+  const oldClassListAdd = DOMTokenList.prototype.add;
+  if (!oldClassListAdd.__step7EasyModeGuardWrapped) {
+    DOMTokenList.prototype.add = function(...tokens) {
+      const filtered = tokens.filter(t => t !== "easy-mode");
+      const result = filtered.length ? oldClassListAdd.apply(this, filtered) : undefined;
+      try {
+        if (tokens.includes("easy-mode")) {
+          setTimeout(removeEasyModeBodyClass, 0);
+        }
+      } catch {}
+      return result;
+    };
+    DOMTokenList.prototype.add.__step7EasyModeGuardWrapped = true;
+  }
+
+  // Settings navigation can trigger old renderers, so enforce after navigation.
+  const oldGoto = window.goto;
+  if (typeof oldGoto === "function" && !oldGoto.__step7EasyModeGuardWrapped) {
+    window.goto = function(page) {
+      const r = oldGoto.apply(this, arguments);
+      setTimeout(enforce, 0);
+      setTimeout(enforce, 120);
+      return r;
+    };
+    window.goto.__step7EasyModeGuardWrapped = true;
+  }
+
+  // Sheet tab rendering can be affected by body.easy-mode CSS; enforce before/after.
+  const oldRenderSheetTab =
+    window.renderSheetTab ||
+    (typeof renderSheetTab === "function" ? renderSheetTab : null);
+
+  if (typeof oldRenderSheetTab === "function" && !oldRenderSheetTab.__step7EasyModeGuardWrapped) {
+    const wrapped = function() {
+      enforce();
+      const r = oldRenderSheetTab.apply(this, arguments);
+      setTimeout(enforce, 0);
+      return r;
+    };
+    wrapped.__step7EasyModeGuardWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  enforce();
+
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries++;
+    enforce();
+    if (tries > 20) clearInterval(timer);
+  }, 300);
+})();
+
+/* ============================================================
+   RECOVERY 2: Restore proper boot + sheet/backdrop UI
+   - Boot stays visible while vocabulary is not ready
+   - Boot hides only after words are loaded and app rendered
+   - Backdrop remains visible/clickable when word sheet opens
+   - Words header remains visible behind the sheet/backdrop
+   - Does not change dictionary/practice logic
+   ============================================================ */
+(function(){
+  if (window.__recovery2RestoreUiInstalled) return;
+  window.__recovery2RestoreUiInstalled = true;
+
+  function hasWordsLoaded() {
+    try {
+      if (Array.isArray(words) && words.length > 0) return true;
+    } catch {}
+    try {
+      if (Array.isArray(window.words) && window.words.length > 0) return true;
+    } catch {}
+    return false;
+  }
+
+  function showBoot(reason) {
+    const boot = document.getElementById("boot");
+    if (!boot) return;
+
+    boot.style.display = "";
+    boot.style.opacity = "";
+    boot.style.pointerEvents = "";
+    boot.style.zIndex = "";
+    boot.classList.remove("hide");
+
+    document.body.classList.remove("app-ready");
+    console.log("[Recovery2] boot shown:", reason);
+  }
+
+  function hideBoot(reason) {
+    if (!hasWordsLoaded()) return false;
+
+    const boot = document.getElementById("boot");
+    if (boot) {
+      boot.classList.add("hide");
+      boot.style.display = "";
+      boot.style.opacity = "";
+      boot.style.pointerEvents = "";
+      boot.style.zIndex = "";
+    }
+
+    document.body.classList.add("app-ready");
+    console.log("[Recovery2] boot hidden:", reason);
+    return true;
+  }
+
+  function restoreSheetBackdropState(reason) {
+    const sheet = document.getElementById("sheet");
+    const backdrop = document.getElementById("backdrop");
+    const wordsHeader = document.getElementById("wordsHeader");
+
+    const sheetOpen = !!(sheet && sheet.classList.contains("show"));
+
+    if (sheetOpen) {
+      document.body.classList.add("sheet-open");
+      document.documentElement.classList.add("sheet-open");
+
+      if (backdrop) {
+        backdrop.classList.add("show");
+        backdrop.style.pointerEvents = "";
+        backdrop.style.opacity = "";
+        backdrop.style.display = "";
+      }
+
+      if (wordsHeader) {
+        wordsHeader.style.visibility = "";
+        wordsHeader.style.opacity = "";
+        wordsHeader.style.pointerEvents = "";
+      }
+    } else {
+      document.body.classList.remove("sheet-open");
+      document.documentElement.classList.remove("sheet-open");
+
+      if (backdrop) {
+        backdrop.classList.remove("show");
+        backdrop.style.pointerEvents = "";
+        backdrop.style.opacity = "";
+        backdrop.style.display = "";
+      }
+    }
+
+    console.log("[Recovery2] sheet/backdrop restored:", reason, { sheetOpen });
+  }
+
+  // Restore boot visibility at startup, then hide only when vocabulary is ready.
+  showBoot("startup");
+
+  const bootTimers = [300, 700, 1200, 2000, 3500, 6000, 9000];
+  bootTimers.forEach(ms => {
+    setTimeout(() => {
+      if (!hideBoot("timer-" + ms)) {
+        showBoot("not-ready-" + ms);
+      }
+      restoreSheetBackdropState("timer-" + ms);
+    }, ms);
+  });
+
+  // Wrap renderAll so boot hides after actual render.
+  const oldRenderAll = window.renderAll || (typeof renderAll === "function" ? renderAll : null);
+  if (typeof oldRenderAll === "function" && !oldRenderAll.__recovery2Wrapped) {
+    const wrappedRenderAll = function() {
+      const r = oldRenderAll.apply(this, arguments);
+      setTimeout(() => hideBoot("after-renderAll"), 120);
+      setTimeout(() => restoreSheetBackdropState("after-renderAll"), 140);
+      return r;
+    };
+    wrappedRenderAll.__recovery2Wrapped = true;
+    window.renderAll = wrappedRenderAll;
+    try { renderAll = wrappedRenderAll; } catch {}
+  }
+
+  // Wrap openSheet/closeSheet to restore normal backdrop behaviour.
+  const oldOpenSheet = window.openSheet || (typeof openSheet === "function" ? openSheet : null);
+  if (typeof oldOpenSheet === "function" && !oldOpenSheet.__recovery2Wrapped) {
+    const wrappedOpenSheet = function() {
+      const r = oldOpenSheet.apply(this, arguments);
+      setTimeout(() => restoreSheetBackdropState("openSheet"), 0);
+      setTimeout(() => restoreSheetBackdropState("openSheet-late"), 120);
+      return r;
+    };
+    wrappedOpenSheet.__recovery2Wrapped = true;
+    window.openSheet = wrappedOpenSheet;
+    try { openSheet = wrappedOpenSheet; } catch {}
+  }
+
+  const oldCloseSheet = window.closeSheet || (typeof closeSheet === "function" ? closeSheet : null);
+  if (typeof oldCloseSheet === "function" && !oldCloseSheet.__recovery2Wrapped) {
+    const wrappedCloseSheet = function() {
+      const r = oldCloseSheet.apply(this, arguments);
+      setTimeout(() => restoreSheetBackdropState("closeSheet"), 0);
+      return r;
+    };
+    wrappedCloseSheet.__recovery2Wrapped = true;
+    window.closeSheet = wrappedCloseSheet;
+    try { closeSheet = wrappedCloseSheet; } catch {}
+  }
+
+  // Make sure backdrop click always closes the word sheet.
+  const backdrop = document.getElementById("backdrop");
+  if (backdrop && !backdrop.__recovery2ClickBound) {
+    backdrop.addEventListener("click", function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (typeof closeSheet === "function") closeSheet();
+    }, true);
+    backdrop.__recovery2ClickBound = true;
+  }
+
+  // Debug helper.
+  window.vocabUiStatus = function() {
+    const boot = document.getElementById("boot");
+    const sheet = document.getElementById("sheet");
+    const backdrop = document.getElementById("backdrop");
+    const wordsHeader = document.getElementById("wordsHeader");
+
+    const status = {
+      wordsLoaded: hasWordsLoaded(),
+      wordsLength: (() => { try { return words.length; } catch { return null; } })(),
+      bodyClass: document.body.className,
+      bootClass: boot ? boot.className : null,
+      bootDisplay: boot ? getComputedStyle(boot).display : null,
+      sheetClass: sheet ? sheet.className : null,
+      backdropClass: backdrop ? backdrop.className : null,
+      backdropDisplay: backdrop ? getComputedStyle(backdrop).display : null,
+      backdropPointerEvents: backdrop ? getComputedStyle(backdrop).pointerEvents : null,
+      wordsHeaderVisibility: wordsHeader ? getComputedStyle(wordsHeader).visibility : null,
+      wordsHeaderOpacity: wordsHeader ? getComputedStyle(wordsHeader).opacity : null
+    };
+    console.table(status);
+    return status;
+  };
+
+  console.log("[Recovery2] restore UI patch installed. Test with vocabUiStatus().");
+})();
+
+
+/* ============================================================
+   STEP 8: Swipe-to-reveal blur mode for Chinese translations
+   Pure-CSS approach: adds .zh-blur-active class to zh elements.
+   No DOM restructuring — preserves Step 4/5B querySelectorAll chains.
+
+   Fixes vs v2:
+   1. Purple text colour preserved via CSS var
+   2. Purple shimmer fog (gradient animation)
+   3. 10% swipe threshold
+   4. Swipe works inside sheet: document-level capture beats Step 6
+   5. Spelling hint zh injected via renderSpellV2 wrapper
+   ============================================================ */
+(function(){
+  if (window.__zhBlurSwipeStep8Installed) return;
+  window.__zhBlurSwipeStep8Installed = true;
+
+  // ── CSS ─────────────────────────────────────────────────────────────────
+  const STYLE = `
+    @keyframes zh-shimmer {
+      0%   { background-position: -200% center; }
+      100% { background-position:  200% center; }
+    }
+
+    /* Preserve purple text colour for all zh classes */
+    .em-def-zh,
+	    .collegiate-zh-line,
+	    .related-zh-line,
+	    .syn-zh-line,
+	    .learner-zh,
+	    .em-practice-zh {
+	      color: #7C3AED;
+	    }
+
+    /* Fog state */
+    .zh-blur-active {
+      position: relative;
+      cursor: pointer;
+      -webkit-user-select: none;
+      user-select: none;
+      /* Hide underlying text while fogged */
+      color: transparent !important;
+      text-shadow: none !important;
+    }
+    .zh-blur-active > * {
+      visibility: hidden;
+    }
+    /* Purple shimmer overlay via ::before */
+    .zh-blur-active::before {
+      content: '';
+      position: absolute;
+      inset: -2px -5px;
+      border-radius: 6px;
+      background: linear-gradient(
+        90deg,
+        rgba(139,92,246,0.55) 0%,
+        rgba(196,168,255,0.80) 40%,
+        rgba(167,139,250,0.65) 55%,
+        rgba(139,92,246,0.55) 100%
+      );
+      background-size: 200% 100%;
+      animation: zh-shimmer 2.2s ease-in-out infinite;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 2;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    /* Revealed: restore text, hide fog */
+    .zh-blur-active.zh-revealed {
+      color: #7C3AED !important;
+      text-shadow: none !important;
+    }
+    .zh-blur-active.zh-revealed > * {
+      visibility: visible;
+    }
+    .zh-blur-active.zh-revealed::before {
+      opacity: 0;
+      animation: none;
+    }
+
+    /* Block-level inside practice options */
+    .game-option .zh-blur-active {
+      display: block;
+    }
+  `;
+  const styleEl = document.createElement("style");
+  styleEl.textContent = STYLE;
+  document.head.appendChild(styleEl);
+
+  // ── helpers ──────────────────────────────────────────────────────────────
+  function isBlurMode() {
+    try {
+      if (localStorage.getItem("ielts_vocab_zh_translation_mode_v1") === "blur") return true;
+      if (localStorage.getItem("ielts_vocab_zh_translation_v1") === "2") return true;
+    } catch {}
+    if (typeof window.isChineseBlurMode === "function") return window.isChineseBlurMode();
+    return false;
+  }
+
+  function zhIsOn() {
+    if (typeof window.useTraditionalChineseTranslations === "function") {
+      return window.useTraditionalChineseTranslations();
+    }
+    try {
+      const mode = localStorage.getItem("ielts_vocab_zh_translation_mode_v1");
+      if (mode === "on" || mode === "blur") return true;
+      const v = localStorage.getItem("ielts_vocab_zh_translation_v1");
+      return v === "1" || v === "2";
+    } catch { return false; }
+  }
+
+  const ZH_CLASSES = [
+    "em-def-zh",
+    "collegiate-zh-line",
+    "related-zh-line",
+    "syn-zh-line",
+    "learner-zh",
+    "em-practice-zh"
+  ];
+
+  function isZhEl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    return ZH_CLASSES.some(c => el.classList.contains(c));
+  }
+
+  // ── fog on / off a single element ────────────────────────────────────────
+  function fogEl(el) {
+    if (!el || el.classList.contains("zh-blur-active")) return;
+    el.classList.add("zh-blur-active");
+  }
+
+  function unfogEl(el) {
+    el.classList.remove("zh-blur-active", "zh-revealed");
+  }
+
+  function revealEl(el) {
+    if (!el) return;
+    el.classList.add("zh-revealed");
+    const option = el.closest(".game-option");
+    if (option) option.dataset.zhRevealed = "1";
+  }
+
+  // ── apply / remove fog across a subtree ───────────────────────────────────
+  function applyFog(root) {
+    if (!isBlurMode()) return;
+    ZH_CLASSES.forEach(c => {
+      (root || document).querySelectorAll("." + c).forEach(el => {
+        if (!el.classList.contains("zh-revealed")) fogEl(el);
+      });
+    });
+  }
+
+  function removeFog(root) {
+    (root || document).querySelectorAll(".zh-blur-active").forEach(unfogEl);
+  }
+
+  // ── reblur on sheet close (keep fog, just remove revealed state) ──────────
+  function reblurAll() {
+    document.querySelectorAll(".zh-blur-active.zh-revealed").forEach(el => {
+      el.classList.remove("zh-revealed");
+      const opt = el.closest(".game-option");
+      if (opt) delete opt.dataset.zhRevealed;
+    });
+  }
+
+  function refreshFog() {
+    if (isBlurMode()) applyFog(document);
+    else removeFog(document);
+  }
+
+  // ── document-level swipe: fires BEFORE Step 6 sheet/sheetBody listeners ──
+  // DOM capture order: document → html → body → ... → sheet → sheetBody → el
+  // So document capture listeners always fire first, regardless of registration time.
+  let swipeTarget = null;   // the .zh-blur-active element being swiped
+  let swipeStartX = null;
+  let swipeStartY = null;
+  let swipeTracked = false;
+
+  document.addEventListener("touchstart", function(e) {
+    swipeTarget = null; swipeStartX = null; swipeStartY = null; swipeTracked = false;
+    if (!isBlurMode()) return;
+    const t = e.touches[0]; if (!t) return;
+    // Walk up from touch target to find a fogged zh element
+    let el = e.target;
+    while (el && el !== document.body) {
+      if (isZhEl(el) && el.classList.contains("zh-blur-active") && !el.classList.contains("zh-revealed")) {
+        swipeTarget = el;
+        swipeStartX = t.clientX;
+        swipeStartY = t.clientY;
+        swipeTracked = false;
+        break;
+      }
+      el = el.parentElement;
+    }
+  }, { passive: true, capture: true });
+
+  document.addEventListener("touchmove", function(e) {
+    if (!swipeTarget || swipeStartX === null) return;
+    const t = e.touches[0]; if (!t) return;
+    const dx = t.clientX - swipeStartX;
+    const dy = Math.abs(t.clientY - swipeStartY);
+    if (dx > 6 && dx > dy * 1.2) {
+      swipeTracked = true;
+      // Stop Step 6 from seeing this horizontal gesture
+      e.stopImmediatePropagation();
+    }
+  }, { passive: true, capture: true });
+
+  document.addEventListener("touchend", function(e) {
+    if (!swipeTarget || swipeStartX === null) return;
+    const t = e.changedTouches[0];
+    if (!t) { swipeTarget = null; return; }
+    const dx = t.clientX - swipeStartX;
+    const dy = Math.abs(t.clientY - swipeStartY);
+    if (swipeTracked && dx > 0 && dx > dy * 1.2) {
+      const rect = swipeTarget.getBoundingClientRect();
+      if (rect.width > 0 && dx / rect.width >= 0.10) {
+        revealEl(swipeTarget);
+        e.stopImmediatePropagation();
+      }
+    }
+    swipeTarget = null; swipeStartX = null; swipeTracked = false;
+  }, { passive: true, capture: true });
+
+  // Mouse support (desktop testing)
+  let mTarget = null, mStartX = null, mStartY = null;
+  document.addEventListener("mousedown", function(e) {
+    mTarget = null; mStartX = null;
+    if (!isBlurMode()) return;
+    let el = e.target;
+    while (el && el !== document.body) {
+      if (isZhEl(el) && el.classList.contains("zh-blur-active") && !el.classList.contains("zh-revealed")) {
+        mTarget = el; mStartX = e.clientX; mStartY = e.clientY; break;
+      }
+      el = el.parentElement;
+    }
+  }, { capture: true });
+
+  document.addEventListener("mouseup", function(e) {
+    if (!mTarget || mStartX === null) return;
+    const dx = e.clientX - mStartX;
+    const dy = Math.abs(e.clientY - mStartY);
+    if (dx > 0 && dx > dy * 1.2) {
+      const rect = mTarget.getBoundingClientRect();
+      if (rect.width > 0 && dx / rect.width >= 0.10) revealEl(mTarget);
+    }
+    mTarget = null; mStartX = null;
+  }, { capture: true });
+
+  // ── MutationObserver: auto-fog newly injected zh elements ─────────────────
+  const obs = new MutationObserver(function(mutations) {
+    if (!isBlurMode()) return;
+    for (const m of mutations) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        if (isZhEl(node)) { fogEl(node); return; }
+        if (node.querySelectorAll) {
+          ZH_CLASSES.forEach(c => node.querySelectorAll("." + c).forEach(fogEl));
+        }
+      });
+    }
+  });
+  obs.observe(document.body, { childList: true, subtree: true });
+
+  // ── hook closeSheet: reblur on new word ───────────────────────────────────
+  const _origClose = window.closeSheet;
+  if (typeof _origClose === "function" && !_origClose.__zhBlurReblurWrapped) {
+    window.closeSheet = function() {
+      reblurAll();
+      return _origClose.apply(this, arguments);
+    };
+    window.closeSheet.__zhBlurReblurWrapped = true;
+    try { closeSheet = window.closeSheet; } catch {}
+  }
+
+  // ── hook setChineseTranslationMode: refresh fog on mode change ─────────────
+  const _origSetMode = window.setChineseTranslationMode;
+  if (typeof _origSetMode === "function" && !_origSetMode.__zhBlurRefreshWrapped) {
+    window.setChineseTranslationMode = function(mode) {
+      const r = _origSetMode.apply(this, arguments);
+      setTimeout(refreshFog, 80);
+      return r;
+    };
+    window.setChineseTranslationMode.__zhBlurRefreshWrapped = true;
+  }
+
+  // ── practice: single tap on blurred option → reveal only, no submit ───────
+  document.addEventListener("click", function(e) {
+    if (!isBlurMode()) return;
+    const option = e.target.closest(".game-option");
+    if (!option) return;
+    const blurred = option.querySelector(".zh-blur-active:not(.zh-revealed)");
+    if (!blurred) return;
+    e.stopImmediatePropagation();
+    e.preventDefault();
+    revealEl(blurred);
+  }, true);
+
+  // ── FIX 5: wrap renderSpellV2 to inject zh into spelling hint box ─────────
+  function installSpellZhWrapper() {
+    const orig = window.renderSpellV2;
+    if (typeof orig !== "function" || orig.__zhBlurSpellWrapped) return false;
+
+    window.renderSpellV2 = async function(w) {
+      const r = await orig.apply(this, arguments);
+      // Only inject if zh translations are on (blur or always-on)
+      if (!zhIsOn() || !w) return r;
+      // Wait for DOM to settle after async render
+      await new Promise(res => setTimeout(res, 80));
+      const box = document.getElementById("spellHintBox");
+      if (!box) return r;
+      if (box.querySelector(".em-practice-zh")) return r; // already there
+      // Fetch zh from learner cache or API
+      let zh = "";
+      try {
+        const key = (typeof normalizeKey === "function") ? normalizeKey(w.word) : w.key;
+        // Check easyDictCache first (populated by other fetch paths)
+        if (window.easyDictCache && window.easyDictCache[key]) {
+          const defs = window.easyDictCache[key].definitions || [];
+          zh = (defs[0] && (defs[0].chinese || defs[0].zh)) || "";
+        }
+        if (!zh && typeof window.fetchEasyDefinition === "function") {
+          const entry = await window.fetchEasyDefinition(w);
+          const defs = (entry && entry.definitions) || [];
+          zh = (defs[0] && (defs[0].chinese || defs[0].zh)) || "";
+        }
+        if (!zh) {
+          const res = await fetch(`/api/define-easy?word=${encodeURIComponent(w.word || w.key)}`);
+          if (res.ok) {
+            const data = await res.json();
+            const defs = (data && data.definitions) || [];
+            zh = (defs[0] && (defs[0].chinese || defs[0].zh)) || "";
+          }
+        }
+      } catch (err) {
+        console.warn("[Step8] spell zh fetch failed:", err);
+      }
+      if (zh) {
+        const div = document.createElement("div");
+        div.className = "em-practice-zh";
+        div.textContent = zh;
+        box.appendChild(div);
+        // Fog it if in blur mode
+        if (isBlurMode()) fogEl(div);
+      }
+      return r;
+    };
+    window.renderSpellV2.__zhBlurSpellWrapped = true;
+    return true;
+  }
+
+  // ── expose ─────────────────────────────────────────────────────────────
+  window.zhBlurRefreshFog = refreshFog;
+  window.zhBlurReblurAll  = reblurAll;
+
+  // ── initial fog application + spell wrapper install ───────────────────
+  setTimeout(() => { refreshFog(); installSpellZhWrapper(); }, 600);
+  setTimeout(() => { refreshFog(); installSpellZhWrapper(); }, 1800);
+
+  console.log("[Step8] Swipe-to-reveal purple blur installed (v3).");
+})();
+
+
+/* ============================================================
+   LEARNER PANEL v3 STRICT
+   - Fixes abandon showing ship / reckless
+   - Learner mode only shows definitions really belonging to the card word
+   - Groups kept definitions by part of speech
+   - Examples stay under each definition
+   - Related / Synonym tabs hidden in Learner mode
+   ============================================================ */
+(function(){
+  if (window.__learnerPanelV3StrictInstalled) return;
+  window.__learnerPanelV3StrictInstalled = true;
+
+  const DICT_SOURCE_KEY = "ielts_vocab_dict_source_v1";
+  const ZH_MODE_KEY = "ielts_vocab_zh_translation_mode_v1";
+  const OLD_ZH_KEY = "ielts_vocab_zh_translation_v1";
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[m]));
+  }
+
+  function safeGet(key) {
+    try { return localStorage.getItem(key); } catch { return null; }
+  }
+
+  function safeSet(key, value) {
+    try { localStorage.setItem(key, value); } catch {}
+  }
+
+  function norm(s) {
+    return String(s || "")
+      .toLowerCase()
+      .replace(/\*/g, "")
+      .replace(/[’']/g, "'")
+      .replace(/[^a-z0-9\s-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function cleanMwText(s) {
+    return String(s || "")
+      .replace(/\{bc\}/g, "")
+      .replace(/\{it\}|\{\/it\}/g, "")
+      .replace(/\{phrase\}|\{\/phrase\}/g, "")
+      .replace(/\{dx\}|\{\/dx\}/g, "")
+      .replace(/\{dxt\|([^|}]+)\|[^}]*\}/g, "$1")
+      .replace(/\{[^}]+\}/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function unique(arr) {
+    const out = [];
+    const seen = new Set();
+    for (const x of arr || []) {
+      const s = String(x || "").trim();
+      if (!s) continue;
+      const k = s.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
+  }
+
+  function sourceNow() {
+    if (typeof window.getDictionarySource === "function") {
+      const s = window.getDictionarySource();
+      if (s === "learner" || s === "collegiate") return s;
+    }
+    const stored = safeGet(DICT_SOURCE_KEY);
+    if (stored === "learner" || stored === "collegiate") return stored;
+    return "learner";
+  }
+
+  function learnerModeOn() {
+    return sourceNow() === "learner";
+  }
+
+  function zhMode() {
+    const v = safeGet(ZH_MODE_KEY);
+    if (v === "on" || v === "blur" || v === "off") return v;
+    return safeGet(OLD_ZH_KEY) === "1" ? "on" : "off";
+  }
+
+  window.getDictionarySource = function() {
+    const v = safeGet(DICT_SOURCE_KEY);
+    return v === "learner" || v === "collegiate" ? v : "learner";
+  };
+
+  window.usesLearnerDictionary = function() {
+    return window.getDictionarySource() === "learner";
+  };
+
+  window.usesCollegiateDictionary = function() {
+    return window.getDictionarySource() === "collegiate";
+  };
+
+  window.useTraditionalChineseTranslations = function() {
+    return zhMode() !== "off";
+  };
+
+  window.setDictionarySource = function(source, opts = {}) {
+    const next = source === "learner" ? "learner" : "collegiate";
+    const prev = safeGet(DICT_SOURCE_KEY) === "learner" ? "learner" : "collegiate";
+    safeSet(DICT_SOURCE_KEY, next);
+
+    try {
+      window.easyMode = next === "learner";
+      if (LS && LS.EASY_MODE) localStorage.setItem(LS.EASY_MODE, next === "learner" ? "1" : "0");
+    } catch {}
+
+    renderLearningSettingsV3();
+    syncLearnerTabs();
+
+    if (currentWord && typeof showWord === "function") {
+      try { showWord(currentWord.key); } catch {}
+    }
+
+    if (opts.userToast && prev !== next && typeof toast === "function") {
+      toast(next === "learner" ? "Dictionary Source: Learner" : "Dictionary Source: Collegiate");
+    }
+  };
+
+  window.setChineseTranslationMode = function(mode, opts = {}) {
+    const next = mode === "on" || mode === "blur" ? mode : "off";
+    safeSet(ZH_MODE_KEY, next);
+    safeSet(OLD_ZH_KEY, next === "off" ? "0" : "1");
+
+    renderLearningSettingsV3();
+    if (typeof window.zhBlurRefreshFog === "function") {
+      setTimeout(window.zhBlurRefreshFog, 80);
+    }
+
+    if (currentWord && typeof showWord === "function") {
+      try { showWord(currentWord.key); } catch {}
+    }
+  };
+
+  function renderLearningSettingsV3() {
+    const src = window.getDictionarySource();
+    const zhm = zhMode();
+
+    document.getElementById("dictSourceCollegiateBtn")?.classList.toggle("active", src === "collegiate");
+    document.getElementById("dictSourceLearnerBtn")?.classList.toggle("active", src === "learner");
+
+    const desc = document.getElementById("dictSourceDesc");
+    if (desc) desc.textContent = src === "learner"
+      ? "Learner dictionary — only this word, grouped by part of speech"
+      : "Collegiate dictionary";
+
+    document.getElementById("zhModeOffBtn")?.classList.toggle("active", zhm === "off");
+    document.getElementById("zhModeBlurBtn")?.classList.toggle("active", zhm === "blur");
+    document.getElementById("zhModeOnBtn")?.classList.toggle("active", zhm === "on");
+
+    const zhDesc = document.getElementById("zhTranslateDesc");
+    if (zhDesc) {
+      zhDesc.textContent =
+        zhm === "off" ? "Off" :
+	        zhm === "blur" ? "Blur — swipe right on Chinese lines to reveal" :
+        "On";
+    }
+
+    document.getElementById("easyModeSettingsGroup")?.remove();
+  }
+
+  window.renderLearningSettings = renderLearningSettingsV3;
+
+  function syncLearnerTabs() {
+    const isLearner = learnerModeOn();
+    document.body.classList.toggle("learner-dictionary-mode", isLearner);
+
+    const sheet = document.getElementById("sheet") || document;
+    sheet.querySelectorAll(".tab-row button").forEach(btn => {
+      const tab = btn.dataset?.tab || btn.getAttribute("data-tab");
+      btn.style.display = isLearner && (tab === "related" || tab === "synonyms") ? "none" : "";
+    });
+
+    if (isLearner && (sheetTab === "related" || sheetTab === "synonyms")) {
+      sheetTab = "meaning";
+      if (typeof setSheetActiveTabButton === "function") setSheetActiveTabButton("meaning");
+    }
+  }
+
+  function wordForms(word) {
+    const w = norm(word);
+    const forms = new Set([w]);
+
+    if (w.endsWith("e")) {
+      forms.add(w + "d");
+      forms.add(w.slice(0, -1) + "ing");
+    } else {
+      forms.add(w + "ed");
+      forms.add(w + "ing");
+    }
+
+    forms.add(w + "s");
+    forms.add(w + "es");
+
+    // A few common noun forms. This helps but does not display related forms.
+    if (w.endsWith("y")) forms.add(w.slice(0, -1) + "ies");
+    else forms.add(w + "ment");
+
+    return [...forms].filter(Boolean);
+  }
+
+  function containsWordForm(text, forms) {
+    const t = " " + norm(text) + " ";
+    return forms.some(f => {
+      const escaped = f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|\\s|-)${escaped}(\\s|-|$)`, "i").test(t);
+    });
+  }
+
+  function simplifiedDefBelongsToWord(def, word) {
+    const forms = wordForms(word);
+    const text = cleanMwText(def.text || def.definition || "");
+
+    const examples = Array.isArray(def.examples)
+      ? def.examples.map(cleanMwText).filter(Boolean)
+      : [];
+
+    // If the definition text itself names the word/form, keep it.
+    if (containsWordForm(text, forms)) return true;
+
+    // Main word definitions in the Learner dictionary usually place the word
+    // inside most examples. Phrase-matched wrong entries usually only mention
+    // the card word once, or not at all.
+    const exHits = examples.filter(ex => containsWordForm(ex, forms)).length;
+
+    if (examples.length >= 2 && exHits / examples.length >= 0.5) return true;
+    if (examples.length === 1 && exHits === 1) return true;
+
+    return false;
+  }
+
+  function groupSimplifiedLearner(raw, w) {
+    const word = w.word || w.key;
+    const defs = Array.isArray(raw?.definitions) ? raw.definitions : [];
+    const kept = defs
+      .map(d => ({
+        text: cleanMwText(d.text || d.definition || ""),
+        chinese: d.chinese || "",
+        partOfSpeech: d.partOfSpeech || d.functionalLabel || "",
+        examples: Array.isArray(d.examples) ? d.examples.map(cleanMwText).filter(Boolean) : []
+      }))
+      .filter(d => d.text)
+      .filter(d => simplifiedDefBelongsToWord(d, word));
+
+    const byPos = new Map();
+
+    for (const d of kept) {
+      const pos = d.partOfSpeech || "entry";
+      const grammar = d.grammar || "";
+      const key = `${pos}::${grammar}`;
+
+      if (!byPos.has(key)) {
+        byPos.set(key, {
+          id: "",
+          partOfSpeech: pos,
+          grammar,
+          senses: []
+        });
+      }
+
+      byPos.get(key).senses.push({
+        number: String(byPos.get(key).senses.length + 1),
+        definition: d.text,
+        chinese: d.chinese,
+        examples: d.examples
+      });
+    }
+
+    return [...byPos.values()];
+  }
+
+  function rawEntryMatchesWord(entry, word) {
+    const target = norm(word);
+    const idBase = String(entry?.meta?.id || "").split(":")[0];
+    const hwBase = String(entry?.hwi?.hw || "").split(":")[0];
+    return norm(idBase) === target || norm(hwBase) === target;
+  }
+
+  function mwAudioUrl(code) {
+    code = String(code || "").trim();
+    if (!code) return "";
+    let subdir = code[0];
+    if (code.startsWith("bix")) subdir = "bix";
+    else if (code.startsWith("gg")) subdir = "gg";
+    else if (/^[0-9_]/.test(code)) subdir = "number";
+    return `https://media.merriam-webster.com/audio/prons/en/us/mp3/${subdir}/${code}.mp3`;
+  }
+
+  function parseRawDt(dt) {
+    const out = { definition: "", examples: [] };
+
+    for (const item of Array.isArray(dt) ? dt : []) {
+      const type = item?.[0];
+      const val = item?.[1];
+
+      if (type === "text") {
+        const t = cleanMwText(val);
+        if (t) out.definition = out.definition ? `${out.definition} ${t}` : t;
+      }
+
+      if (type === "vis" && Array.isArray(val)) {
+        for (const ex of val) {
+          const t = cleanMwText(ex?.t || ex);
+          if (t) out.examples.push(t);
+        }
+      }
+    }
+
+    out.examples = unique(out.examples);
+    return out;
+  }
+
+  function parseRawSseq(defBlocks) {
+    const senses = [];
+
+    function walk(node) {
+      if (!Array.isArray(node)) return;
+
+      if (node[0] === "sense" && node[1]) {
+        const sense = node[1];
+        const parsed = parseRawDt(sense.dt || []);
+        if (parsed.definition) {
+          senses.push({
+            number: sense.sn || String(senses.length + 1),
+            definition: parsed.definition,
+            examples: parsed.examples
+          });
+        }
+        return;
+      }
+
+      for (const child of node) walk(child);
+    }
+
+    for (const block of Array.isArray(defBlocks) ? defBlocks : []) {
+      walk(block.sseq || []);
+    }
+
+    return senses;
+  }
+
+  function parseRawLearner(raw, w) {
+    const word = w.word || w.key;
+    return raw
+      .filter(e => rawEntryMatchesWord(e, word))
+      .map(e => {
+        const pron = e?.hwi?.prs?.[0] || {};
+        return {
+          id: e?.meta?.id || "",
+          hw: e?.hwi?.hw || word,
+          partOfSpeech: e?.fl || "",
+          grammar: e?.gram || "",
+          ipa: pron.ipa || pron.mw || "",
+          audioUrl: mwAudioUrl(pron?.sound?.audio || ""),
+          inflections: unique((e.ins || []).map(x => cleanMwText(String(x.if || "").replace(/\*/g, "")))),
+          shortDefinitions: (e.shortdef || []).map(cleanMwText).filter(Boolean),
+          senses: parseRawSseq(e.def || [])
+        };
+      })
+      .filter(e => e.senses.length || e.shortDefinitions.length);
+  }
+
+  function buildPanel(raw, w) {
+    const word = w.word || w.key;
+    let entries = [];
+
+    if (Array.isArray(raw)) {
+      entries = parseRawLearner(raw, w);
+    } else if (raw && Array.isArray(raw.entries)) {
+      entries = raw.entries
+        .filter(e => norm(e.plainHw || e.hw || e.headword || e.id?.split(":")?.[0]) === norm(word))
+        .map(e => ({
+          id: e.id || "",
+          hw: e.hw || e.displayHw || e.headword || word,
+          partOfSpeech: e.partOfSpeech || e.fl || e.functionalLabel || "",
+          grammar: e.grammar || e.gram || "",
+          ipa: e.ipa || e.pronunciation || "",
+          audioUrl: e.audioUrl || e.audio || "",
+          inflections: unique(e.inflections || []),
+          shortDefinitions: unique(e.shortDefinitions || e.shortdef || []),
+          senses: (e.senses || []).map((s, i) => ({
+            number: s.number || s.sn || String(i + 1),
+            definition: cleanMwText(s.definition || s.text || ""),
+            chinese: s.chinese || "",
+            examples: Array.isArray(s.examples) ? s.examples.map(cleanMwText).filter(Boolean) : []
+          })).filter(s => s.definition)
+        }));
+    } else {
+      entries = groupSimplifiedLearner(raw, w);
+    }
+
+    // Fallback if strict filtering removed everything.
+    if (!entries.length && raw && Array.isArray(raw.definitions)) {
+      const targetPos = (w.grammarLabels || []).map(norm);
+      const defs = raw.definitions
+        .filter(d => !targetPos.length || targetPos.includes(norm(d.partOfSpeech || d.functionalLabel || "")))
+        .slice(0, 6);
+
+      entries = groupSimplifiedLearner({ definitions: defs }, w);
+    }
+
+    const heroEntry =
+      entries.find(e => e.audioUrl || e.ipa || e.hw) ||
+      {};
+
+    // For the old simplified route, pronunciation/audio are top-level.
+    const topIpa = raw?.pronunciation || raw?.ipa || "";
+    const topAudio = raw?.audioUrl || raw?.audio || "";
+
+    const hero = {
+      hw: heroEntry.hw || raw?.hw || raw?.headword || word,
+      ipa: heroEntry.ipa || topIpa || "",
+      audioUrl: heroEntry.audioUrl || topAudio || "",
+      inflections: unique(entries.flatMap(e => e.inflections || [])),
+      grammar: unique(entries.flatMap(e => [e.grammar]).filter(Boolean))
+    };
+
+    // If simplified output has no inflections, derive basic forms for display only.
+    if (!hero.inflections.length) {
+      hero.inflections = unique(
+        entries.flatMap(e => e.senses || [])
+          .flatMap(s => s.examples || [])
+          .flatMap(ex => wordForms(word).filter(f => containsWordForm(ex, [f])))
+      );
+    }
+
+    return { word, hero, entries };
+  }
+
+  function buildCollegiateFallbackPanel(w, entry) {
+    const word = w.word || w.key;
+    const sourceEntry = entry || {};
+    const mainEntries = Array.isArray(sourceEntry.mainEntries) ? sourceEntry.mainEntries : [];
+
+    const entries = mainEntries.map(ent => ({
+      id: ent.entryId || ent.headword || word,
+      hw: ent.hw || sourceEntry.hw || sourceEntry.headword || word,
+      partOfSpeech: ent.functionalLabel || ent.fl || "",
+      grammar: "",
+      ipa: ent.pronunciation || sourceEntry.pronunciation || "",
+      audioUrl: ent.audioUrl || sourceEntry.audioUrl || "",
+      inflections: unique((ent.inflections || []).map(inf => inf.form || inf).filter(Boolean)),
+      shortDefinitions: unique(ent.shortDefinitions || []),
+      senses: (ent.meanings || []).flatMap(meaning =>
+        (meaning.definitionSegments || []).map((seg, i) => ({
+          number: meaning.label || String(i + 1),
+          definition: cleanMwText(seg.definition || ""),
+          chinese: "",
+          examples: Array.isArray(seg.examples) ? seg.examples.map(ex => cleanMwText(ex.text || ex)).filter(Boolean) : []
+        }))
+      ).filter(s => s.definition)
+    })).filter(ent => ent.senses.length || ent.shortDefinitions.length);
+
+    if (!entries.length) {
+      const defs = (sourceEntry.definitions || []).map((d, i) => ({
+        id: `${word}:${i + 1}`,
+        hw: sourceEntry.hw || sourceEntry.headword || word,
+        partOfSpeech: sourceEntry.functionalLabel || "",
+        grammar: "",
+        ipa: sourceEntry.pronunciation || "",
+        audioUrl: sourceEntry.audioUrl || "",
+        inflections: [],
+        shortDefinitions: [],
+        senses: [{
+          number: String(i + 1),
+          definition: cleanMwText(typeof d === "string" ? d : (d?.definition || d?.text || "")),
+          chinese: "",
+          examples: []
+        }]
+      })).filter(ent => ent.senses[0].definition);
+
+      return {
+        word,
+        hero: {
+          hw: sourceEntry.hw || sourceEntry.headword || word,
+          ipa: sourceEntry.pronunciation || "",
+          audioUrl: sourceEntry.audioUrl || "",
+          inflections: unique(defs.flatMap(e => e.inflections || [])),
+          grammar: []
+        },
+        entries: defs,
+        fallbackSource: "collegiate"
+      };
+    }
+
+    return {
+      word,
+      hero: {
+        hw: entries.find(e => e.hw)?.hw || sourceEntry.hw || sourceEntry.headword || word,
+        ipa: sourceEntry.pronunciation || entries.find(e => e.ipa)?.ipa || "",
+        audioUrl: sourceEntry.audioUrl || entries.find(e => e.audioUrl)?.audioUrl || "",
+        inflections: unique(entries.flatMap(e => e.inflections || [])),
+        grammar: []
+      },
+      entries,
+      fallbackSource: "collegiate"
+    };
+  }
+
+  async function fetchLearnerPanel(w) {
+    if (!w) return buildPanel(null, { word: "" });
+
+    if (!window.easyDictCache) window.easyDictCache = {};
+
+    const key = w.key || norm(w.word);
+    const panelKey = key + "::__learner_panel_v4";
+
+    if (window.easyDictCache[panelKey]) return window.easyDictCache[panelKey];
+
+    // Important: ignore old cached panel/simplified mistakes only for the panel.
+    // We still use fetchEasyDefinition as the source, but then strictly filter it.
+    let raw = null;
+
+    if (typeof window.fetchEasyDefinition === "function") {
+      raw = await window.fetchEasyDefinition(w);
+    } else {
+      const r = await fetch(`/api/define-easy?word=${encodeURIComponent(w.word || w.key)}`);
+      raw = await r.json();
+    }
+
+    const panel = buildPanel(raw, w);
+    if (!panel.entries.length && typeof fetchDefinition === "function") {
+      try {
+        const collegiateEntry = dictCache[w.key] || await fetchDefinition(w);
+        if (collegiateEntry) {
+          const fallbackPanel = buildCollegiateFallbackPanel(w, collegiateEntry);
+          window.easyDictCache[panelKey] = fallbackPanel;
+          return fallbackPanel;
+        }
+      } catch (err) {
+        console.warn("Learner fallback to Collegiate failed:", err);
+      }
+    }
+    window.easyDictCache[panelKey] = panel;
+
+    try {
+      if (typeof window.saveEasyDict === "function") window.saveEasyDict();
+    } catch {}
+
+    return panel;
+  }
+
+  function formatLearnerHw(hw) {
+    return String(hw || "")
+      .replace(/\*/g, "/")
+      .replace(/\/+/g, "/")
+      .replace(/^\/|\/$/g, "")
+      .trim();
+  }
+
+  function heroInfoHtml(panel) {
+    const inf = panel?.hero?.inflections || [];
+
+    let html = "";
+    if (inf.length) html += `<div class="learner-hero-line">${inf.map(h).join(" · ")}</div>`;
+    return html;
+  }
+
+  function applyHero(panel, w) {
+    const heroWord = document.getElementById("heroWord");
+    const heroPron = document.getElementById("heroPron");
+    const heroChips = document.getElementById("heroChips");
+    const heroInf = document.getElementById("heroInflections");
+    const audioBtn = document.getElementById("audioBtn");
+
+    if (heroWord) heroWord.textContent = w.word || panel.word || "—";
+
+    if (heroPron) {
+      const hw = formatLearnerHw(panel.hero?.hw);
+      const ipa = panel.hero?.ipa || "";
+      heroPron.innerHTML = `
+        ${ipa ? `<div class="learner-ipa-line">/${h(ipa)}/</div>` : ""}
+        ${hw ? `<div class="learner-hw-line">${h(hw)}</div>` : ""}
+      `;
+    }
+
+    const pos = unique((panel.entries || []).map(e => e.partOfSpeech).filter(Boolean));
+    if (heroChips) {
+      heroChips.innerHTML = pos.map(p => `<span class="gram-chip ${gramClass(p)}">${h(p)}</span>`).join("");
+    }
+
+    if (heroInf) heroInf.innerHTML = heroInfoHtml(panel);
+
+    if (audioBtn) {
+      audioBtn.disabled = !panel.hero?.audioUrl;
+      audioBtn.dataset.learnerAudioUrl = panel.hero?.audioUrl || "";
+    }
+  }
+
+  function renderPanel(panel, w) {
+    const entries = panel.entries || [];
+
+    if (!entries.length) {
+      return `<div class="empty-state" style="padding:20px 10px"><div class="emoji">📭</div><div class="t">No Learner definition found for this word</div></div>${tabBottomHtml(w)}`;
+    }
+
+    let html = `<div class="learner-def-panel">`;
+    if (panel.fallbackSource === "collegiate") {
+      html += `<div class="dict-block-title">Collegiate definitions fallback</div>`;
+    }
+
+    for (const ent of entries) {
+      const senses = ent.senses && ent.senses.length
+        ? ent.senses
+        : (ent.shortDefinitions || []).map((d, i) => ({ number: String(i + 1), definition: d, examples: [] }));
+
+      if (!senses.length) continue;
+
+      html += `
+        <div class="learner-pos-block">
+          <div class="learner-pos-head">
+            <span class="gram-chip ${gramClass(ent.partOfSpeech || "")}">${h(ent.partOfSpeech || "entry")}</span>
+            ${ent.grammar ? `<span class="learner-pos-grammar">${h(ent.grammar)}</span>` : ""}
+          </div>
+      `;
+
+      senses.forEach((s, i) => {
+        const number = s.number || String(i + 1);
+        const examples = (s.examples || []).map(ex => `<div class="meaning-example">${h(ex)}</div>`).join("");
+        const zhm = zhMode();
+        const zh = s.chinese && zhm !== "off"
+          ? `<div class="learner-zh">${h(s.chinese)}</div>`
+          : "";
+
+        html += `
+          <div class="meaning-item learner-meaning-item">
+            ${number ? `<span class="sense-label">${h(number)}</span>` : ""}
+            <span class="meaning-def">${h(s.definition)}</span>
+            ${zh}
+            ${examples ? `<div class="meaning-examples">${examples}</div>` : ""}
+          </div>
+        `;
+      });
+
+      html += `</div>`;
+    }
+
+    html += `</div>${tabBottomHtml(w)}`;
+    return html;
+  }
+
+  const oldPlayAudio = window.playAudio || (typeof playAudio === "function" ? playAudio : null);
+  if (typeof oldPlayAudio === "function" && !oldPlayAudio.__learnerPanelV3Wrapped) {
+    const wrapped = function() {
+      if (learnerModeOn()) {
+        const btn = document.getElementById("audioBtn");
+        const url = btn?.dataset?.learnerAudioUrl || "";
+        if (url) {
+          try {
+            if (typeof currentAudio !== "undefined" && currentAudio) currentAudio.pause();
+            currentAudio = new Audio(url);
+            btn.classList.add("playing");
+            currentAudio.addEventListener("ended", () => btn.classList.remove("playing"));
+            currentAudio.addEventListener("error", () => btn.classList.remove("playing"));
+            currentAudio.play().catch(() => btn.classList.remove("playing"));
+          } catch {
+            btn.classList.remove("playing");
+          }
+          return;
+        }
+      }
+      return oldPlayAudio.apply(this, arguments);
+    };
+    wrapped.__learnerPanelV3Wrapped = true;
+    window.playAudio = wrapped;
+    try { playAudio = wrapped; } catch {}
+  }
+
+  const oldShowWord = window.showWord || (typeof showWord === "function" ? showWord : null);
+  if (typeof oldShowWord === "function" && !oldShowWord.__learnerPanelV3Wrapped) {
+    const wrapped = function(key) {
+      if (!learnerModeOn()) {
+        syncLearnerTabs();
+        return oldShowWord.apply(this, arguments);
+      }
+
+      const w = words.find(x => x.key === key);
+      if (!w) return;
+
+      currentWord = w;
+      syncLearnerTabs();
+
+      const heroWord = document.getElementById("heroWord");
+      const heroPron = document.getElementById("heroPron");
+      const heroChips = document.getElementById("heroChips");
+      const heroInf = document.getElementById("heroInflections");
+      const audioBtn = document.getElementById("audioBtn");
+      const c = document.getElementById("tabContent");
+
+      if (heroWord) heroWord.textContent = w.word;
+      if (heroPron) heroPron.textContent = "";
+      if (heroChips) heroChips.innerHTML = "";
+      if (heroInf) heroInf.innerHTML = "";
+      if (audioBtn) {
+        audioBtn.disabled = true;
+        audioBtn.dataset.learnerAudioUrl = "";
+      }
+
+      if (c) {
+        c.innerHTML = `<div class="shimmer tall"></div><div class="shimmer" style="width:80%"></div><div class="shimmer" style="width:60%"></div>${tabBottomHtml(w)}`;
+      }
+
+      fetchLearnerPanel(w).then(panel => {
+        if (!currentWord || currentWord.key !== w.key) return;
+        applyHero(panel, w);
+        if (c) c.innerHTML = renderPanel(panel, w);
+      }).catch(err => {
+        console.warn("Learner panel v3 failed:", err);
+        if (c) c.innerHTML = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">📭</div><div class="t">Could not load Learner dictionary</div></div>${tabBottomHtml(w)}`;
+      });
+
+      try { prefetchUpcoming(); } catch {}
+    };
+
+    wrapped.__learnerPanelV3Wrapped = true;
+    window.showWord = wrapped;
+    try { showWord = wrapped; } catch {}
+  }
+
+  const oldRenderSheetTab = window.renderSheetTab || (typeof renderSheetTab === "function" ? renderSheetTab : null);
+  if (typeof oldRenderSheetTab === "function" && !oldRenderSheetTab.__learnerPanelV3Wrapped) {
+    const wrapped = function() {
+      if (!learnerModeOn()) {
+        syncLearnerTabs();
+        return oldRenderSheetTab.apply(this, arguments);
+      }
+
+      syncLearnerTabs();
+
+      if (!currentWord) return;
+      if (sheetTab !== "meaning") {
+        sheetTab = "meaning";
+        if (typeof setSheetActiveTabButton === "function") setSheetActiveTabButton("meaning");
+      }
+
+      const w = currentWord;
+      const c = document.getElementById("tabContent");
+      if (!c) return;
+
+      c.innerHTML = `<div class="shimmer tall"></div><div class="shimmer" style="width:80%"></div><div class="shimmer" style="width:60%"></div>${tabBottomHtml(w)}`;
+
+      fetchLearnerPanel(w).then(panel => {
+        if (!currentWord || currentWord.key !== w.key) return;
+        applyHero(panel, w);
+        c.innerHTML = renderPanel(panel, w);
+      }).catch(err => {
+        console.warn("Learner render tab v3 failed:", err);
+        c.innerHTML = `<div class="empty-state" style="padding:20px 10px"><div class="emoji">📭</div><div class="t">Could not load Learner dictionary</div></div>${tabBottomHtml(w)}`;
+      });
+    };
+
+    wrapped.__learnerPanelV3Wrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  const oldGoto = window.goto || (typeof goto === "function" ? goto : null);
+  if (typeof oldGoto === "function" && !oldGoto.__learnerPanelV3Wrapped) {
+    const wrapped = function(page) {
+      const r = oldGoto.apply(this, arguments);
+      if (page === "settings") setTimeout(renderLearningSettingsV3, 0);
+      setTimeout(syncLearnerTabs, 0);
+      return r;
+    };
+    wrapped.__learnerPanelV3Wrapped = true;
+    window.goto = wrapped;
+    try { goto = wrapped; } catch {}
+  }
+
+  function boot() {
+    renderLearningSettingsV3();
+    syncLearnerTabs();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);
+  else boot();
+
+  [100, 500, 1200].forEach(ms => setTimeout(boot, ms));
+
+  console.log("[Learner Panel] v3 strict installed.");
+})();
+
+
+/* ============================================================
+   LEARNER HERO HW / IPA FIX
+   - Shows HW in panel top as aban/don, not aban*don
+   - Shows IPA in panel top
+   - Requires /api/define-easy to return hw and ipa/pronunciation
+   ============================================================ */
+(function(){
+  if (window.__learnerHeroHwIpaFixInstalled) return;
+  window.__learnerHeroHwIpaFixInstalled = true;
+
+  function learnerSourceOn() {
+    try {
+      if (typeof window.getDictionarySource === "function") {
+        return window.getDictionarySource() === "learner";
+      }
+    } catch {}
+    try {
+      return localStorage.getItem("ielts_vocab_dict_source_v1") === "learner";
+    } catch {
+      return false;
+    }
+  }
+
+  function fmtHw(hw) {
+    return String(hw || "")
+      .replace(/\*/g, "/")
+      .replace(/\/+/g, "/")
+      .replace(/^\/|\/$/g, "")
+      .trim();
+  }
+
+  function pickLearnerHw(entry, fallbackWord) {
+    return (
+      entry?.hw ||
+      entry?.displayHw ||
+      entry?.headwordHw ||
+      entry?.hwi?.hw ||
+      entry?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.hw ||
+      entry?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.displayHw ||
+      entry?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.hwi?.hw ||
+      fallbackWord ||
+      ""
+    );
+  }
+
+  function pickLearnerIpa(entry) {
+    return (
+      entry?.ipa ||
+      entry?.pronunciation ||
+      entry?.hwi?.prs?.[0]?.ipa ||
+      entry?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.ipa ||
+      entry?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.pronunciation ||
+      entry?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.hwi?.prs?.[0]?.ipa ||
+      ""
+    );
+  }
+
+  function applyLearnerHeroHwIpa() {
+    if (!learnerSourceOn()) return;
+    if (!currentWord) return;
+
+    const key = currentWord.key;
+    const entry =
+      window.easyDictCache?.[key + "::__learner_panel_v4"] ||
+      window.easyDictCache?.[key + "::__learner_panel_v3"] ||
+      window.easyDictCache?.[key + "::__panel_v2"] ||
+      window.easyDictCache?.[key] ||
+      null;
+
+    if (!entry) return;
+
+    const rawHw = pickLearnerHw(entry, currentWord.word);
+    const hw = fmtHw(rawHw);
+    const ipa = pickLearnerIpa(entry);
+
+    const heroPron = document.getElementById("heroPron");
+    if (heroPron) {
+      const parts = [];
+      if (hw) parts.push(hw);
+      if (ipa) parts.push(`/${ipa}/`);
+      heroPron.textContent = parts.join("  ");
+    }
+  }
+
+  const oldShowWord = window.showWord || (typeof showWord === "function" ? showWord : null);
+  if (typeof oldShowWord === "function" && !oldShowWord.__learnerHeroHwIpaWrapped) {
+    const wrapped = function() {
+      const r = oldShowWord.apply(this, arguments);
+      setTimeout(applyLearnerHeroHwIpa, 120);
+      setTimeout(applyLearnerHeroHwIpa, 500);
+      setTimeout(applyLearnerHeroHwIpa, 1000);
+      return r;
+    };
+    wrapped.__learnerHeroHwIpaWrapped = true;
+    window.showWord = wrapped;
+    try { showWord = wrapped; } catch {}
+  }
+
+  const oldRenderSheetTab = window.renderSheetTab || (typeof renderSheetTab === "function" ? renderSheetTab : null);
+  if (typeof oldRenderSheetTab === "function" && !oldRenderSheetTab.__learnerHeroHwIpaWrapped) {
+    const wrapped = function() {
+      const r = oldRenderSheetTab.apply(this, arguments);
+      setTimeout(applyLearnerHeroHwIpa, 120);
+      setTimeout(applyLearnerHeroHwIpa, 500);
+      return r;
+    };
+    wrapped.__learnerHeroHwIpaWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  window.applyLearnerHeroHwIpa = applyLearnerHeroHwIpa;
+})();
+
+
+/* ============================================================
+   LEARNER HEADER LAYOUT FIX
+   - Match Collegiate header style
+   - IPA on top line
+   - HW shown under IPA as aban/don
+   - POS chips stay on one row: verb noun
+   - Forms stay below POS row
+   ============================================================ */
+(function(){
+  if (window.__learnerHeaderLayoutFixInstalled) return;
+  window.__learnerHeaderLayoutFixInstalled = true;
+
+  function learnerSourceOn() {
+    try {
+      if (typeof window.getDictionarySource === "function") {
+        return window.getDictionarySource() === "learner";
+      }
+    } catch {}
+    try {
+      return localStorage.getItem("ielts_vocab_dict_source_v1") === "learner";
+    } catch {
+      return false;
+    }
+  }
+
+  function h(s) {
+    if (typeof escapeHtml === "function") return escapeHtml(s);
+    return String(s ?? "").replace(/[&<>"']/g, m => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    }[m]));
+  }
+
+  function fmtHw(hw) {
+    return String(hw || "")
+      .replace(/\*/g, "/")
+      .replace(/\/+/g, "/")
+      .replace(/^\/|\/$/g, "")
+      .trim();
+  }
+
+  function pickPanelEntry() {
+    if (!currentWord) return null;
+    const key = currentWord.key;
+    return (
+      window.easyDictCache?.[key + "::__learner_panel_v4"] ||
+      window.easyDictCache?.[key + "::__learner_panel_v3"] ||
+      window.easyDictCache?.[key + "::__panel_v2"] ||
+      window.easyDictCache?.[key] ||
+      null
+    );
+  }
+
+  function pickHw(panel) {
+    return (
+      panel?.hero?.hw ||
+      panel?.hw ||
+      panel?.displayHw ||
+      panel?.headwordHw ||
+      panel?.hwi?.hw ||
+      panel?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.hw ||
+      panel?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.displayHw ||
+      panel?.entries?.find?.(e => e.hw || e.displayHw || e.hwi?.hw)?.hwi?.hw ||
+      ""
+    );
+  }
+
+  function pickIpa(panel) {
+    return (
+      panel?.hero?.ipa ||
+      panel?.ipa ||
+      panel?.pronunciation ||
+      panel?.hwi?.prs?.[0]?.ipa ||
+      panel?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.ipa ||
+      panel?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.pronunciation ||
+      panel?.entries?.find?.(e => e.ipa || e.pronunciation || e.hwi?.prs?.[0]?.ipa)?.hwi?.prs?.[0]?.ipa ||
+      ""
+    );
+  }
+
+  function pickPos(panel) {
+    const vals = [];
+
+    if (Array.isArray(panel?.entries)) {
+      for (const e of panel.entries) {
+        const pos = e.partOfSpeech || e.fl || e.functionalLabel || "";
+        if (pos) vals.push(pos);
+      }
+    }
+
+    if (Array.isArray(panel?.grammarLabels)) vals.push(...panel.grammarLabels);
+    if (Array.isArray(panel?.functionalLabels)) vals.push(...panel.functionalLabels);
+
+    const out = [];
+    const seen = new Set();
+    for (const v of vals) {
+      const s = String(v || "").trim();
+      if (!s) continue;
+      const k = s.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
+  }
+
+  function applyLearnerHeaderLayout() {
+    if (!learnerSourceOn()) return;
+    if (!currentWord) return;
+
+    const panel = pickPanelEntry();
+    if (!panel) return;
+
+    const ipa = pickIpa(panel);
+    const hw = fmtHw(pickHw(panel));
+    const pos = pickPos(panel);
+
+    const heroPron = document.getElementById("heroPron");
+    if (heroPron) {
+      heroPron.innerHTML = `
+        ${ipa ? `<div class="learner-ipa-line">/${h(ipa)}/</div>` : ""}
+        ${hw ? `<div class="learner-hw-line">${h(hw)}</div>` : ""}
+      `;
+    }
+
+    const heroChips = document.getElementById("heroChips");
+    if (heroChips && pos.length) {
+      heroChips.innerHTML = pos
+        .map(p => `<span class="gram-chip ${typeof gramClass === "function" ? gramClass(p) : ""}">${h(p)}</span>`)
+        .join("");
+    }
+
+    const heroInf = document.getElementById("heroInflections");
+    if (heroInf) {
+      // Remove "Forms" label for closer Collegiate-style header.
+      heroInf.innerHTML = String(heroInf.textContent || heroInf.innerHTML || "")
+        .replace(/^Forms\s*/i, "")
+        .replace(/^Grammar\s*/i, "")
+        .trim();
+    }
+  }
+
+  const oldShowWord = window.showWord || (typeof showWord === "function" ? showWord : null);
+  if (typeof oldShowWord === "function" && !oldShowWord.__learnerHeaderLayoutWrapped) {
+    const wrapped = function() {
+      const r = oldShowWord.apply(this, arguments);
+      setTimeout(applyLearnerHeaderLayout, 120);
+      setTimeout(applyLearnerHeaderLayout, 500);
+      setTimeout(applyLearnerHeaderLayout, 1000);
+      return r;
+    };
+    wrapped.__learnerHeaderLayoutWrapped = true;
+    window.showWord = wrapped;
+    try { showWord = wrapped; } catch {}
+  }
+
+  const oldRenderSheetTab = window.renderSheetTab || (typeof renderSheetTab === "function" ? renderSheetTab : null);
+  if (typeof oldRenderSheetTab === "function" && !oldRenderSheetTab.__learnerHeaderLayoutWrapped) {
+    const wrapped = function() {
+      const r = oldRenderSheetTab.apply(this, arguments);
+      setTimeout(applyLearnerHeaderLayout, 120);
+      setTimeout(applyLearnerHeaderLayout, 500);
+      return r;
+    };
+    wrapped.__learnerHeaderLayoutWrapped = true;
+    window.renderSheetTab = wrapped;
+    try { renderSheetTab = wrapped; } catch {}
+  }
+
+  window.applyLearnerHeaderLayout = applyLearnerHeaderLayout;
+})();
+
+
+/* ============================================================
+   FIRST-TIME MODE INTRO + SYNCED PREFERENCES
+   - Opens after goal setup
+   - Explains dictionary and translation modes
+   - Persists choice locally and in Drive sync payload
+   - Re-checks after sync restore so first-time users still see it
+   ============================================================ */
+(function(){
+  if (window.__modeIntroOnboardingInstalledV1) return;
+  window.__modeIntroOnboardingInstalledV1 = true;
+
+  const MODE_DONE_KEY = LS.MODE_INTRO_DONE || "ielts_vocab_mode_intro_done_v1";
+  const MODE_UPDATED_AT_KEY = LS.MODE_INTRO_UPDATED_AT || "ielts_vocab_mode_intro_updated_at_v1";
+  const DICT_KEY = LS.DICT_SOURCE || "ielts_vocab_dict_source_v1";
+  const ZH_KEY = LS.ZH_TRANSLATION_MODE || "ielts_vocab_zh_translation_mode_v1";
+  const OLD_ZH_KEY = "ielts_vocab_zh_translation_v1";
+  const WELCOME_SHOWN_SESSION_KEY = "ielts_vocab_welcome_shown_this_session_v1";
+  const MODE_INTRO_ALLOWED_SESSION_KEY = "ielts_vocab_mode_intro_allowed_this_session_v1";
+  let applyingDrivePreferences = false;
+
+  function hasGoalConfigured() {
+    try {
+      const g = JSON.parse(localStorage.getItem(LS.GOAL) || "{}");
+      return Number(g.wordsPerDay || g.dailyTarget || g.target || 0) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  function getModeIntroDone() {
+    try { return localStorage.getItem(MODE_DONE_KEY) === "1"; }
+    catch { return false; }
+  }
+
+  function shouldShowModeIntro() {
+    try { return localStorage.getItem(MODE_DONE_KEY) === "0"; }
+    catch { return false; }
+  }
+
+  function welcomeShownThisSession() {
+    try { return sessionStorage.getItem(WELCOME_SHOWN_SESSION_KEY) === "1"; }
+    catch { return false; }
+  }
+
+  function modeIntroAllowedThisSession() {
+    try { return sessionStorage.getItem(MODE_INTRO_ALLOWED_SESSION_KEY) === "1"; }
+    catch { return false; }
+  }
+
+  function makeModeIntroEligible() {
+    if (!welcomeShownThisSession()) return;
+    try {
+      if (localStorage.getItem(MODE_DONE_KEY) === null) {
+        localStorage.setItem(MODE_DONE_KEY, "0");
+      }
+      sessionStorage.setItem(MODE_INTRO_ALLOWED_SESSION_KEY, "1");
+    } catch {}
+  }
+
+  function canPrewarmModeIntro() {
+    return welcomeShownThisSession() &&
+      !getModeIntroDone() &&
+      !hasGoalConfigured();
+  }
+
+  function markModeIntroDone(done) {
+    const stamp = new Date().toISOString();
+    try { localStorage.setItem(MODE_DONE_KEY, done ? "1" : "0"); } catch {}
+    try { localStorage.setItem(MODE_UPDATED_AT_KEY, stamp); } catch {}
+    touchPreferenceSyncStamp(stamp);
+  }
+
+  function touchPreferenceSyncStamp(stamp = new Date().toISOString()) {
+    if (applyingDrivePreferences) return;
+    try { localStorage.setItem(MODE_UPDATED_AT_KEY, stamp); } catch {}
+    try { localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, stamp); } catch {}
+  }
+
+  function getSavedSource() {
+    try {
+      const v = localStorage.getItem(DICT_KEY);
+      return v === "collegiate" ? "collegiate" : "learner";
+    } catch {
+      return "learner";
+    }
+  }
+
+  function getSavedZhMode() {
+    try {
+      const v = localStorage.getItem(ZH_KEY);
+      if (v === "on" || v === "blur" || v === "off") return v;
+      const old = localStorage.getItem(OLD_ZH_KEY);
+      return old === "1" ? "on" : "off";
+    } catch {
+      return "off";
+    }
+  }
+
+  function closeModeIntro() {
+    const el = document.getElementById("modeIntroOverlay");
+    if (el) el.remove();
+    try {
+      document.body?.classList?.remove("mode-intro-open");
+      document.documentElement.classList.remove("mode-intro-open");
+    } catch {}
+  }
+
+  function updateModeIntroSelection() {
+    const source = getSavedSource();
+    const zhm = getSavedZhMode();
+
+    document.querySelectorAll("[data-mode-source]").forEach(el => {
+      el.classList.toggle("active", el.getAttribute("data-mode-source") === source);
+    });
+
+    document.querySelectorAll("[data-mode-zh]").forEach(el => {
+      el.classList.toggle("active", el.getAttribute("data-mode-zh") === zhm);
+    });
+  }
+
+  function ensureModeIntroOverlay() {
+    let el = document.getElementById("modeIntroOverlay");
+    if (el) return el;
+
+    el = document.createElement("div");
+    el.id = "modeIntroOverlay";
+    el.className = "mode-intro-overlay";
+    el.innerHTML = `
+      <div class="mode-intro-card">
+        <div class="mode-intro-kicker">Study Setup</div>
+        <div class="mode-intro-title">Choose how you want the app to explain words</div>
+        <div class="mode-intro-sub">You can change both settings later in Learning Settings. We save this choice to your synced backup too.</div>
+
+        <div class="mode-intro-section">
+          <div class="mode-intro-section-title">Dictionary mode</div>
+          <div class="mode-intro-grid">
+            <button class="mode-option" data-mode-source="collegiate" onclick="selectModeIntroSource('collegiate')">
+              <div class="mode-option-title">Collegiate</div>
+              <div class="mode-option-body">Best when you want the full dictionary card: richer meanings, related forms, and synonym tabs.</div>
+            </button>
+            <button class="mode-option" data-mode-source="learner" onclick="selectModeIntroSource('learner')">
+              <div class="mode-option-title">Learner</div>
+              <div class="mode-option-body">Best when you want a cleaner card focused on this word only, grouped by part of speech with simpler examples.</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="mode-intro-section">
+          <div class="mode-intro-section-title">Chinese translation mode</div>
+          <div class="mode-intro-grid mode-intro-grid-3">
+            <button class="mode-option compact" data-mode-zh="off" onclick="selectModeIntroZh('off')">
+              <div class="mode-option-title">Off</div>
+              <div class="mode-option-body">English only.</div>
+            </button>
+            <button class="mode-option compact" data-mode-zh="blur" onclick="selectModeIntroZh('blur')">
+              <div class="mode-option-title">Blur</div>
+              <div class="mode-option-body">Shows Chinese with purple blur. Swipe right to reveal only when needed.</div>
+            </button>
+            <button class="mode-option compact" data-mode-zh="on" onclick="selectModeIntroZh('on')">
+              <div class="mode-option-title">On</div>
+              <div class="mode-option-body">Always show Chinese.</div>
+            </button>
+          </div>
+        </div>
+
+        <div class="mode-intro-actions">
+          <button class="wm-btn secondary" onclick="skipModeIntroForNow()">Keep current settings</button>
+          <button class="g-setup-btn" onclick="completeModeIntro()">Continue into the app</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(el);
+    return el;
+  }
+
+  function prewarmModeIntro(reason = "goal-setup") {
+    if (!canPrewarmModeIntro()) return false;
+    const goalEl = document.getElementById("goalSetupOverlay");
+    const goalVisible = goalEl && getComputedStyle(goalEl).display !== "none" && goalEl.getAttribute("aria-hidden") !== "true";
+    if (!goalVisible) return false;
+
+    try {
+      if (localStorage.getItem(MODE_DONE_KEY) === null) {
+        localStorage.setItem(MODE_DONE_KEY, "0");
+      }
+      sessionStorage.setItem(MODE_INTRO_ALLOWED_SESSION_KEY, "1");
+    } catch {}
+
+    const el = ensureModeIntroOverlay();
+    el.style.display = "flex";
+    el.classList.add("prewarm");
+    el.classList.remove("revealed");
+    updateModeIntroSelection();
+    console.log("[Mode Intro] prewarmed under goal setup:", reason);
+    return true;
+  }
+
+  function openModeIntro(reason = "manual") {
+    if (!hasGoalConfigured()) return false;
+    const el = ensureModeIntroOverlay();
+    el.style.display = "flex";
+    el.classList.remove("prewarm");
+    requestAnimationFrame(() => el.classList.add("revealed"));
+    updateModeIntroSelection();
+    try {
+      document.body?.classList?.add("mode-intro-open");
+      document.documentElement.classList.add("mode-intro-open");
+    } catch {}
+    console.log("[Mode Intro] opened:", reason);
+    return true;
+  }
+
+  function maybeOpenModeIntro(reason = "check") {
+    if (!modeIntroAllowedThisSession()) return false;
+    if (String(reason || "") !== "after-goal-confirm") return false;
+    if (getModeIntroDone()) return false;
+    if (!shouldShowModeIntro()) return false;
+    if (!hasGoalConfigured()) return false;
+
+    const goalEl = document.getElementById("goalSetupOverlay");
+    const goalVisible = goalEl && getComputedStyle(goalEl).display !== "none" && goalEl.getAttribute("aria-hidden") !== "true";
+    if (goalVisible) return false;
+
+    setTimeout(() => openModeIntro(reason), 120);
+    return true;
+  }
+
+  window.selectModeIntroSource = function(source) {
+    try {
+      if (typeof window.setDictionarySource === "function") {
+        window.setDictionarySource(source);
+      } else {
+        localStorage.setItem(DICT_KEY, source === "learner" ? "learner" : "collegiate");
+      }
+    } catch {}
+    touchPreferenceSyncStamp();
+    updateModeIntroSelection();
+  };
+
+  window.selectModeIntroZh = function(mode) {
+    try {
+      if (typeof window.setChineseTranslationMode === "function") {
+        window.setChineseTranslationMode(mode);
+      } else {
+        const next = mode === "on" || mode === "blur" ? mode : "off";
+        localStorage.setItem(ZH_KEY, next);
+        localStorage.setItem(OLD_ZH_KEY, next === "off" ? "0" : "1");
+      }
+    } catch {}
+    touchPreferenceSyncStamp();
+    updateModeIntroSelection();
+  };
+
+  async function uploadPreferencesNow() {
+    try {
+      const status = typeof window.backendSyncStatus === "function"
+        ? await window.backendSyncStatus()
+        : { connected: false };
+
+      if (!status.connected) return { status: "not-connected" };
+
+      const payload = typeof window.buildLeanPayloadV4 === "function"
+        ? window.buildLeanPayloadV4("preference-sync")
+        : null;
+
+      if (!payload) return { status: "payload-missing" };
+
+      const r = await fetch("/api/sync/merge", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payload })
+      });
+
+      let j = {};
+      try { j = await r.json(); } catch {}
+
+      if (!r.ok || !j.ok) {
+        throw new Error(j.detail || ("Preference sync failed: " + r.status));
+      }
+
+      if (j.payload && typeof window.applyLeanPayloadV4 === "function") {
+        window.applyLeanPayloadV4(j.payload);
+      }
+
+      try { localStorage.setItem(LS.CLOUD_LAST_SYNC_AT, nowIso()); } catch {}
+      console.log("[Cloud Sync] preferences uploaded from explicit user action");
+      return { status: "preferences-uploaded" };
+    } catch (e) {
+      console.warn("[Cloud Sync] preference upload failed:", e);
+      return { status: "failed", error: String(e?.message || e) };
+    }
+  }
+
+  function schedulePreferenceUpload() {
+    try {
+      setTimeout(uploadPreferencesNow, 80);
+    } catch {}
+  }
+
+  window.uploadPreferencesNow = uploadPreferencesNow;
+
+  window.setDictionarySourceFromUser = function(source) {
+    try {
+      if (typeof window.setDictionarySource === "function") {
+        window.setDictionarySource(source, { userToast: true });
+      }
+    } catch {}
+    touchPreferenceSyncStamp();
+    schedulePreferenceUpload();
+  };
+
+  window.setChineseTranslationModeFromUser = function(mode) {
+    try {
+      if (typeof window.setChineseTranslationMode === "function") {
+        window.setChineseTranslationMode(mode, { userToast: true });
+      }
+    } catch {}
+    touchPreferenceSyncStamp();
+    schedulePreferenceUpload();
+  };
+
+  window.skipModeIntroForNow = function() {
+    markModeIntroDone(true);
+    closeModeIntro();
+    try { sessionStorage.removeItem(MODE_INTRO_ALLOWED_SESSION_KEY); } catch {}
+    schedulePreferenceUpload();
+  };
+
+  window.completeModeIntro = function() {
+    markModeIntroDone(true);
+    closeModeIntro();
+    try {
+      if (typeof renderAll === "function") renderAll();
+      else if (typeof renderGoalTab === "function") renderGoalTab();
+    } catch {}
+    try { sessionStorage.removeItem(MODE_INTRO_ALLOWED_SESSION_KEY); } catch {}
+    schedulePreferenceUpload();
+  };
+
+  window.openModeIntro = openModeIntro;
+  window.maybeOpenModeIntro = maybeOpenModeIntro;
+
+  if (typeof window.goalSetupConfirm === "function" && !window.goalSetupConfirm.__modeIntroWrappedV1) {
+    const oldConfirm = window.goalSetupConfirm;
+    const wrappedConfirm = function() {
+      const result = oldConfirm.apply(this, arguments);
+      makeModeIntroEligible();
+      setTimeout(() => maybeOpenModeIntro("after-goal-confirm"), 80);
+      return result;
+    };
+    wrappedConfirm.__modeIntroWrappedV1 = true;
+    window.goalSetupConfirm = wrappedConfirm;
+  }
+
+  if (typeof window.openGoalSetup === "function" && !window.openGoalSetup.__modeIntroPrewarmWrappedV1) {
+    const oldOpenGoalSetup = window.openGoalSetup;
+    const wrappedOpenGoalSetup = function() {
+      const result = oldOpenGoalSetup.apply(this, arguments);
+      setTimeout(() => prewarmModeIntro("open-goal-setup"), 60);
+      return result;
+    };
+    wrappedOpenGoalSetup.__modeIntroPrewarmWrappedV1 = true;
+    window.openGoalSetup = wrappedOpenGoalSetup;
+    try { openGoalSetup = wrappedOpenGoalSetup; } catch {}
+  }
+
+  if (typeof window.applyLeanPayloadV4 === "function" && !window.applyLeanPayloadV4.__modeIntroWrappedV1) {
+    const oldApply = window.applyLeanPayloadV4;
+    const wrappedApply = function() {
+      const payload = arguments[0];
+      const prefs = payload?.preferences && typeof payload.preferences === "object"
+        ? payload.preferences
+        : null;
+      const result = oldApply.apply(this, arguments);
+      setTimeout(() => {
+        if (prefs) {
+          try {
+            applyingDrivePreferences = true;
+            if (Object.prototype.hasOwnProperty.call(prefs, "dictionarySource") && typeof window.setDictionarySource === "function") {
+              window.setDictionarySource(getSavedSource(), { silent: true, skipPreferenceSync: true });
+            }
+            if (Object.prototype.hasOwnProperty.call(prefs, "translationMode") && typeof window.setChineseTranslationMode === "function") {
+              window.setChineseTranslationMode(getSavedZhMode(), { silent: true, skipPreferenceSync: true });
+            }
+          } catch {}
+          finally {
+            applyingDrivePreferences = false;
+          }
+          // Drive restore must not open first-time preference intro.
+          if (prefs && Object.keys(prefs).length) {
+            closeModeIntro();
+            try { sessionStorage.removeItem(MODE_INTRO_ALLOWED_SESSION_KEY); } catch {}
+          }
+        }
+      }, 60);
+      return result;
+    };
+    wrappedApply.__modeIntroWrappedV1 = true;
+    window.applyLeanPayloadV4 = wrappedApply;
+  }
+
+  if (typeof window.backendStartupRestoreOrMerge === "function" && !window.backendStartupRestoreOrMerge.__modeIntroWrappedV1) {
+    const oldRestore = window.backendStartupRestoreOrMerge;
+    const wrappedRestore = async function() {
+      const result = await oldRestore.apply(this, arguments);
+      return result;
+    };
+    wrappedRestore.__modeIntroWrappedV1 = true;
+    window.backendStartupRestoreOrMerge = wrappedRestore;
+  }
+
+  console.log("[Mode Intro] synced onboarding installed.");
+})();
+
+
+/* ============================================================
+   FINAL PREFERENCE FAST SYNC BYPASS
+   - Keep 30s resume/focus cooldown unchanged.
+   - Preference button changes bypass that cooldown.
+   - Short debounce groups Dictionary + Chinese changes.
+   ============================================================ */
+(function(){
+  if (window.__finalPreferenceFastSyncBypassV1) return;
+  window.__finalPreferenceFastSyncBypassV1 = true;
+
+  const DICT_KEY = (window.LS && LS.DICT_SOURCE) || "ielts_vocab_dict_source_v1";
+  const ZH_KEY = (window.LS && LS.ZH_TRANSLATION_MODE) || "ielts_vocab_zh_translation_mode_v1";
+  const OLD_ZH_KEY = "ielts_vocab_zh_translation_v1";
+
+  const DICT_TS_KEY = "ielts_vocab_dict_source_updated_at_v1";
+  const ZH_TS_KEY = "ielts_vocab_zh_translation_mode_updated_at_v1";
+  const PREF_TS_KEY = "ielts_vocab_preferences_updated_at_v1";
+
+  let prefSyncTimer = null;
+  let prefSyncRunning = false;
+  let pendingReasons = new Set();
+
+  function nowIso(){ return new Date().toISOString(); }
+
+  function safeGet(key){
+    try { return localStorage.getItem(key); }
+    catch { return null; }
+  }
+
+  function safeSet(key, value){
+    try { localStorage.setItem(key, value); }
+    catch {}
+  }
+
+  function safeRemove(key){
+    try { localStorage.removeItem(key); }
+    catch {}
+  }
+
+  function normaliseDict(v){
+    return v === "learner" ? "learner" : "collegiate";
+  }
+
+  function normaliseZh(v){
+    return (v === "on" || v === "blur") ? v : "off";
+  }
+
+  function currentPreferences(){
+    const dict = normaliseDict(safeGet(DICT_KEY));
+    const zhRaw = safeGet(ZH_KEY);
+    const zh = zhRaw === null
+      ? (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off")
+      : normaliseZh(zhRaw);
+
+    return {
+      dictionarySource: dict,
+      dictionarySourceUpdatedAt: safeGet(DICT_TS_KEY) || "",
+      translationMode: zh,
+      translationModeUpdatedAt: safeGet(ZH_TS_KEY) || "",
+      preferencesUpdatedAt: safeGet(PREF_TS_KEY) || ""
+    };
+  }
+
+  function touchPreferenceStamp(reason){
+    const ts = nowIso();
+
+    if (reason === "dictionarySource") {
+      safeSet(DICT_TS_KEY, ts);
+    } else if (reason === "translationMode") {
+      safeSet(ZH_TS_KEY, ts);
+    } else {
+      if (!safeGet(DICT_TS_KEY)) safeSet(DICT_TS_KEY, ts);
+      if (!safeGet(ZH_TS_KEY)) safeSet(ZH_TS_KEY, ts);
+    }
+
+    safeSet(PREF_TS_KEY, ts);
+
+    if (window.LS) {
+      if (LS.CLOUD_DATA_UPDATED_AT) safeSet(LS.CLOUD_DATA_UPDATED_AT, ts);
+      if (LS.CLOUD_PENDING_SYNC) safeSet(LS.CLOUD_PENDING_SYNC, "1");
+    }
+  }
+
+  async function backendConnected(){
+    try {
+      if (typeof window.backendSyncStatus === "function") {
+        const st = await window.backendSyncStatus();
+        return !!st.connected;
+      }
+    } catch {}
+    try {
+      const r = await fetch("/api/sync/status", { credentials: "include" });
+      const j = await r.json();
+      return !!j.connected;
+    } catch {}
+    return false;
+  }
+
+  async function runExplicitPreferenceSync(){
+    if (prefSyncRunning) return { status: "already-running" };
+    prefSyncRunning = true;
+
+    const reasons = Array.from(pendingReasons);
+    pendingReasons.clear();
+
+    try {
+      const connected = await backendConnected();
+      if (!connected) {
+        console.log("[Cloud Sync] preference fast sync skipped: not connected", reasons);
+        return { status: "not-connected", reasons };
+      }
+
+      /*
+        Do NOT call runPwaResumeRefresh().
+        That route has the 30s focus/resume cooldown.
+        Explicit preference changes must bypass it.
+      */
+
+      let result = null;
+
+      if (typeof window.uploadPreferencesNow === "function") {
+        result = await window.uploadPreferencesNow();
+      } else if (typeof window.backendMergeSync === "function") {
+        result = await window.backendMergeSync({
+          auto: false,
+          reason: "explicit-preference-change",
+          bypassResumeCooldown: true
+        });
+      } else if (typeof window.backendStartupRestoreOrMerge === "function") {
+        result = await window.backendStartupRestoreOrMerge("explicit-preference-change");
+      } else if (typeof window.cloudManualSync === "function") {
+        result = await window.cloudManualSync("explicit-preference-change");
+      } else {
+        result = { status: "no-sync-function" };
+      }
+
+      safeRemove(window.LS && LS.CLOUD_PENDING_SYNC ? LS.CLOUD_PENDING_SYNC : "ielts_vocab_cloud_pending_sync_v1");
+      if (window.LS && LS.CLOUD_LAST_SYNC_AT) safeSet(LS.CLOUD_LAST_SYNC_AT, nowIso());
+
+      console.log("[Cloud Sync] preference fast sync result:", result, currentPreferences());
+      return result;
+    } catch (e) {
+      console.warn("[Cloud Sync] preference fast sync failed:", e);
+      return { status: "failed", error: String(e && e.message || e), reasons };
+    } finally {
+      prefSyncRunning = false;
+      if (pendingReasons.size) {
+        scheduleExplicitPreferenceSync("queued-during-sync");
+      }
+    }
+  }
+
+  function scheduleExplicitPreferenceSync(reason){
+    pendingReasons.add(reason || "preference");
+
+    if (prefSyncTimer) clearTimeout(prefSyncTimer);
+
+    prefSyncTimer = setTimeout(() => {
+      prefSyncTimer = null;
+      runExplicitPreferenceSync();
+    }, 700);
+  }
+
+  function afterPreferenceChanged(reason){
+    touchPreferenceStamp(reason);
+    scheduleExplicitPreferenceSync(reason);
+
+    try {
+      if (typeof window.renderLearningSettings === "function") window.renderLearningSettings();
+      if (typeof window.renderAll === "function") window.renderAll();
+      else if (typeof window.renderGoalTab === "function") window.renderGoalTab();
+    } catch {}
+  }
+
+  function wrapSetter(name, reason){
+    const old = window[name];
+    if (typeof old !== "function" || old.__prefFastSyncWrappedV1) return;
+
+    const wrapped = function(value, opts = {}){
+      const skipPreferenceSync = !!(opts && (opts.skipPreferenceSync || opts.silent));
+      const before = reason === "dictionarySource"
+        ? normaliseDict(safeGet(DICT_KEY))
+        : normaliseZh(safeGet(ZH_KEY) || (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off"));
+
+      const result = old.apply(this, arguments);
+
+      const after = reason === "dictionarySource"
+        ? normaliseDict(safeGet(DICT_KEY))
+        : normaliseZh(safeGet(ZH_KEY) || (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off"));
+
+      if (!skipPreferenceSync && before !== after) {
+        afterPreferenceChanged(reason);
+      }
+
+      return result;
+    };
+
+    wrapped.__prefFastSyncWrappedV1 = true;
+    window[name] = wrapped;
+  }
+
+  wrapSetter("setDictionarySource", "dictionarySource");
+  wrapSetter("setChineseTranslationMode", "translationMode");
+  wrapSetter("setTraditionalChineseTranslations", "translationMode");
+
+  window.setDictionarySourceFromUser = function(source){
+    const next = normaliseDict(source);
+    const before = normaliseDict(safeGet(DICT_KEY));
+
+    if (typeof window.setDictionarySource === "function") {
+      window.setDictionarySource(next, { userToast: before !== next });
+    } else {
+      safeSet(DICT_KEY, next);
+    }
+
+    const after = normaliseDict(safeGet(DICT_KEY));
+    if (before !== after) afterPreferenceChanged("dictionarySource");
+  };
+
+  window.setChineseTranslationModeFromUser = function(mode){
+    const next = normaliseZh(mode);
+    const before = normaliseZh(safeGet(ZH_KEY) || (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off"));
+
+    if (typeof window.setChineseTranslationMode === "function") {
+      window.setChineseTranslationMode(next, { userToast: before !== next });
+    } else {
+      safeSet(ZH_KEY, next);
+      safeSet(OLD_ZH_KEY, next === "off" ? "0" : "1");
+    }
+
+    const after = normaliseZh(safeGet(ZH_KEY) || (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off"));
+    if (before !== after) afterPreferenceChanged("translationMode");
+  };
+
+  window.scheduleExplicitPreferenceSync = scheduleExplicitPreferenceSync;
+  window.runExplicitPreferenceSync = runExplicitPreferenceSync;
+  window.getPreferenceSyncState = currentPreferences;
+
+  console.log("[Cloud Sync] preference fast sync bypass installed.");
+})();
+
+
+/* ============================================================
+   FINAL PREFERENCE TIMESTAMP MERGE FIX
+   - Prevent stale windows from overwriting newer preference fields.
+   - Per setting: newer timestamp wins.
+   - Works even when Drive payload is applied because whole-payload timestamp is equal/newer.
+   ============================================================ */
+(function(){
+  if (window.__finalPreferenceTimestampMergeFixV2) return;
+  window.__finalPreferenceTimestampMergeFixV2 = true;
+
+  const DICT_KEY = (window.LS && LS.DICT_SOURCE) || "ielts_vocab_dict_source_v1";
+  const ZH_MODE_KEY = (window.LS && LS.ZH_TRANSLATION_MODE) || "ielts_vocab_zh_translation_mode_v1";
+  const OLD_ZH_KEY = "ielts_vocab_zh_translation_v1";
+
+  const DICT_TS_KEY = "ielts_vocab_dict_source_updated_at_v1";
+  const ZH_TS_KEY = "ielts_vocab_zh_translation_mode_updated_at_v1";
+  const PREF_TS_KEY = "ielts_vocab_preferences_updated_at_v1";
+
+  function nowIso(){ return new Date().toISOString(); }
+
+  function safeGet(k){
+    try { return localStorage.getItem(k); }
+    catch { return null; }
+  }
+
+  function safeSet(k, v){
+    try { localStorage.setItem(k, v); }
+    catch {}
+  }
+
+  function normaliseDict(v){
+    return v === "learner" ? "learner" : "collegiate";
+  }
+
+  function normaliseZh(v){
+    return (v === "on" || v === "blur") ? v : "off";
+  }
+
+  function readLocalPrefs(){
+    const zhRaw = safeGet(ZH_MODE_KEY);
+    const zh = zhRaw === null
+      ? (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off")
+      : normaliseZh(zhRaw);
+
+    return {
+      dictionarySource: normaliseDict(safeGet(DICT_KEY)),
+      dictionarySourceUpdatedAt: safeGet(DICT_TS_KEY) || "",
+      translationMode: zh,
+      translationModeUpdatedAt: safeGet(ZH_TS_KEY) || "",
+      preferencesUpdatedAt: safeGet(PREF_TS_KEY) || ""
+    };
+  }
+
+  function prefTs(prefs, field){
+    if (!prefs || typeof prefs !== "object") return "";
+    if (field === "dictionarySource") {
+      return String(
+        prefs.dictionarySourceUpdatedAt ||
+        prefs.preferencesUpdatedAt ||
+        prefs.modeIntroUpdatedAt ||
+        ""
+      );
+    }
+    if (field === "translationMode") {
+      return String(
+        prefs.translationModeUpdatedAt ||
+        prefs.preferencesUpdatedAt ||
+        prefs.modeIntroUpdatedAt ||
+        ""
+      );
+    }
+    return "";
+  }
+
+  function newerOrMissing(remoteTs, localTs, remoteHasValue, localHasValue){
+    if (!remoteHasValue) return false;
+    if (!localHasValue) return true;
+
+    // Old Drive payloads without per-field timestamps should not beat a local
+    // setting that has already been changed with a timestamp.
+    if (!remoteTs && localTs) return false;
+
+    // If both have no timestamp, keep Drive for old-backup compatibility.
+    if (!remoteTs && !localTs) return true;
+
+    return String(remoteTs) >= String(localTs);
+  }
+
+  function applyPreferenceFieldFromPayload(payload, field){
+    const prefs = payload && payload.preferences && typeof payload.preferences === "object"
+      ? payload.preferences
+      : null;
+    if (!prefs) return false;
+
+    const local = readLocalPrefs();
+
+    if (field === "dictionarySource") {
+      const remoteHas = Object.prototype.hasOwnProperty.call(prefs, "dictionarySource");
+      const localHas = !!safeGet(DICT_KEY);
+      const rTs = prefTs(prefs, "dictionarySource");
+      const lTs = local.dictionarySourceUpdatedAt;
+
+      if (newerOrMissing(rTs, lTs, remoteHas, localHas)) {
+        const next = normaliseDict(prefs.dictionarySource);
+        safeSet(DICT_KEY, next);
+        safeSet(DICT_TS_KEY, rTs || payload?.meta?.updatedAt || nowIso());
+        return true;
+      }
+      return false;
+    }
+
+    if (field === "translationMode") {
+      const remoteHas = Object.prototype.hasOwnProperty.call(prefs, "translationMode");
+      const localHas = !!safeGet(ZH_MODE_KEY) || safeGet(OLD_ZH_KEY) !== null;
+      const rTs = prefTs(prefs, "translationMode");
+      const lTs = local.translationModeUpdatedAt;
+
+      if (newerOrMissing(rTs, lTs, remoteHas, localHas)) {
+        const next = normaliseZh(prefs.translationMode);
+        safeSet(ZH_MODE_KEY, next);
+        safeSet(OLD_ZH_KEY, next === "off" ? "0" : (next === "blur" ? "2" : "1"));
+        safeSet(ZH_TS_KEY, rTs || payload?.meta?.updatedAt || nowIso());
+        return true;
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  function restoreLocalPreferenceSnapshot(snapshot){
+    if (!snapshot) return;
+
+    if (snapshot.dictionarySource) {
+      safeSet(DICT_KEY, snapshot.dictionarySource);
+      if (snapshot.dictionarySourceUpdatedAt) safeSet(DICT_TS_KEY, snapshot.dictionarySourceUpdatedAt);
+    }
+
+    if (snapshot.translationMode) {
+      safeSet(ZH_MODE_KEY, snapshot.translationMode);
+      safeSet(OLD_ZH_KEY, snapshot.translationMode === "off" ? "0" : (snapshot.translationMode === "blur" ? "2" : "1"));
+      if (snapshot.translationModeUpdatedAt) safeSet(ZH_TS_KEY, snapshot.translationModeUpdatedAt);
+    }
+
+    if (snapshot.preferencesUpdatedAt) safeSet(PREF_TS_KEY, snapshot.preferencesUpdatedAt);
+  }
+
+  // Wrap payload builder so even if the earlier text replacement missed,
+  // every new upload still carries preference timestamps.
+  if (typeof window.buildLeanPayloadV4 === "function" && !window.buildLeanPayloadV4.__prefTimestampWrappedV2) {
+    const oldBuild = window.buildLeanPayloadV4;
+    const wrappedBuild = function(){
+      const payload = oldBuild.apply(this, arguments);
+      if (!payload || typeof payload !== "object") return payload;
+
+      const local = readLocalPrefs();
+      const prefs = payload.preferences && typeof payload.preferences === "object"
+        ? payload.preferences
+        : {};
+
+      payload.preferences = {
+        ...prefs,
+        dictionarySource: normaliseDict(prefs.dictionarySource || local.dictionarySource),
+        dictionarySourceUpdatedAt: prefs.dictionarySourceUpdatedAt || local.dictionarySourceUpdatedAt || payload?.meta?.updatedAt || nowIso(),
+        translationMode: normaliseZh(prefs.translationMode || local.translationMode),
+        translationModeUpdatedAt: prefs.translationModeUpdatedAt || local.translationModeUpdatedAt || payload?.meta?.updatedAt || nowIso(),
+        preferencesUpdatedAt: prefs.preferencesUpdatedAt || local.preferencesUpdatedAt || payload?.meta?.updatedAt || nowIso()
+      };
+
+      return payload;
+    };
+    wrappedBuild.__prefTimestampWrappedV2 = true;
+    window.buildLeanPayloadV4 = wrappedBuild;
+  }
+
+  // Wrap apply so Drive can update learning/goal data without forcing stale prefs.
+  if (typeof window.applyLeanPayloadV4 === "function" && !window.applyLeanPayloadV4.__prefTimestampWrappedV2) {
+    const oldApply = window.applyLeanPayloadV4;
+
+    const wrappedApply = function(payload){
+      const before = readLocalPrefs();
+      const prefs = payload && payload.preferences && typeof payload.preferences === "object"
+        ? payload.preferences
+        : null;
+
+      const result = oldApply.apply(this, arguments);
+
+      if (prefs) {
+        // oldApply may have blindly written remote prefs. Undo first, then apply only newer fields.
+        restoreLocalPreferenceSnapshot(before);
+
+        const dictApplied = applyPreferenceFieldFromPayload(payload, "dictionarySource");
+        const zhApplied = applyPreferenceFieldFromPayload(payload, "translationMode");
+
+        // modeIntroDone is harmless, but keep its own timestamp if present.
+        if (Object.prototype.hasOwnProperty.call(prefs, "modeIntroDone") && window.LS) {
+          const remoteIntroTs = String(prefs.modeIntroUpdatedAt || prefs.preferencesUpdatedAt || payload?.meta?.updatedAt || "");
+          const localIntroTs = safeGet(LS.MODE_INTRO_UPDATED_AT) || "";
+          if (!localIntroTs || !remoteIntroTs || remoteIntroTs >= localIntroTs) {
+            safeSet(LS.MODE_INTRO_DONE, prefs.modeIntroDone ? "1" : "0");
+            safeSet(LS.MODE_INTRO_UPDATED_AT, remoteIntroTs || nowIso());
+          }
+        }
+
+        try {
+          if (typeof window.renderLearningSettings === "function") window.renderLearningSettings();
+          if (typeof window.updateModeIntroSelection === "function") window.updateModeIntroSelection();
+        } catch {}
+
+        console.log("[Cloud Sync] preference timestamp merge applied:", {
+          dictApplied,
+          zhApplied,
+          localBefore: before,
+          remote: {
+            dictionarySource: prefs.dictionarySource,
+            dictionarySourceUpdatedAt: prefs.dictionarySourceUpdatedAt,
+            translationMode: prefs.translationMode,
+            translationModeUpdatedAt: prefs.translationModeUpdatedAt
+          },
+          final: readLocalPrefs()
+        });
+      }
+
+      return result;
+    };
+
+    wrappedApply.__prefTimestampWrappedV2 = true;
+    window.applyLeanPayloadV4 = wrappedApply;
+  }
+
+  // Wrap explicit upload so returned merged payload cannot revert newer local prefs.
+  if (typeof window.uploadPreferencesNow === "function" && !window.uploadPreferencesNow.__prefTimestampWrappedV2) {
+    const oldUpload = window.uploadPreferencesNow;
+    const wrappedUpload = async function(){
+      const before = readLocalPrefs();
+      const result = await oldUpload.apply(this, arguments);
+      const after = readLocalPrefs();
+
+      // If upload path applied an older merged payload, restore local newer snapshot.
+      if (
+        before.dictionarySourceUpdatedAt && after.dictionarySourceUpdatedAt &&
+        before.dictionarySourceUpdatedAt > after.dictionarySourceUpdatedAt
+      ) {
+        safeSet(DICT_KEY, before.dictionarySource);
+        safeSet(DICT_TS_KEY, before.dictionarySourceUpdatedAt);
+      }
+      if (
+        before.translationModeUpdatedAt && after.translationModeUpdatedAt &&
+        before.translationModeUpdatedAt > after.translationModeUpdatedAt
+      ) {
+        safeSet(ZH_MODE_KEY, before.translationMode);
+        safeSet(OLD_ZH_KEY, before.translationMode === "off" ? "0" : (before.translationMode === "blur" ? "2" : "1"));
+        safeSet(ZH_TS_KEY, before.translationModeUpdatedAt);
+      }
+
+      try { if (typeof window.renderLearningSettings === "function") window.renderLearningSettings(); } catch {}
+      return result;
+    };
+
+    wrappedUpload.__prefTimestampWrappedV2 = true;
+    window.uploadPreferencesNow = wrappedUpload;
+  }
+
+  window.debugPreferenceTimestampMerge = function(){
+    console.log("[Cloud Sync] local preference timestamp state:", readLocalPrefs());
+    return readLocalPrefs();
+  };
+
+  console.log("[Cloud Sync] final preference timestamp merge fix installed.");
+})();
+
+
+/* ============================================================
+   FINAL FORCE PREFERENCE PAYLOAD UPLOAD
+   - Fixes: preference upload says success but Drive still returns old prefs.
+   - Explicit preference change now uploads a full v4 payload whose meta.updatedAt
+     is the latest preference timestamp, so /api/sync/merge treats it as newer.
+   - Other learning/goal/session merge structures stay unchanged.
+   ============================================================ */
+(function(){
+  if (window.__finalForcePreferencePayloadUploadV1) return;
+  window.__finalForcePreferencePayloadUploadV1 = true;
+
+  const DICT_KEY = (window.LS && LS.DICT_SOURCE) || "ielts_vocab_dict_source_v1";
+  const ZH_KEY = (window.LS && LS.ZH_TRANSLATION_MODE) || "ielts_vocab_zh_translation_mode_v1";
+  const OLD_ZH_KEY = "ielts_vocab_zh_translation_v1";
+
+  const DICT_TS_KEY = "ielts_vocab_dict_source_updated_at_v1";
+  const ZH_TS_KEY = "ielts_vocab_zh_translation_mode_updated_at_v1";
+  const PREF_TS_KEY = "ielts_vocab_preferences_updated_at_v1";
+
+  function nowIso(){ return new Date().toISOString(); }
+
+  function safeGet(k){
+    try { return localStorage.getItem(k); }
+    catch { return null; }
+  }
+
+  function safeSet(k, v){
+    try { localStorage.setItem(k, v); }
+    catch {}
+  }
+
+  function normaliseDict(v){
+    return v === "learner" ? "learner" : "collegiate";
+  }
+
+  function normaliseZh(v){
+    return (v === "on" || v === "blur") ? v : "off";
+  }
+
+  function currentPrefState(){
+    const dict = normaliseDict(safeGet(DICT_KEY));
+    const zhRaw = safeGet(ZH_KEY);
+    const zh = zhRaw === null
+      ? (safeGet(OLD_ZH_KEY) === "1" ? "on" : "off")
+      : normaliseZh(zhRaw);
+
+    let dictTs = safeGet(DICT_TS_KEY) || "";
+    let zhTs = safeGet(ZH_TS_KEY) || "";
+    let prefTs = safeGet(PREF_TS_KEY) || "";
+
+    // If old local state has no timestamps yet, stamp it now once.
+    const ts = nowIso();
+    if (!dictTs) {
+      dictTs = ts;
+      safeSet(DICT_TS_KEY, dictTs);
+    }
+    if (!zhTs) {
+      zhTs = ts;
+      safeSet(ZH_TS_KEY, zhTs);
+    }
+    if (!prefTs) {
+      prefTs = [dictTs, zhTs].sort().slice(-1)[0] || ts;
+      safeSet(PREF_TS_KEY, prefTs);
+    }
+
+    return {
+      dictionarySource: dict,
+      dictionarySourceUpdatedAt: dictTs,
+      translationMode: zh,
+      translationModeUpdatedAt: zhTs,
+      preferencesUpdatedAt: [prefTs, dictTs, zhTs].sort().slice(-1)[0]
+    };
+  }
+
+  function forcePreferencesIntoPayload(payload, source){
+    if (!payload || typeof payload !== "object") return payload;
+
+    const prefs = currentPrefState();
+    const updatedAt = prefs.preferencesUpdatedAt || nowIso();
+
+    payload.schema = payload.schema || "ielts-vocab-cloud-sync-v4";
+    payload.meta = payload.meta && typeof payload.meta === "object" ? payload.meta : {};
+    payload.meta.app = payload.meta.app || "IELTS Vocabulary Webapp";
+    payload.meta.storageMode = payload.meta.storageMode || "lean-user-learning-backup";
+    payload.meta.exportedAt = payload.meta.exportedAt || updatedAt;
+    payload.meta.updatedAt = updatedAt;
+    payload.meta.mergedAt = updatedAt;
+    payload.meta.source = source || "explicit-preference-change";
+
+    payload.preferences = {
+      ...(payload.preferences && typeof payload.preferences === "object" ? payload.preferences : {}),
+      dictionarySource: prefs.dictionarySource,
+      dictionarySourceUpdatedAt: prefs.dictionarySourceUpdatedAt,
+      translationMode: prefs.translationMode,
+      translationModeUpdatedAt: prefs.translationModeUpdatedAt,
+      preferencesUpdatedAt: prefs.preferencesUpdatedAt,
+      modeIntroDone: safeGet((window.LS && LS.MODE_INTRO_DONE) || "ielts_vocab_mode_intro_done_v1") === "1",
+      modeIntroUpdatedAt: safeGet((window.LS && LS.MODE_INTRO_UPDATED_AT) || "ielts_vocab_mode_intro_updated_at_v1") || prefs.preferencesUpdatedAt
+    };
+
+    return payload;
+  }
+
+  async function backendConnected(){
+    try {
+      if (typeof window.backendSyncStatus === "function") {
+        const st = await window.backendSyncStatus();
+        return !!st.connected;
+      }
+    } catch {}
+    try {
+      const r = await fetch("/api/sync/status", { credentials: "include" });
+      const j = await r.json();
+      return !!j.connected;
+    } catch {}
+    return false;
+  }
+
+  async function pullDrivePayload(){
+    try {
+      if (typeof window.backendPullPayload === "function") {
+        const pulled = await window.backendPullPayload();
+        return pulled && pulled.payload ? pulled.payload : null;
+      }
+    } catch (e) {
+      console.warn("[Cloud Sync] preference force upload pull failed, continuing with local payload:", e);
+    }
+
+    try {
+      const r = await fetch("/api/sync/pull", {
+        method: "GET",
+        credentials: "include"
+      });
+      const j = await r.json();
+      return j && j.ok ? (j.payload || null) : null;
+    } catch (e) {
+      console.warn("[Cloud Sync] preference force upload fallback pull failed:", e);
+      return null;
+    }
+  }
+
+  function mergeRemoteBaseIntoLocalPayload(localPayload, remotePayload){
+    if (!localPayload || typeof localPayload !== "object") return localPayload;
+    if (!remotePayload || typeof remotePayload !== "object") return localPayload;
+
+    /*
+      Keep other parts structurally compatible.
+      We do not invent new learning merge logic here.
+      The backend /api/sync/merge still performs the official learning/session/goal merge.
+      This function only ensures preferences/timestamps are not missing from the outgoing payload.
+    */
+    return localPayload;
+  }
+
+  async function forceUploadPreferencesNow(){
+    const connected = await backendConnected();
+    if (!connected) {
+      console.log("[Cloud Sync] force preference payload upload skipped: not connected");
+      return { status: "not-connected" };
+    }
+
+    let localPayload = null;
+    if (typeof window.buildLeanPayloadV4 === "function") {
+      localPayload = window.buildLeanPayloadV4("explicit-preference-change");
+    } else if (typeof window.buildCloudSyncPayloadV3 === "function") {
+      localPayload = window.buildCloudSyncPayloadV3();
+    }
+
+    if (!localPayload) {
+      return { status: "payload-missing" };
+    }
+
+    const remotePayload = await pullDrivePayload();
+    localPayload = mergeRemoteBaseIntoLocalPayload(localPayload, remotePayload);
+    localPayload = forcePreferencesIntoPayload(localPayload, "explicit-preference-change");
+
+    const r = await fetch("/api/sync/merge", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ payload: localPayload })
+    });
+
+    let j = {};
+    try { j = await r.json(); } catch {}
+
+    if (!r.ok || !j.ok) {
+      throw new Error(j.detail || ("Force preference payload upload failed: " + r.status));
+    }
+
+    /*
+      Important:
+      The backend may return a merged payload that still prefers old remote prefs
+      if backend merge has no preference timestamp awareness.
+      Therefore, after merge returns, apply our forced preference payload locally,
+      then trigger one more merge with the forced payload if needed.
+    */
+    if (typeof window.applyLeanPayloadV4 === "function") {
+      window.applyLeanPayloadV4(forcePreferencesIntoPayload(j.payload || localPayload, "explicit-preference-change-return"));
+    }
+
+    try {
+      safeSet((window.LS && LS.CLOUD_LAST_SYNC_AT) || "ielts_vocab_cloud_last_sync_v1", nowIso());
+      safeSet((window.LS && LS.CLOUD_DATA_UPDATED_AT) || "ielts_vocab_cloud_data_updated_v1", localPayload.meta.updatedAt);
+      localStorage.removeItem((window.LS && LS.CLOUD_PENDING_SYNC) || "ielts_vocab_cloud_pending_sync_v1");
+    } catch {}
+
+    console.log("[Cloud Sync] force preference payload uploaded:", {
+      sentPreferences: localPayload.preferences,
+      sentUpdatedAt: localPayload.meta && localPayload.meta.updatedAt,
+      serverStatus: j.status || "ok"
+    });
+
+    return {
+      status: "force-preferences-uploaded",
+      preferences: localPayload.preferences,
+      updatedAt: localPayload.meta && localPayload.meta.updatedAt
+    };
+  }
+
+  // Replace the weaker preference-only upload function.
+  window.uploadPreferencesNow = forceUploadPreferencesNow;
+
+  // Also make the fast-sync patch call this stronger function.
+  window.forceUploadPreferencesNow = forceUploadPreferencesNow;
+
+  // Debug helper for both windows.
+  window.debugPreferenceSyncPayload = async function(){
+    const payload = typeof window.buildLeanPayloadV4 === "function"
+      ? forcePreferencesIntoPayload(window.buildLeanPayloadV4("debug-preferences"), "debug-preferences")
+      : null;
+    const remote = await pullDrivePayload();
+    console.log("[Cloud Sync] DEBUG local outgoing preference payload:", payload && {
+      meta: payload.meta,
+      preferences: payload.preferences
+    });
+    console.log("[Cloud Sync] DEBUG remote Drive preferences:", remote && {
+      meta: remote.meta,
+      preferences: remote.preferences
+    });
+    return { localPayload: payload, remotePayload: remote };
+  };
+
+  console.log("[Cloud Sync] final force preference payload upload installed.");
+})();
+
+
+/* ============================================================
+   FINAL MODE INTRO RELOAD FIX
+   - Preference intro is one-time only.
+   - It may appear only immediately after the first auto goal setup.
+   - It must not appear on reload.
+   - It must not appear after editing an existing goal.
+   ============================================================ */
+(function(){
+  if (window.__finalModeIntroReloadFixV1) return;
+  window.__finalModeIntroReloadFixV1 = true;
+  console.log("[Mode Intro] reload one-time guard disabled; main onboarding flow controls display.");
+  return;
+
+  const GOAL_KEY = (window.LS && LS.GOAL) || "ielts_vocab_goal_v1";
+  const MODE_DONE_KEY = (window.LS && LS.MODE_INTRO_DONE) || "ielts_vocab_mode_intro_done_v1";
+  const MODE_UPDATED_AT_KEY = (window.LS && LS.MODE_INTRO_UPDATED_AT) || "ielts_vocab_mode_intro_updated_at_v1";
+
+  const AUTO_GOAL_ALLOWED_KEY = "ielts_vocab_mode_intro_allowed_after_auto_goal_v1";
+  const INTRO_SEEN_KEY = "ielts_vocab_mode_intro_seen_once_v1";
+
+  let suppressUntil = 0;
+
+  function nowIso(){
+    return new Date().toISOString();
+  }
+
+  function safeGet(k){
+    try { return localStorage.getItem(k); }
+    catch { return null; }
+  }
+
+  function safeSet(k, v){
+    try { localStorage.setItem(k, v); }
+    catch {}
+  }
+
+  function safeRemove(k){
+    try { localStorage.removeItem(k); }
+    catch {}
+  }
+
+  function readGoal(){
+    try { return JSON.parse(localStorage.getItem(GOAL_KEY) || "{}") || {}; }
+    catch { return {}; }
+  }
+
+  function hasGoal(){
+    const g = readGoal();
+    return Number(g.wordsPerDay || g.dailyTarget || g.target || 0) > 0;
+  }
+
+  function introDone(){
+    return safeGet(MODE_DONE_KEY) === "1" || safeGet(INTRO_SEEN_KEY) === "1";
+  }
+
+  function markIntroDone(reason){
+    const ts = nowIso();
+    safeSet(MODE_DONE_KEY, "1");
+    safeSet(INTRO_SEEN_KEY, "1");
+    if (!safeGet(MODE_UPDATED_AT_KEY)) safeSet(MODE_UPDATED_AT_KEY, ts);
+    safeRemove(AUTO_GOAL_ALLOWED_KEY);
+    console.log("[Mode Intro] marked done:", reason);
+  }
+
+  function findIntroNodes(){
+    const nodes = [];
+    [
+      "modeIntroOverlay",
+      "modeIntroModal",
+      "learningModeIntro",
+      "modeIntro"
+    ].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) nodes.push(el);
+    });
+
+    document.querySelectorAll(
+      ".mode-intro-overlay,.mode-intro-modal,.learning-mode-intro,[data-mode-intro]"
+    ).forEach(el => nodes.push(el));
+
+    return [...new Set(nodes)];
+  }
+
+  function closeIntro(reason){
+    const nodes = findIntroNodes();
+    nodes.forEach(el => el.remove());
+
+    try {
+      document.body?.classList?.remove("mode-intro-open");
+      document.documentElement.classList.remove("mode-intro-open");
+    } catch {}
+
+    if (nodes.length) {
+      console.log("[Mode Intro] closed/suppressed:", reason);
+      return true;
+    }
+    return false;
+  }
+
+  function suppressIntroFor(ms, reason){
+    suppressUntil = Date.now() + ms;
+    closeIntro(reason + ":immediate");
+    [50, 120, 300, 700, 1500, 3000].forEach(delay => {
+      setTimeout(() => {
+        if (Date.now() <= suppressUntil) closeIntro(reason + ":timer-" + delay);
+      }, delay);
+    });
+  }
+
+  /*
+    Important startup cleanup:
+    If goal already exists and intro has already been seen/done,
+    reload must never reopen the preference window.
+  */
+  if (hasGoal() && introDone()) {
+    safeRemove(AUTO_GOAL_ALLOWED_KEY);
+    suppressIntroFor(5000, "reload-after-intro-done");
+  }
+
+  /*
+    Track goal setup source:
+    - no existing goal before open = first auto setup candidate
+    - existing goal before open = manual edit, suppress intro
+  */
+  if (typeof window.openGoalSetup === "function" && !window.openGoalSetup.__modeIntroReloadFixWrappedV1) {
+    const oldOpenGoalSetup = window.openGoalSetup;
+
+    const wrappedOpenGoalSetup = function(){
+      const goalAlreadyExists = hasGoal();
+
+      if (goalAlreadyExists || introDone()) {
+        window.__modeIntroWasAutoGoalSetup = false;
+        safeRemove(AUTO_GOAL_ALLOWED_KEY);
+        suppressIntroFor(7000, "manual-goal-edit-open");
+      } else {
+        window.__modeIntroWasAutoGoalSetup = true;
+        safeSet(AUTO_GOAL_ALLOWED_KEY, "1");
+      }
+
+      return oldOpenGoalSetup.apply(this, arguments);
+    };
+
+    wrappedOpenGoalSetup.__modeIntroReloadFixWrappedV1 = true;
+    window.openGoalSetup = wrappedOpenGoalSetup;
+    try { openGoalSetup = wrappedOpenGoalSetup; } catch {}
+  }
+
+  if (typeof window.goalSetupConfirm === "function" && !window.goalSetupConfirm.__modeIntroReloadFixWrappedV1) {
+    const oldGoalSetupConfirm = window.goalSetupConfirm;
+
+    const wrappedGoalSetupConfirm = function(){
+      const allowed =
+        window.__modeIntroWasAutoGoalSetup === true &&
+        safeGet(AUTO_GOAL_ALLOWED_KEY) === "1" &&
+        !introDone();
+
+      const result = oldGoalSetupConfirm.apply(this, arguments);
+
+      if (allowed) {
+        /*
+          Allow the original Mode Intro code to open it once after first auto goal setup.
+          Then mark as done, so reload/edit will not reopen it.
+        */
+        setTimeout(() => markIntroDone("after-first-auto-goal-setup"), 1200);
+      } else {
+        /*
+          This is manual edit or reload-related confirmation.
+          The old wrapper may try to open the intro; kill it.
+        */
+        markIntroDone("manual-goal-edit-or-already-done");
+        suppressIntroFor(7000, "goal-confirm-not-allowed");
+      }
+
+      window.__modeIntroWasAutoGoalSetup = false;
+      safeRemove(AUTO_GOAL_ALLOWED_KEY);
+
+      return result;
+    };
+
+    wrappedGoalSetupConfirm.__modeIntroReloadFixWrappedV1 = true;
+    window.goalSetupConfirm = wrappedGoalSetupConfirm;
+  }
+
+  /*
+    Safety net:
+    If the intro appears while it is already done, or not explicitly allowed
+    by first auto goal setup, remove it.
+  */
+  const observer = new MutationObserver(() => {
+    const shouldSuppress =
+      Date.now() <= suppressUntil ||
+      (hasGoal() && introDone() && safeGet(AUTO_GOAL_ALLOWED_KEY) !== "1");
+
+    if (shouldSuppress) closeIntro("observer");
+  });
+
+  try {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  } catch {}
+
+  window.debugModeIntroReloadFix = function(){
+    const state = {
+      hasGoal: hasGoal(),
+      modeIntroDone: safeGet(MODE_DONE_KEY),
+      introSeenOnce: safeGet(INTRO_SEEN_KEY),
+      autoGoalAllowed: safeGet(AUTO_GOAL_ALLOWED_KEY),
+      suppressActive: Date.now() <= suppressUntil,
+      wasAutoGoalSetup: !!window.__modeIntroWasAutoGoalSetup
+    };
+    console.log("[Mode Intro] reload fix state:", state);
+    return state;
+  };
+
+  console.log("[Mode Intro] reload one-time guard installed.");
+})();
+
+
+/* ============================================================
+   FINAL SAFE MODE INTRO WRAPPER FIX
+   - Does not edit original maybeOpenModeIntro source.
+   - Wraps maybeOpenModeIntro safely.
+   - Allows preference popup only after first auto goal confirm.
+   - Blocks reload/startup/Drive restore/manual goal edit.
+   ============================================================ */
+(function(){
+  if (window.__finalSafeModeIntroWrapperFixV1) return;
+  window.__finalSafeModeIntroWrapperFixV1 = true;
+  console.log("[Mode Intro] safe wrapper disabled; main onboarding flow controls display.");
+  return;
+
+  const GOAL_KEY = (window.LS && LS.GOAL) || "ielts_vocab_goal_v1";
+  const DONE_KEY = (window.LS && LS.MODE_INTRO_DONE) || "ielts_vocab_mode_intro_done_v1";
+  const UPDATED_KEY = (window.LS && LS.MODE_INTRO_UPDATED_AT) || "ielts_vocab_mode_intro_updated_at_v1";
+
+  const SEEN_KEY = "ielts_vocab_mode_intro_seen_once_v1";
+  const ALLOW_KEY = "ielts_vocab_mode_intro_allowed_after_first_goal_confirm_v3";
+
+  function nowIso(){ return new Date().toISOString(); }
+
+  function safeGet(k){
+    try { return localStorage.getItem(k); }
+    catch { return null; }
+  }
+
+  function safeSet(k, v){
+    try { localStorage.setItem(k, v); }
+    catch {}
+  }
+
+  function safeRemove(k){
+    try { localStorage.removeItem(k); }
+    catch {}
+  }
+
+  function readGoal(){
+    try { return JSON.parse(localStorage.getItem(GOAL_KEY) || "{}") || {}; }
+    catch { return {}; }
+  }
+
+  function hasGoal(){
+    const g = readGoal();
+    return Number(g.wordsPerDay || g.dailyTarget || g.target || 0) > 0;
+  }
+
+  function introDone(){
+    return safeGet(DONE_KEY) === "1" || safeGet(SEEN_KEY) === "1";
+  }
+
+  function markIntroDone(reason){
+    safeSet(DONE_KEY, "1");
+    safeSet(SEEN_KEY, "1");
+    if (!safeGet(UPDATED_KEY)) safeSet(UPDATED_KEY, nowIso());
+    safeRemove(ALLOW_KEY);
+    window.__allowModeIntroAfterFirstGoalConfirmV3 = false;
+    console.log("[Mode Intro] marked done:", reason);
+  }
+
+  function closeIntro(reason){
+    let closed = false;
+
+    document.querySelectorAll(
+      "#modeIntroOverlay,#modeIntroModal,#learningModeIntro,#modeIntro,.mode-intro-overlay,.mode-intro-modal,.learning-mode-intro,[data-mode-intro]"
+    ).forEach(el => {
+      el.remove();
+      closed = true;
+    });
+
+    try {
+      document.body.classList.remove("mode-intro-open");
+      document.documentElement.classList.remove("mode-intro-open");
+    } catch {}
+
+    if (closed) console.log("[Mode Intro] closed:", reason);
+    return closed;
+  }
+
+  function allowedFirstGoalConfirm(reason){
+    return String(reason || "") === "after-goal-confirm" &&
+      (safeGet(ALLOW_KEY) === "1" || window.__allowModeIntroAfterFirstGoalConfirmV3 === true);
+  }
+
+  function shouldBlockModeIntro(reason){
+    const r = String(reason || "");
+
+    if (allowedFirstGoalConfirm(r)) return false;
+
+    if (introDone()) return true;
+
+    if (hasGoal()) return true;
+
+    if (
+      r.startsWith("startup") ||
+      r === "after-drive-apply" ||
+      r === "after-startup-restore" ||
+      r === "settings-opened" ||
+      r === "settings-opened-late"
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  // Clean stale allow flag on reload if goal exists.
+  if (hasGoal()) {
+    safeRemove(ALLOW_KEY);
+    window.__allowModeIntroAfterFirstGoalConfirmV3 = false;
+  }
+
+  // Wrap openGoalSetup: flag only first no-goal setup, not edit.
+  if (typeof window.openGoalSetup === "function" && !window.openGoalSetup.__safeModeIntroWrapperFixV1) {
+    const oldOpenGoalSetup = window.openGoalSetup;
+
+    const wrappedOpenGoalSetup = function(){
+      const firstGoalSetup = !hasGoal() && !introDone();
+
+      if (firstGoalSetup) {
+        safeSet(ALLOW_KEY, "1");
+        window.__allowModeIntroAfterFirstGoalConfirmV3 = true;
+        console.log("[Mode Intro] first goal setup flagged");
+      } else {
+        safeRemove(ALLOW_KEY);
+        window.__allowModeIntroAfterFirstGoalConfirmV3 = false;
+        closeIntro("goal-setup-open-not-first");
+      }
+
+      return oldOpenGoalSetup.apply(this, arguments);
+    };
+
+    wrappedOpenGoalSetup.__safeModeIntroWrapperFixV1 = true;
+    window.openGoalSetup = wrappedOpenGoalSetup;
+    try { openGoalSetup = wrappedOpenGoalSetup; } catch {}
+  }
+
+  // Wrap maybeOpenModeIntro if available.
+  function installMaybeWrapper(){
+    if (typeof window.maybeOpenModeIntro !== "function") return false;
+    if (window.maybeOpenModeIntro.__safeModeIntroWrapperFixV1) return true;
+
+    const oldMaybe = window.maybeOpenModeIntro;
+
+    const wrappedMaybe = function(reason){
+      if (shouldBlockModeIntro(reason)) {
+        console.log("[Mode Intro] blocked by safe wrapper:", reason);
+        closeIntro("blocked-" + String(reason || ""));
+        return false;
+      }
+
+      const result = oldMaybe.apply(this, arguments);
+
+      if (allowedFirstGoalConfirm(reason)) {
+        setTimeout(() => markIntroDone("after-first-goal-confirm"), 1800);
+      }
+
+      return result;
+    };
+
+    wrappedMaybe.__safeModeIntroWrapperFixV1 = true;
+    window.maybeOpenModeIntro = wrappedMaybe;
+    try { maybeOpenModeIntro = wrappedMaybe; } catch {}
+
+    console.log("[Mode Intro] maybeOpenModeIntro safe wrapper installed");
+    return true;
+  }
+
+  installMaybeWrapper();
+  setTimeout(installMaybeWrapper, 0);
+  setTimeout(installMaybeWrapper, 300);
+  setTimeout(installMaybeWrapper, 1000);
+
+  // Wrap confirm after maybe wrapper.
+  if (typeof window.goalSetupConfirm === "function" && !window.goalSetupConfirm.__safeModeIntroWrapperFixV1) {
+    const oldConfirm = window.goalSetupConfirm;
+
+    const wrappedConfirm = function(){
+      const allow = safeGet(ALLOW_KEY) === "1" || window.__allowModeIntroAfterFirstGoalConfirmV3 === true;
+
+      const result = oldConfirm.apply(this, arguments);
+
+      if (!allow) {
+        closeIntro("manual-goal-confirm");
+        setTimeout(() => closeIntro("manual-goal-confirm-300"), 300);
+        setTimeout(() => closeIntro("manual-goal-confirm-1200"), 1200);
+      }
+
+      return result;
+    };
+
+    wrappedConfirm.__safeModeIntroWrapperFixV1 = true;
+    window.goalSetupConfirm = wrappedConfirm;
+  }
+
+  // Last safety net: if old startup timers open it, close immediately.
+  const observer = new MutationObserver(() => {
+    if (shouldBlockModeIntro("observer")) closeIntro("observer");
+  });
+
+  try {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  } catch {}
+
+  window.debugSafeModeIntroWrapper = function(){
+    const state = {
+      hasGoal: hasGoal(),
+      done: safeGet(DONE_KEY),
+      seen: safeGet(SEEN_KEY),
+      allow: safeGet(ALLOW_KEY),
+      memoryAllow: !!window.__allowModeIntroAfterFirstGoalConfirmV3,
+      maybeWrapped: !!(window.maybeOpenModeIntro && window.maybeOpenModeIntro.__safeModeIntroWrapperFixV1),
+      bodyClass: document.body.className
+    };
+    console.log("[Mode Intro] safe wrapper state:", state);
+    return state;
+  };
+
+  console.log("[Mode Intro] safe wrapper fix installed.");
+})();
+
+/* ============================================================
+   History overlay → bottom-sheet behavior
+   - Real tappable backdrop (matches Words-tab .backdrop)
+   - Tap backdrop to close the topmost overlay
+   - Locks page scroll while any overlay is open
+   Affected overlays:
+     #pgPanelOverlay        (Progress summary/chart info)
+     #progressWordOverlay   (Legacy Progress info)
+     #historyPanelOverlay   (Practice history)
+     #historyDetailOverlay  (Session detail / "View" / previous-practice card)
+     #goalDayOverlayV2      (Calendar day info, active V2)
+     #goalDayOverlay        (Calendar day info, legacy)
+   ============================================================ */
+(function setupHistoryOverlayBackdrop() {
+  if (window.__historyOverlayBackdropReady) return;
+  window.__historyOverlayBackdropReady = true;
+
+  // Order matters: topmost (most-recently-opened) first.
+  // Detail overlays sit on top of their parent panels, so close them first.
+  const OVERLAY_STACK = [
+    { id: "historyDetailOverlay",  close: () => window.practiceCloseSessionDetail?.() },
+    { id: "pgPanelOverlay",        close: () => window.pgClosePanel?.() },
+    { id: "goalDayOverlayV2",      close: () => window.closeGoalDayDetailV2?.() },
+    { id: "goalDayOverlay",        close: () => window.closeGoalDayDetail?.() },
+    { id: "progressWordOverlay",   close: () => window.closeProgressWordList?.(true) },
+    { id: "historyPanelOverlay",   close: () => window.practiceCloseHistoryPanel?.() },
+  ];
+  const OVERLAY_IDS = OVERLAY_STACK.map(o => o.id);
+
+  let backdrop = null;
+  function ensureBackdrop() {
+    if (backdrop && backdrop.isConnected) return backdrop;
+    backdrop = document.createElement("div");
+    backdrop.className = "history-overlay-backdrop";
+    backdrop.addEventListener("click", closeTopHistoryOverlay);
+    document.body.appendChild(backdrop);
+    return backdrop;
+  }
+
+  function anyOpen() {
+    return OVERLAY_IDS.some(id => {
+      const el = document.getElementById(id);
+      return el && el.classList.contains("show");
+    });
+  }
+
+  function syncBackdrop() {
+    const bd = ensureBackdrop();
+    const open = anyOpen();
+    if (open) {
+      const topOpen = OVERLAY_STACK.find(({ id }) => {
+        const el = document.getElementById(id);
+        return el && el.classList.contains("show");
+      });
+      const topEl = topOpen ? document.getElementById(topOpen.id) : null;
+      const topZ = topEl ? (parseInt(getComputedStyle(topEl).zIndex, 10) || 90) : 90;
+      bd.style.zIndex = String(Math.max(1, topZ - 5));
+      bd.classList.add("show");
+      document.body.classList.add("history-overlay-open");
+      document.documentElement.classList.add("history-overlay-open");
+    } else {
+      bd.style.zIndex = "";
+      bd.classList.remove("show");
+      document.body.classList.remove("history-overlay-open");
+      document.documentElement.classList.remove("history-overlay-open");
+    }
+  }
+
+  function closeTopHistoryOverlay() {
+    for (const { id, close } of OVERLAY_STACK) {
+      const el = document.getElementById(id);
+      if (el && el.classList.contains("show")) {
+        try { close(); } catch (e) { el.classList.remove("show"); }
+        // Defensive: if a handler didn't actually toggle the class, do it ourselves.
+        if (el.classList.contains("show")) el.classList.remove("show");
+        syncBackdrop();
+        return;
+      }
+    }
+  }
+
+  const classObserver = new MutationObserver(syncBackdrop);
+  function attachObserver(el) {
+    if (!el || el.__historyOverlayObserved) return;
+    el.__historyOverlayObserved = true;
+    classObserver.observe(el, { attributes: true, attributeFilter: ["class"] });
+  }
+  function attachAll() {
+    OVERLAY_IDS.forEach(id => attachObserver(document.getElementById(id)));
+    // Critical: overlays are created lazily and the show class is added in the
+    // same synchronous run as appendChild. By the time the body MutationObserver
+    // fires (microtask), .show is already on — so we sync here to catch it.
+    syncBackdrop();
+  }
+
+  attachAll();
+  // Overlays are created lazily — observe body for new additions.
+  const bodyObserver = new MutationObserver(attachAll);
+  bodyObserver.observe(document.body, { childList: true });
+
+  syncBackdrop();
+
+  // Belt-and-suspenders: wrap the open/close functions so the backdrop syncs
+  // synchronously, regardless of MutationObserver microtask timing.
+  function wrapForSync(name) {
+    const original = window[name];
+    if (typeof original !== "function" || original.__historyBackdropWrapped) return;
+    const wrapped = function (...args) {
+      const r = original.apply(this, args);
+      try { syncBackdrop(); } catch {}
+      return r;
+    };
+    wrapped.__historyBackdropWrapped = true;
+    window[name] = wrapped;
+  }
+  const FN_NAMES = [
+    "practiceOpenSessionDetail", "practiceCloseSessionDetail",
+    "openGoalDayDetail",         "closeGoalDayDetail",
+    "openGoalDayDetailV2",       "closeGoalDayDetailV2",
+    "openProgressWordList",      "closeProgressWordList",
+    "pgOpenMasteredPanel",       "pgOpenKnownPanel",
+    "pgOpenLearningPanel",       "pgOpenChartRowPanel",
+    "pgClosePanel",
+    "practiceOpenHistoryPanel",  "practiceCloseHistoryPanel",
+  ];
+  function wrapAll() { FN_NAMES.forEach(wrapForSync); }
+  wrapAll();
+  // Some are assigned later; retry shortly to catch them.
+  setTimeout(wrapAll, 0);
+  setTimeout(wrapAll, 500);
+  setTimeout(wrapAll, 2000);
+
+  console.log("[History overlay] bottom-sheet backdrop installed.");
+})();
+
+/* ============================================================================
+   PER-SKILL MASTERY + MULTI-GOAL TEST MODULE  (test model — simplified app)
+   ============================================================================
+   Implements the two-axis word mastery model:
+     - Meaning axis  (sources: wordToMeaning, meaningToWord)
+     - Spelling axis (source: spelling)
+   With per-skill promotion (first-attempt-correct OR 3-in-a-row), per-skill
+   demotion on wrong answer, and "Mastered = meaning Known AND spelling Known".
+   Plus multi-goal daily goals, calendar 3-tier color, Progress tab skill toggle,
+   session-detail per-skill rows, words-filter skill selector, migration, and
+   retirement of needsReview. CSS injected at the bottom.
+   ============================================================================ */
+(function setupPerSkillModel() {
+  // Small unobtrusive console marker — no visible badge.
+  try { console.log("%c[per-skill] module starting…", "color:#7C3AED;font-weight:bold"); } catch {}
+
+  if (window.__perSkillReady) return;
+
+  // ---- 1. State ------------------------------------------------------------
+  const LS_KEYS = {
+    KNOWN_MEANING:  "ielts_vocab_known_meaning_v1",
+    KNOWN_SPELLING: "ielts_vocab_known_spelling_v1",
+    MEANING_TS:     "ielts_vocab_meaning_state_updated_at_v1",
+    SPELLING_TS:    "ielts_vocab_spelling_state_updated_at_v1",
+    MIGRATION:      "ielts_vocab_mastery_migration_v1",
+    GOAL_V2:        "ielts_vocab_goal_v2",
+    DAILY_RECORD_V2:"ielts_vocab_daily_record_v2",
+    PROGRESS_VIEW:  "ielts_vocab_progress_view_v1", // "all" | "meaning" | "spelling"
+    WORDS_SKILL:    "ielts_vocab_words_skill_v1",   // "all" | "meaning" | "spelling"
+  };
+
+  try { window.knownMeaning  = JSON.parse(localStorage.getItem(LS_KEYS.KNOWN_MEANING)  || "{}"); } catch { window.knownMeaning  = {}; }
+  try { window.knownSpelling = JSON.parse(localStorage.getItem(LS_KEYS.KNOWN_SPELLING) || "{}"); } catch { window.knownSpelling = {}; }
+  try { window.meaningStateUpdatedAt  = JSON.parse(localStorage.getItem(LS_KEYS.MEANING_TS)  || "{}"); } catch { window.meaningStateUpdatedAt  = {}; }
+  try { window.spellingStateUpdatedAt = JSON.parse(localStorage.getItem(LS_KEYS.SPELLING_TS) || "{}"); } catch { window.spellingStateUpdatedAt = {}; }
+
+  window.saveSkillState = function() {
+    try { localStorage.setItem(LS_KEYS.KNOWN_MEANING,  JSON.stringify(window.knownMeaning  || {})); } catch {}
+    try { localStorage.setItem(LS_KEYS.KNOWN_SPELLING, JSON.stringify(window.knownSpelling || {})); } catch {}
+    try { localStorage.setItem(LS_KEYS.MEANING_TS,  JSON.stringify(window.meaningStateUpdatedAt  || {})); } catch {}
+    try { localStorage.setItem(LS_KEYS.SPELLING_TS, JSON.stringify(window.spellingStateUpdatedAt || {})); } catch {}
+  };
+
+  window.touchSkillAxisState = function(key, skill, ts = new Date().toISOString()) {
+    if (!key) return ts;
+    if (skill === "spelling") {
+      window.spellingStateUpdatedAt = window.spellingStateUpdatedAt || {};
+      window.spellingStateUpdatedAt[key] = ts;
+    } else {
+      window.meaningStateUpdatedAt = window.meaningStateUpdatedAt || {};
+      window.meaningStateUpdatedAt[key] = ts;
+    }
+    return ts;
+  };
+
+  // ---- 2. Migration --------------------------------------------------------
+  // Idempotent. Runs once unless the version flag bumps.
+  function runMigration() {
+    const v = localStorage.getItem(LS_KEYS.MIGRATION);
+    if (v === "v1-done") return;
+    try {
+      const knownMap  = (typeof known === "object" && known) ? known : {};
+      const reviewMap = (typeof needsReview === "object" && needsReview) ? needsReview : {};
+      const prog      = (typeof progress === "object" && progress) ? progress : {};
+
+      const allCandidateKeys = new Set([
+        ...Object.keys(knownMap),
+        ...Object.keys(reviewMap),
+        ...Object.keys(prog),
+      ]);
+
+      for (const key of allCandidateKeys) {
+        const p = prog[key] || {};
+        const matchCorrect = (p.wordToMeaning?.correct || 0) + (p.meaningToWord?.correct || 0) + (p.matching?.correct || 0);
+        const matchAttempts = (p.wordToMeaning?.attempts || 0) + (p.meaningToWord?.attempts || 0) + (p.matching?.attempts || 0);
+        const spellCorrect = (p.spelling?.correct || 0);
+        const spellAttempts = (p.spelling?.attempts || 0);
+        const hasProgressData = matchAttempts > 0 || spellAttempts > 0;
+
+        if (knownMap[key]) {
+          if (hasProgressData) {
+            // Recompute from per-skill correctness
+            if (matchCorrect >= 1) window.knownMeaning[key]  = true;
+            if (spellCorrect >= 1) window.knownSpelling[key] = true;
+            // If neither side has a correct, but the word was marked known, fall back to Mastered
+            if (matchCorrect === 0 && spellCorrect === 0) {
+              window.knownMeaning[key]  = true;
+              window.knownSpelling[key] = true;
+            }
+          } else {
+            // No per-skill signal — preserve user's prior "Known" as full Mastered
+            window.knownMeaning[key]  = true;
+            window.knownSpelling[key] = true;
+          }
+        } else if (reviewMap[key]) {
+          // Old needsReview without explicit knowledge — Learning in BOTH axes.
+          // Learning state is implicit (no per-skill flag set, but attempts exist),
+          // so we ensure the progress entry has at least one attempt in each skill
+          // for downstream "learning" detection.
+          if (!prog[key]) prog[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
+          if (matchAttempts === 0)  prog[key].matching = { attempts: 1, correct: 0 };
+          if (spellAttempts === 0)  prog[key].spelling = { attempts: 1, correct: 0 };
+        }
+      }
+
+      // Mirror "Mastered" back to legacy "known" map so the rest of the legacy
+      // app code (which reads `known`) keeps working.
+      for (const k of Object.keys(window.knownMeaning)) {
+        if (window.knownSpelling[k]) knownMap[k] = true;
+      }
+
+      // Retire needsReview entirely.
+      try {
+        for (const k of Object.keys(reviewMap)) delete reviewMap[k];
+        if (typeof saveReview === "function") saveReview();
+        localStorage.removeItem("ielts_vocab_review_v1");
+      } catch {}
+
+      window.saveSkillState();
+      if (typeof saveKnown === "function") saveKnown();
+      if (typeof saveAll === "function") saveAll();
+
+      localStorage.setItem(LS_KEYS.MIGRATION, "v1-done");
+      console.log("[per-skill] migration v1 done. Meaning:", Object.keys(window.knownMeaning).length, "Spelling:", Object.keys(window.knownSpelling).length);
+    } catch (e) {
+      console.warn("[per-skill] migration failed:", e);
+    }
+  }
+
+  // ---- 3. Real per-skill status helpers ------------------------------------
+  window.__meaningStatus = function(w) {
+    if (!w || !w.key) return "not_practiced";
+    if (window.knownMeaning[w.key]) return "known";
+    const r = progress[w.key];
+    const att = (r?.wordToMeaning?.attempts || 0) + (r?.meaningToWord?.attempts || 0) + (r?.matching?.attempts || 0);
+    const cor = (r?.wordToMeaning?.correct || 0) + (r?.meaningToWord?.correct || 0) + (r?.matching?.correct || 0);
+    const streak = r?._consecMeaning || 0;
+    if (att <= 0) return "not_practiced";
+    if (att > cor) return streak >= 3 ? "known" : "learning";
+    return cor > 0 ? "known" : "not_practiced";
+  };
+  window.__spellingStatus = function(w) {
+    if (!w || !w.key) return "not_practiced";
+    if (window.knownSpelling[w.key]) return "known";
+    const att = progress[w.key]?.spelling?.attempts || 0;
+    const cor = progress[w.key]?.spelling?.correct || 0;
+    const streak = progress[w.key]?._consecSpelling || 0;
+    if (att <= 0) return "not_practiced";
+    if (att > cor) return streak >= 3 ? "known" : "learning";
+    return cor > 0 ? "known" : "not_practiced";
+  };
+  window.meaningStreak  = function(w) { return progress[w?.key]?._consecMeaning  || 0; };
+  window.spellingStreak = function(w) { return progress[w?.key]?._consecSpelling || 0; };
+
+  // ---- 4. Multi-goal data --------------------------------------------------
+  // goal = { items: [{ id, type, count }] }
+  //   type ∈ "meaningKnown" | "spellingKnown"
+  // record[date] = {
+  //   events: { meaningKnown:[keys], spellingKnown:[keys], mastered:[keys] },
+  //   subGoalsMet: { <itemId>: bool }, goalMet: bool,
+  //   newWordsMastered: [keys]   (kept for legacy readers)
+  // }
+
+  window.loadGoalV2 = function() {
+    try {
+      const g = JSON.parse(localStorage.getItem(LS_KEYS.GOAL_V2) || "null");
+      if (!g || typeof g !== "object") return g;
+      return { ...g, items: normaliseGoalItems(g.items) };
+    }
+    catch { return null; }
+  };
+  window.saveGoalV2 = function(g) {
+    const updatedAt = (g && g.updatedAt) || new Date().toISOString();
+    const cleanGoal = g && typeof g === "object"
+      ? { ...g, items: normaliseGoalItems(g.items), updatedAt }
+      : {};
+    try { localStorage.setItem(LS_KEYS.GOAL_V2, JSON.stringify(cleanGoal)); } catch {}
+    // Write a legacy-format stub so the legacy "final goal sync guard"
+    // (installWrappers @ line 11110) treats the goal as set and lets our
+    // renderGoalTab / openGoalSetup actually run instead of short-circuiting
+    // to the "Restoring…" / "goal-exists-blocked" branches.
+    try {
+      const legacyKey = (typeof LS !== "undefined" && LS && LS.GOAL) ? LS.GOAL : "ielts_vocab_goal_v1";
+      localStorage.setItem(legacyKey, JSON.stringify({ wordsPerDay: 1, __v2Stub: true }));
+    } catch {}
+  };
+  window.loadDailyRecordV2 = function() {
+    try { return JSON.parse(localStorage.getItem(LS_KEYS.DAILY_RECORD_V2) || "{}") || {}; }
+    catch { return {}; }
+  };
+  window.saveDailyRecordV2 = function(d) {
+    try { localStorage.setItem(LS_KEYS.DAILY_RECORD_V2, JSON.stringify(d || {})); } catch {}
+  };
+
+  function markGoalSyncChanged(reason) {
+    if (typeof window.cloudMarkChanged === "function") {
+      window.cloudMarkChanged(reason);
+    }
+  }
+
+  const todayKey = function() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  };
+  const dateKey = function(d) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  };
+  const parseKey = function(k) { const [y,m,d] = k.split("-").map(Number); return new Date(y, m-1, d); };
+
+  const GOAL_TYPE_LABELS = {
+    meaningKnown:  "Meaning Known",
+    spellingKnown: "Spelling Known",
+    mastered:      "Mastered (both)",
+  };
+  const GOAL_TYPES = ["meaningKnown", "spellingKnown"];
+  window.GOAL_TYPE_LABELS = GOAL_TYPE_LABELS;
+  window.GOAL_TYPES = GOAL_TYPES;
+
+  function normaliseGoalType(type) {
+    if (type === "mastered") return "mastered";
+    return type === "spellingKnown" ? "spellingKnown" : "meaningKnown";
+  }
+
+  function normaliseGoalItems(items) {
+    return (Array.isArray(items) ? items : [])
+      .map((it) => ({
+        id: it && it.id ? it.id : newItemId(),
+        type: normaliseGoalType(it && it.type),
+        count: Math.max(1, parseInt(it && it.count, 10) || 1),
+      }))
+      .reduce((acc, it) => {
+        const existing = acc.find(x => x.type === it.type);
+        if (existing) existing.count += it.count;
+        else acc.push(it);
+        return acc;
+      }, []);
+  }
+
+  function ensureRecordDay(rec, dateK) {
+    if (!rec[dateK]) {
+      rec[dateK] = {
+        events: { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] },
+        subGoalsMet: {},
+        goalMet: false,
+        newWordsMastered: [],
+        practiceSessions: 0,
+        totalMinutes: 0,
+      };
+    }
+    if (!rec[dateK].events) rec[dateK].events = { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] };
+    if (!Array.isArray(rec[dateK].events.meaningLearning)) rec[dateK].events.meaningLearning = [];
+    if (!Array.isArray(rec[dateK].events.spellingLearning)) rec[dateK].events.spellingLearning = [];
+    if (!rec[dateK].subGoalsMet) rec[dateK].subGoalsMet = {};
+    return rec[dateK];
+  }
+
+  function countEvent(day, type) {
+    // Events-style counting (a word may contribute more than once across types).
+    const e = day.events || {};
+    if (type === "meaningKnown")  return (e.meaningKnown  || []).length;
+    if (type === "spellingKnown") return (e.spellingKnown || []).length;
+    if (type === "mastered")      return (e.mastered      || []).length;
+    return 0;
+  }
+
+  function evaluateGoalForDay(day, goal) {
+    const items = (goal && Array.isArray(goal.items)) ? goal.items : [];
+    day.subGoalsMet = {};
+    // Snapshot the goal that was active on this day, so later goal changes do
+    // not retroactively rewrite this date's goal in the calendar/day panel.
+    try { day.goalSnapshot = items.map(it => ({ id: it.id, type: it.type, count: it.count })); } catch (e) {}
+    if (!items.length) { day.goalMet = false; return; }
+    let all = true;
+    for (const it of items) {
+      const got = countEvent(day, it.type);
+      const met = got >= (it.count || 0);
+      day.subGoalsMet[it.id] = met;
+      if (!met) all = false;
+    }
+    day.goalMet = all;
+  }
+
+  function legacyGoalTarget(goal) {
+    return Math.max(0, parseInt(goal && (goal.wordsPerDay || goal.dailyTarget || goal.target), 10) || 0);
+  }
+
+  function legacyGoalTrackingToV2(goal, dailyRecord, practiceSessions) {
+    const target = legacyGoalTarget(goal) || 5;
+    const itemId = "legacy_mastered";
+    const nextGoal = {
+      items: [{ id: itemId, type: "mastered", count: target }],
+      updatedAt: (goal && goal.updatedAt) || new Date().toISOString(),
+      legacyImported: true,
+    };
+    const nextDaily = {};
+    for (const [dateK, row] of Object.entries(dailyRecord && typeof dailyRecord === "object" ? dailyRecord : {})) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateK)) continue;
+      const mastered = Array.isArray(row?.newWordsMastered)
+        ? [...new Set(row.newWordsMastered.map(k => normalizeKey(k)).filter(Boolean))]
+        : [];
+      const legacyLearning = [
+        ...(Array.isArray(row?.learningWords) ? row.learningWords : []),
+        ...(Array.isArray(row?.needsReviewWords) ? row.needsReviewWords : []),
+        ...(Array.isArray(row?.reviewWords) ? row.reviewWords : []),
+        ...(Array.isArray(row?.wordsToReview) ? row.wordsToReview : []),
+      ].map(k => normalizeKey(k)).filter(Boolean);
+      const day = {
+        events: {
+          meaningKnown: [],
+          spellingKnown: [],
+          mastered,
+          meaningLearning: [...new Set(legacyLearning)],
+          spellingLearning: [],
+        },
+        subGoalsMet: {},
+        goalMet: false,
+        newWordsMastered: mastered.slice(),
+        practiceSessions: Number(row?.practiceSessions || 0),
+        totalMinutes: Number(row?.totalMinutes || 0),
+        legacyImported: true,
+      };
+      day.subGoalsMet[itemId] = !!row?.goalMet || mastered.length >= target;
+      day.goalMet = day.subGoalsMet[itemId];
+      nextDaily[dateK] = day;
+    }
+    for (const s of (Array.isArray(practiceSessions) ? practiceSessions : [])) {
+      const when = s && (s.endedAt || s.startedAt);
+      const t = when ? new Date(when) : null;
+      if (!t || Number.isNaN(t.getTime())) continue;
+      const dateK = dateKey(t);
+      if (!nextDaily[dateK]) {
+        nextDaily[dateK] = {
+          events: { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] },
+          subGoalsMet: {},
+          goalMet: false,
+          newWordsMastered: [],
+          practiceSessions: 0,
+          totalMinutes: 0,
+          legacyImported: true,
+        };
+      }
+      const learning = [
+        ...(Array.isArray(s.learningWords) ? s.learningWords : []),
+        ...(Array.isArray(s.wrongKeys) ? s.wrongKeys : []),
+        ...(Array.isArray(s.reviewWords) ? s.reviewWords : []),
+      ].map(k => normalizeKey(k)).filter(Boolean);
+      const day = nextDaily[dateK];
+      day.events.meaningLearning = [...new Set([...(day.events.meaningLearning || []), ...learning])];
+      day.practiceSessions = Number(day.practiceSessions || 0) + 1;
+      if (target) {
+        day.subGoalsMet[itemId] = !!day.goalMet || (day.events.mastered || []).length >= target;
+        day.goalMet = !!day.subGoalsMet[itemId];
+      }
+    }
+    return { goalV2: nextGoal, dailyRecordV2: nextDaily };
+  }
+
+  function restoreGoalTrackingV2OrLegacy(goalTracking, practice) {
+    const gt = goalTracking || {};
+    if (gt.goalV2 && Array.isArray(gt.goalV2.items)) {
+      window.saveGoalV2(gt.goalV2);
+      if (gt.dailyRecordV2 && typeof gt.dailyRecordV2 === "object") window.saveDailyRecordV2(gt.dailyRecordV2);
+      return;
+    }
+    const legacyGoal = gt.goal || {};
+    const legacyDaily = gt.dailyRecord || {};
+    if (legacyGoalTarget(legacyGoal) || (legacyDaily && typeof legacyDaily === "object" && Object.keys(legacyDaily).length)) {
+      const converted = legacyGoalTrackingToV2(legacyGoal, legacyDaily, practice && practice.sessions);
+      window.saveGoalV2(converted.goalV2);
+      window.saveDailyRecordV2(converted.dailyRecordV2);
+    }
+  }
+
+  // ---- 5. Skill / mastery event hooks --------------------------------------
+  window.onSkillPromotion = function(key, skill) {
+    const rec = window.loadDailyRecordV2();
+    const day = ensureRecordDay(rec, todayKey());
+    const list = skill === "spelling" ? day.events.spellingKnown : day.events.meaningKnown;
+    // Per user: events-style counting — re-promotion on different days re-counts.
+    list.push(key);
+    day.updatedAt = new Date().toISOString();
+    const goal = window.loadGoalV2();
+    if (goal && Array.isArray(goal.items)) evaluateGoalForDay(day, goal);
+    window.saveDailyRecordV2(rec);
+    markGoalSyncChanged("goal-daily-skill-promotion");
+    if (document.querySelector('[data-page="home"].active') && typeof window.renderGoalTab === "function") {
+      window.renderGoalTab();
+    }
+  };
+
+  // Override the legacy onMasteryPromotion: it fires only when a word reaches
+  // FULL Mastered (both skills Known). We log the mastered event and update
+  // the legacy newWordsMastered for backup compatibility.
+  window.onMasteryPromotion = function(key) {
+    const rec = window.loadDailyRecordV2();
+    const day = ensureRecordDay(rec, todayKey());
+    day.events.mastered.push(key);
+    if (!day.newWordsMastered.includes(key)) day.newWordsMastered.push(key);
+    day.updatedAt = new Date().toISOString();
+    const goal = window.loadGoalV2();
+    const wasMet = day.goalMet;
+    if (goal && Array.isArray(goal.items)) evaluateGoalForDay(day, goal);
+    window.saveDailyRecordV2(rec);
+    markGoalSyncChanged("goal-daily-mastery-promotion");
+    if (!wasMet && day.goalMet && typeof toast === "function") {
+      toast("🎯 Daily goal achieved!");
+    }
+    if (document.querySelector('[data-page="home"].active') && typeof window.renderGoalTab === "function") {
+      window.renderGoalTab();
+    }
+  };
+
+  // ---- 6. Goal setup (multi-goal builder) ----------------------------------
+  // Mounts a setup overlay with two fixed skill goals. A count of 0 disables
+  // that skill, which avoids duplicate sub-goals while keeping editing simple.
+  function ensureGoalSetupV2() {
+    let el = document.getElementById("goalSetupOverlayV2");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "goalSetupOverlayV2";
+    el.className = "g-setup-overlay";
+    el.addEventListener("click", (ev) => {
+      if (ev.target === el) window.closeGoalSetupV2?.();
+    });
+    el.innerHTML = `
+      <div class="g-setup-card g2-setup-card">
+        <button class="g2-close-btn" type="button" onclick="closeGoalSetupV2()" aria-label="Close goal setup">✕</button>
+        <div class="g-setup-emoji">🎯</div>
+        <div class="g-setup-title">Set your daily goals</div>
+        <div class="g-setup-sub">Set a daily target for each skill. Use 0 to turn one off.</div>
+        <div class="g2-items" id="goalSetupItems"></div>
+        <div class="g-setup-hint">A skill becomes Known after first-try correct or 3 correct in a row.</div>
+        <button class="g-setup-btn" onclick="goalSetupConfirmV2()">Save goal ›</button>
+      </div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+
+  let pendingGoalItems = [];
+  let goalSetupCanClose = false;
+  function newItemId() { return "g_" + Math.random().toString(36).slice(2, 8); }
+  function defaultGoalItems() {
+    return [
+      { id: newItemId(), type: "meaningKnown", count: 5 },
+      { id: newItemId(), type: "spellingKnown", count: 5 },
+    ];
+  }
+  function fixedGoalDraft(items) {
+    const clean = normaliseGoalItems(items);
+    const byType = new Map(clean.map(it => [it.type, it]));
+    return GOAL_TYPES.map((type) => {
+      const existing = byType.get(type);
+      return {
+        id: existing?.id || newItemId(),
+        type,
+        count: existing ? Math.max(0, parseInt(existing.count, 10) || 0) : 0,
+      };
+    });
+  }
+
+  function renderGoalSetupItems() {
+    const root = document.getElementById("goalSetupItems");
+    if (!root) return;
+    root.innerHTML = pendingGoalItems.map((it) => `
+      <div class="g2-item g2-fixed-item" data-id="${it.id}">
+        <div class="g2-fixed-copy">
+          <div class="g2-fixed-label">${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)}</div>
+          <div class="g2-fixed-sub">${it.type === "meaningKnown" ? "Recognize meanings" : "Spell words correctly"}</div>
+        </div>
+        <input class="g2-count" type="number" min="0" max="200" value="${it.count}" oninput="goalSetupChangeCount('${it.id}', this.value)" aria-label="${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)} target" />
+      </div>
+    `).join("");
+  }
+
+  window.goalSetupChangeType = function(id, type) {
+    const it = pendingGoalItems.find(x => x.id === id);
+    if (it) it.type = normaliseGoalType(type);
+    renderGoalSetupItems();
+  };
+  window.goalSetupChangeCount = function(id, val) {
+    const it = pendingGoalItems.find(x => x.id === id);
+    if (it) it.count = Math.max(0, parseInt(val, 10) || 0);
+  };
+  window.goalSetupConfirmV2 = function() {
+    const activeItems = pendingGoalItems
+      .map(it => ({ ...it, count: Math.max(0, parseInt(it.count, 10) || 0) }))
+      .filter(it => it.count > 0);
+    if (!activeItems.length) { if (typeof toast === "function") toast("Keep at least one goal above 0"); return; }
+    const goal = { items: normaliseGoalItems(activeItems), updatedAt: new Date().toISOString() };
+    window.saveGoalV2(goal);
+    try {
+      const rec = window.loadDailyRecordV2();
+      const today = todayKey();
+      if (rec[today]) {
+        const day = ensureRecordDay(rec, today);
+        evaluateGoalForDay(day, goal);
+        day.updatedAt = goal.updatedAt;
+        window.saveDailyRecordV2(rec);
+      }
+    } catch {}
+    markGoalSyncChanged("goal-v2-updated");
+    const el = document.getElementById("goalSetupOverlayV2");
+    if (el) el.remove();
+    if (typeof window.renderGoalTab === "function") window.renderGoalTab();
+
+    // First-time onboarding: after the goal window, show the learning-options
+    // (dictionary source / Chinese translation) window. Only for first-time users
+    // who haven't completed it yet — returning users with Drive data have
+    // modeIntroDone synced to "1", so it won't reappear.
+    try {
+      const introDone = localStorage.getItem("ielts_vocab_mode_intro_done_v1") === "1";
+      if (!introDone && typeof window.openModeIntro === "function") {
+        if (localStorage.getItem("ielts_vocab_mode_intro_done_v1") === null) {
+          try { localStorage.setItem("ielts_vocab_mode_intro_done_v1", "0"); } catch (e) {}
+        }
+        setTimeout(() => { try { window.openModeIntro("after-goal-confirm"); } catch (e) {} }, 220);
+      }
+    } catch (e) {}
+  };
+
+  window.closeGoalSetupV2 = function() {
+    if (!goalSetupCanClose) return;
+    const el = document.getElementById("goalSetupOverlayV2");
+    if (el) el.remove();
+  };
+
+  function firstLaunchWelcomeActive() {
+    try {
+      const doneKey = LS && LS.CLOUD_FIRST_LAUNCH_DONE;
+      if (doneKey && localStorage.getItem(doneKey) !== "1") return true;
+    } catch {}
+    return !!document.getElementById("welcomeModal");
+  }
+
+  window.openGoalSetup = function(_legacy) {
+    if (firstLaunchWelcomeActive()) return;
+
+    // Defensive: hide ANY legacy modal that may already be visible before
+    // we mount V2 (the legacy guard may have re-shown it).
+    const stale = document.getElementById("goalSetupOverlay");
+    if (stale) {
+      try {
+        stale.classList.add("hide");
+        stale.style.setProperty("display", "none", "important");
+        stale.style.setProperty("visibility", "hidden", "important");
+        stale.style.setProperty("opacity", "0", "important");
+        stale.style.setProperty("pointer-events", "none", "important");
+      } catch {}
+    }
+    const cur = window.loadGoalV2();
+    goalSetupCanClose = !!(cur && Array.isArray(cur.items) && cur.items.length);
+    pendingGoalItems = (cur && Array.isArray(cur.items) && cur.items.length)
+      ? fixedGoalDraft(cur.items)
+      : fixedGoalDraft(defaultGoalItems());
+    const el = ensureGoalSetupV2();
+    el.style.display = "flex";
+    el.classList.add("show");
+    el.classList.toggle("can-close", goalSetupCanClose);
+    renderGoalSetupItems();
+  };
+  // Stash our V2 openGoalSetup so the hard re-override can re-assert it later.
+  window.__myOpenGoalSetup = window.openGoalSetup;
+
+  // ---- 7. renderGoalTab override -------------------------------------------
+  let calCursor = new Date();
+  let progressView = (localStorage.getItem(LS_KEYS.PROGRESS_VIEW) || "all");
+  if (!["all","meaning","spelling"].includes(progressView)) progressView = "all";
+
+  function skillStatusFor(w, view) {
+    if (view === "meaning")  return window.__meaningStatus(w);
+    if (view === "spelling") return window.__spellingStatus(w);
+    // "all" = use overall wordStatus (Mastered = both Known)
+    return wordStatus(w);
+  }
+
+  function aggregateAll(view) {
+    let mastered = 0, known = 0, learning = 0, total = 0;
+    for (const w of words) {
+      const st = skillStatusFor(w, view);
+      total++;
+      if (st === "mastered") mastered++;
+      else if (st === "known") known++;
+      else if (st === "learning") learning++;
+    }
+    return [{ name: view === "all" ? "All words" : (view === "meaning" ? "Meaning" : "Spelling"), mastered, known, learning, total }];
+  }
+
+  function calendarHtmlV2() {
+    const rec = window.loadDailyRecordV2();
+    const goal = window.loadGoalV2();
+    const year = calCursor.getFullYear();
+    const month = calCursor.getMonth();
+    const monthName = calCursor.toLocaleString(undefined, { month: "long", year: "numeric" });
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const daysInMonth = lastDay.getDate();
+    const startWeekday = (firstDay.getDay() + 6) % 7;
+    const todayK = todayKey();
+    const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(d => `<div class="g-cal-dow">${d}</div>`).join("");
+    const dayHasProgress = (key, day) => {
+      if (day) {
+        const ev = day.events || {};
+        if ((ev.meaningKnown || []).length || (ev.spellingKnown || []).length || (ev.mastered || []).length) return true;
+        if (goal && Array.isArray(goal.items) && goal.items.some(it => countEvent(day, it.type) > 0)) return true;
+      }
+      try {
+        const histKey = (typeof LS !== "undefined" && LS.PRACTICE_HISTORY) ? LS.PRACTICE_HISTORY : "ielts_vocab_practice_history_v1";
+        const hist = JSON.parse(localStorage.getItem(histKey) || "[]") || [];
+        const date = parseKey(key);
+        const start = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        const end = start + 24 * 3600 * 1000;
+        return hist.some(s => {
+          const t = new Date(s.endedAt || s.startedAt || 0).getTime();
+          return t >= start && t < end;
+        });
+      } catch { return false; }
+    };
+    let cells = "";
+    for (let i = 0; i < startWeekday; i++) cells += `<div class="g-cal-cell empty"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const date = new Date(year, month, d);
+      const key = dateKey(date);
+      const day = rec[key];
+      let tier = "fail";
+      // A day record from Drive carries its own goalMet + the goal it had that
+      // day (subGoalsMet / goalSnapshot). Trust that, so importing history and
+      // later changing the current goal don't recolor past dates.
+      const hadGoal = !!(day && (
+        Object.keys(day.subGoalsMet || {}).length ||
+        (Array.isArray(day.goalSnapshot) && day.goalSnapshot.length)
+      ));
+      if (day && day.goalMet) {
+        tier = "full";                                  // goal fulfilled -> green
+      } else if (hadGoal) {
+        tier = "partial";                               // had a goal, not met -> yellow
+      } else if (day && goal && Array.isArray(goal.items) && goal.items.length) {
+        const someMet = goal.items.some(it => (day.subGoalsMet || {})[it.id] || countEvent(day, it.type) >= (it.count || 0));
+        const allMet = goal.items.every(it => (day.subGoalsMet || {})[it.id] || countEvent(day, it.type) >= (it.count || 0));
+        tier = allMet ? "full" : ((someMet || dayHasProgress(key, day)) ? "partial" : "fail");
+      } else if (dayHasProgress(key, day)) {
+        tier = "partial";
+      }
+      let cls = `g-cal-cell tier-${tier}`;
+      if (key === todayK) cls += " today";
+      cells += `<div class="${cls}" onclick="openGoalDayDetailV2('${key}')"><span>${d}</span></div>`;
+    }
+    return `
+      <div class="g-cal-card">
+        <div class="g-cal-header">
+          <button class="g-cal-nav" onclick="goalCalPrev()">‹</button>
+          <div class="g-cal-month">${escapeHtml(monthName)}</div>
+          <button class="g-cal-nav" onclick="goalCalNext()">›</button>
+        </div>
+        <div class="g-cal-dow-row">${days}</div>
+        <div class="g-cal-grid">${cells}</div>
+        <div class="g-cal-legend">
+          <span class="g-cal-legend-swatch tier-fail"></span>Missed
+          <span class="g-cal-legend-swatch tier-partial"></span>Partial
+          <span class="g-cal-legend-swatch tier-full"></span>All sub-goals
+        </div>
+      </div>
+    `;
+  }
+
+  function markPerSkillGoalReady() {
+    try { document.documentElement.classList.add("per-skill-goal-ready"); } catch {}
+  }
+
+  window.goalCalPrev = function() {
+    calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() - 1, 1);
+    window.renderGoalTab();
+  };
+  window.goalCalNext = function() {
+    calCursor = new Date(calCursor.getFullYear(), calCursor.getMonth() + 1, 1);
+    window.renderGoalTab();
+  };
+
+  // Aggregate by a legacy grouping dimension (level / topHeader / suggestedCombinedTitle)
+  // but using the new four-state model.
+  // Mastered = both Known, Known = one Known, Learning = neither but has attempts, Untouched = no attempts.
+  function chartRowsByDimension(field, view) {
+    const buckets = new Map();
+    for (const w of words) {
+      const paths = (typeof exactPracticePaths === "function") ? exactPracticePaths(w) : [];
+      const values = new Set();
+      for (const p of paths) {
+        if (field === "level") values.add(p.level);
+        else if (field === "topHeader") values.add(p.subject);
+        else if (field === "suggestedCombinedTitle") values.add(p.topic);
+      }
+      const st = skillStatusFor(w, view);
+      for (const v of values) {
+        if (!v) continue;
+        if (!buckets.has(v)) buckets.set(v, { mastered: 0, known: 0, learning: 0, total: 0 });
+        const b = buckets.get(v);
+        b.total++;
+        if (st === "mastered") b.mastered++;
+        else if (st === "known") b.known++;
+        else if (st === "learning") b.learning++;
+      }
+    }
+    const arr = [...buckets.entries()].map(([k, v]) => ({ name: k, ...v }));
+    if (field === "level") {
+      const order = { Entry: 0, Improver: 1, Advanced: 2 };
+      arr.sort((a, b) => (order[a.name] ?? 99) - (order[b.name] ?? 99) || a.name.localeCompare(b.name));
+    } else {
+      arr.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    return arr;
+  }
+
+  function chartRowsFor(view, group) {
+    if (group === "all") return aggregateAll(view);
+    const field = group === "level" ? "level" : group === "subject" ? "topHeader" : "suggestedCombinedTitle";
+    return chartRowsByDimension(field, view);
+  }
+
+  let progressGroup = "all"; // "all" | "level" | "subject" | "topic"
+
+  function chartGroupField(group) {
+    return group === "level" ? "level" : group === "subject" ? "topHeader" : group === "topic" ? "suggestedCombinedTitle" : "all";
+  }
+
+  function chartGroupFilter(group, name) {
+    const f = { levels: [], subjectAreas: [], topicGroups: [], statuses: [] };
+    if (group === "level") f.levels = [name];
+    else if (group === "subject") f.subjectAreas = [name];
+    else if (group === "topic") f.topicGroups = [name];
+    return f;
+  }
+
+  function wordInChartGroup(w, group, name) {
+    if (group === "all") return true;
+    const field = chartGroupField(group);
+    return exactPracticePaths(w).some(p => {
+      if (field === "level") return p.level === name;
+      if (field === "topHeader") return p.subject === name;
+      if (field === "suggestedCombinedTitle") return p.topic === name;
+      return true;
+    });
+  }
+
+  function chartGroupKeys(group, name) {
+    return words.filter(w => wordInChartGroup(w, group, name)).map(w => w.key);
+  }
+
+  function rowsHtml(rows, view) {
+    if (!rows.length) return `<div class="g-empty">No data yet</div>`;
+    const masteredLabel = view === "all" ? "mastered" : (view === "meaning" ? "meaning known" : "spelling known");
+    return rows.map(r => {
+      const pctM = r.total ? (r.mastered / r.total) * 100 : 0;
+      const pctK = r.total ? ((r.known || 0) / r.total) * 100 : 0;
+      const pctL = r.total ? (r.learning / r.total) * 100 : 0;
+      const done = r.mastered + (r.known || 0);
+      const notP = r.total - r.mastered - (r.known || 0) - r.learning;
+      const safeName = encodeURIComponent(r.name);
+      const safeGroup = encodeURIComponent(progressGroup);
+      return `
+        <div class="g-prog-row g-prog-row--tap" onclick="pgOpenChartRowPanel('${safeGroup}','${safeName}')">
+          <div class="g-prog-head">
+            <span class="g-prog-name">${escapeHtml(r.name)}</span>
+            <span class="g-prog-count">${done}/${r.total}</span>
+          </div>
+          <div class="g-prog-bar">
+            <div class="g-prog-seg mastered" style="width:${pctM}%"></div>
+            <div class="g-prog-seg known" style="width:${pctK}%"></div>
+            <div class="g-prog-seg learning" style="width:${pctL}%"></div>
+          </div>
+          <div class="g-prog-foot">${r.mastered} ${masteredLabel} · ${r.known || 0} known · ${r.learning} learning · ${notP} untouched</div>
+        </div>`;
+    }).join("");
+  }
+
+  window.pgOpenChartRowPanel = function(groupEnc, nameEnc) {
+    const group = decodeURIComponent(groupEnc || "all");
+    const name = decodeURIComponent(nameEnc || "All words");
+    const groupSet = new Set(chartGroupKeys(group, name));
+    const within = keys => keys.filter(k => groupSet.has(k)).sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const mastered = within(pgMasteredKeys());
+    const meaningKnown = within(pgMeaningKnownOnly());
+    const meaningLearning = within(pgMeaningLearning());
+    const spellingKnown = within(pgSpellingKnownOnly());
+    const spellingLearning = within(pgSpellingLearning());
+    const untouched = within(pgUntouchedKeys());
+    const filter = chartGroupFilter(group, name);
+    const total = groupSet.size;
+    const labelPrefix = group === "level" ? "Level"
+                      : group === "subject" ? "Subject"
+                      : group === "topic" ? "Topic"
+                      : "";
+    const accKey = `chart:${group}:${name}`;
+    // Default collapsed: chart panels can contain long lists.
+    if (!ipAccordionState[accKey]) ipAccordionState[accKey] = [];
+    pgCurrentPanel = {
+      kind: "chart",
+      page: "mastered",
+      accordionKey: accKey,
+      heroTitle: labelPrefix ? `${labelPrefix} · ${name}` : "All words",
+      heroCount: total,
+    };
+    pgPanelData = {
+      mastered: {
+        pageKey: "mastered",
+        tabLabel: `Mastered · ${mastered.length}`,
+        accordionLabel: "Mastered",
+        practiceLabel: `▶ Practice these ${mastered.length} mastered`,
+        keys: mastered,
+        noChip: true,
+        practicePool: mastered,
+        practiceMode: null,
+        practiceFilter: filter,
+      },
+      meaningKnown: {
+        pageKey: "meaningKnown",
+        tabLabel: `Known Meaning · ${meaningKnown.length}`,
+        accordionLabel: "Known Meaning",
+        practiceLabel: `▶ Practice these ${meaningKnown.length} meaning-known`,
+        keys: meaningKnown,
+        noChip: true,
+        practicePool: meaningKnown,
+        practiceMode: "wordToMeaning",
+        practiceFilter: filter,
+      },
+      meaningLearning: {
+        pageKey: "meaningLearning",
+        tabLabel: `Learning Meaning · ${meaningLearning.length}`,
+        accordionLabel: "Learning Meaning",
+        practiceLabel: `▶ Practice these ${meaningLearning.length} meaning-learning`,
+        keys: meaningLearning,
+        practicePool: meaningLearning,
+        practiceMode: "wordToMeaning",
+        streakSkill: "meaning",
+        practiceFilter: filter,
+      },
+      spellingKnown: {
+        pageKey: "spellingKnown",
+        tabLabel: `Known Spelling · ${spellingKnown.length}`,
+        accordionLabel: "Known Spelling",
+        practiceLabel: `▶ Practice these ${spellingKnown.length} spelling-known`,
+        keys: spellingKnown,
+        noChip: true,
+        practicePool: spellingKnown,
+        practiceMode: "spelling",
+        practiceFilter: filter,
+      },
+      spellingLearning: {
+        pageKey: "spellingLearning",
+        tabLabel: `Learning Spelling · ${spellingLearning.length}`,
+        accordionLabel: "Learning Spelling",
+        practiceLabel: `▶ Practice these ${spellingLearning.length} spelling-learning`,
+        keys: spellingLearning,
+        practicePool: spellingLearning,
+        practiceMode: "spelling",
+        streakSkill: "spelling",
+        practiceFilter: filter,
+      },
+      untouched: {
+        pageKey: "untouched",
+        tabLabel: `Untouched · ${untouched.length}`,
+        accordionLabel: "Untouched",
+        practiceLabel: `▶ Practice these ${untouched.length} untouched`,
+        keys: untouched,
+        noChip: true,
+        practicePool: untouched,
+        practiceMode: null,
+        practiceFilter: filter,
+      },
+    };
+    pgRenderPanel();
+  };
+
+  function progressChartHtml() {
+    const rows = chartRowsFor(progressView, progressGroup);
+    return `
+      <div class="g-prog-chart-card">
+        <div class="g-prog-chart-title">Progress</div>
+        <div class="g-prog-chart-tabs tab-row">
+          <button class="${progressView === "all" ? "active" : ""}" onclick="progressViewSet('all')">All skills</button>
+          <button class="${progressView === "meaning" ? "active" : ""}" onclick="progressViewSet('meaning')">Meaning</button>
+          <button class="${progressView === "spelling" ? "active" : ""}" onclick="progressViewSet('spelling')">Spelling</button>
+        </div>
+        <div class="g-prog-chart-tabs tab-row" style="margin-top:6px;">
+          <button class="${progressGroup === "all" ? "active" : ""}" onclick="progressGroupSet('all')">All</button>
+          <button class="${progressGroup === "level" ? "active" : ""}" onclick="progressGroupSet('level')">Level</button>
+          <button class="${progressGroup === "subject" ? "active" : ""}" onclick="progressGroupSet('subject')">Subject</button>
+          <button class="${progressGroup === "topic" ? "active" : ""}" onclick="progressGroupSet('topic')">Topic</button>
+        </div>
+        <div class="g-prog-chart-bars">${rowsHtml(rows, progressView)}</div>
+      </div>
+    `;
+  }
+  function pgRefreshAfterChartTab() {
+    if (document.querySelector('.page[data-page="progress"].active')) {
+      if (typeof window.renderProgressTab === "function") window.renderProgressTab();
+    } else if (typeof window.renderGoalTab === "function") {
+      window.renderGoalTab();
+    }
+  }
+  window.progressViewSet = function(v) {
+    progressView = v;
+    try { localStorage.setItem(LS_KEYS.PROGRESS_VIEW, v); } catch {}
+    pgRefreshAfterChartTab();
+  };
+  window.progressGroupSet = function(g) {
+    progressGroup = g;
+    pgRefreshAfterChartTab();
+  };
+
+  function todaySubGoalRowsHtml() {
+    const goal = window.loadGoalV2();
+    if (!goal || !Array.isArray(goal.items) || !goal.items.length) return "";
+    const rec = window.loadDailyRecordV2();
+    const day = ensureRecordDay(rec, todayKey());
+    return `<div class="g2-today-metrics">${normaliseGoalItems(goal.items).map(it => {
+      const got = countEvent(day, it.type);
+      const met = got >= it.count;
+      return `
+        <div class="g2-today-metric ${met ? "met" : ""}">
+          <div class="g2-today-metric-value">${got}<span>/ ${it.count}</span></div>
+          <div class="g2-today-metric-label">${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)}</div>
+        </div>`;
+    }).join("")}</div>`;
+  }
+
+  window.renderGoalTab = function() {
+    const root = document.getElementById("goalRoot");
+    if (!root) return;
+    cleanupLegacyGoalModal();
+    const goal = window.loadGoalV2();
+    if (!goal || !Array.isArray(goal.items) || !goal.items.length) {
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+      markPerSkillGoalReady();
+      if (firstLaunchWelcomeActive()) return;
+      window.openGoalSetup(1);
+      return;
+    }
+    const rec = window.loadDailyRecordV2();
+    const today = todayKey();
+    const day = ensureRecordDay(rec, today);
+    evaluateGoalForDay(day, goal);
+    window.saveDailyRecordV2(rec);
+
+    // Streak: count back from today (yesterday if today not yet full)
+    let streak = 0, cursor = new Date();
+    if (day.goalMet) { streak = 1; cursor.setDate(cursor.getDate() - 1); }
+    else { cursor.setDate(cursor.getDate() - 1); }
+    while (rec[dateKey(cursor)]?.goalMet) { streak++; cursor.setDate(cursor.getDate() - 1); }
+
+    root.innerHTML = `
+      <div class="g-page">
+        <div class="g-hero"><div class="g-title">Goal</div></div>
+        <div class="g-today-card" role="button" tabindex="0" onclick="openGoalDayDetailV2('${today}')">
+          <div class="g-today-left">
+            <div class="g-today-label">Today</div>
+            ${todaySubGoalRowsHtml()}
+            <button class="g-edit-goal" onclick="event.stopPropagation();openGoalSetup(1)">Edit goal</button>
+          </div>
+          <div class="g-today-right">
+            <div class="g-streak-fire">🔥</div>
+            <div class="g-streak-n">${streak}</div>
+            <div class="g-streak-l">day streak</div>
+          </div>
+        </div>
+        ${calendarHtmlV2()}
+      </div>
+    `;
+    markPerSkillGoalReady();
+  };
+  // Stash our V2 renderGoalTab so the hard re-override can re-assert it later.
+  window.__myRenderGoalTab = window.renderGoalTab;
+
+  // ---- 8. Day detail overlay (V2 with per-event lists) ----------------------
+  function ensureDayDetailV2() {
+    let el = document.getElementById("goalDayOverlayV2");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "goalDayOverlayV2";
+    el.className = "game-overlay history-overlay ip-no-topbar";
+    // No topbar — grab handle + backdrop tap handle dismissal. The element
+    // #goalDayTitleV2 still exists (hidden) so legacy callers that set its
+    // textContent don't error out.
+    el.innerHTML = `
+      <div id="goalDayTitleV2" style="display:none"></div>
+      <div class="game-body" id="goalDayBodyV2"></div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+  window.openGoalDayDetailV2 = function(key) {
+    const rec = window.loadDailyRecordV2();
+    const day = rec[key] || { events: { meaningKnown: [], spellingKnown: [], mastered: [] }, subGoalsMet: {} };
+    // Use the goal that was active on THIS day (snapshot) so changing the goal
+    // later doesn't rewrite past dates. Fall back to the current goal only when
+    // no snapshot exists (e.g. today, before any promotion).
+    const isToday = (key === todayKey());
+    const goal = (Array.isArray(day.goalSnapshot) && day.goalSnapshot.length && !isToday)
+      ? { items: day.goalSnapshot }
+      : (day.legacyImported && !isToday)
+        ? { items: [{ id: "legacy_mastered", type: "mastered", count: Number(day.legacyGoalTarget || day.goalTarget || 0) || Math.max(1, (day.newWordsMastered || day.events?.mastered || []).length || 1) }] }
+        : window.loadGoalV2();
+    const niceDate = parseKey(key).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    const subGoalsHtml = (goal && Array.isArray(goal.items) && goal.items.length) ? `
+      <div class="ip-section-label">Sub-goals</div>
+      <div class="ip-subgoal-grid">
+        ${goal.items.map(it => {
+          const got = countEvent(day, it.type);
+          const met = got >= it.count;
+          const legacyMet = it.id === "legacy_mastered" && day.subGoalsMet && day.subGoalsMet.legacy_mastered;
+          const shownMet = legacyMet || met;
+          return `<div class="ip-subgoal ${shownMet ? "met" : ""}">
+            <div class="ip-subgoal-value">${got}<span>/ ${it.count}</span></div>
+            <div class="ip-subgoal-label">${escapeHtml(it.id === "legacy_mastered" ? "Legacy daily goal" : (GOAL_TYPE_LABELS[it.type] || it.type))}</div>
+          </div>`;
+        }).join("")}
+      </div>` : "";
+    const events = day.events || {};
+
+    // Build the full per-skill lists for this date from the recorded promotion
+    // events PLUS that day's practice sessions (so learning/known/mastered are
+    // backfilled for past dates). Skill is taken from the session mode:
+    //   spelling -> spelling axis; wordToMeaning/meaningToWord/matching -> meaning.
+    // Fallback for sessions with no mode (no skill distinction):
+    //   wrong answers -> Meaning learning, correct answers -> Mastered.
+    const dayLists = (function(){
+      const N = (k) => normalizeKey(k);
+      const out = {
+        mastered:        new Set((events.mastered || []).map(N).filter(Boolean)),
+        meaningKnown:    new Set((events.meaningKnown || []).map(N).filter(Boolean)),
+        spellingKnown:   new Set((events.spellingKnown || []).map(N).filter(Boolean)),
+        meaningLearning: new Set((events.meaningLearning || []).map(N).filter(Boolean)),
+        spellingLearning:new Set((events.spellingLearning || []).map(N).filter(Boolean)),
+      };
+      const add = (set, list) => (list || []).forEach(k => { const n = N(k); if (n) set.add(n); });
+      try {
+        const hist = JSON.parse(localStorage.getItem("ielts_vocab_practice_history_v1") || "[]");
+        (Array.isArray(hist) ? hist : []).forEach(s => {
+          const when = s && (s.endedAt || s.startedAt);
+          if (!when) return;
+          const t = new Date(when);
+          if (Number.isNaN(t.getTime()) || dateKey(t) !== key) return;
+          const mode = String(s.mode || "");
+          if (!mode) {
+            // No skill distinction: wrong -> meaning learning, correct -> mastered.
+            add(out.meaningLearning, s.wrongKeys);
+            add(out.meaningLearning, s.learningWords);
+            add(out.mastered, s.correctKeys);
+            add(out.mastered, s.masteredWords);
+          } else {
+            const sp = /spell/i.test(mode);
+            add(sp ? out.spellingLearning : out.meaningLearning, s.wrongKeys);
+            add(sp ? out.spellingLearning : out.meaningLearning, s.learningWords);
+            add(sp ? out.spellingKnown : out.meaningKnown, s.correctKeys);
+            add(out.mastered, s.masteredWords);
+          }
+        });
+      } catch (e) {}
+      // A word known/mastered that day shouldn't also appear as learning.
+      out.mastered.forEach(k => { out.meaningKnown.delete(k); out.spellingKnown.delete(k); out.meaningLearning.delete(k); out.spellingLearning.delete(k); });
+      out.meaningKnown.forEach(k => out.meaningLearning.delete(k));
+      out.spellingKnown.forEach(k => out.spellingLearning.delete(k));
+      const arr = (s) => [...s].sort();
+      return { mastered: arr(out.mastered), meaningKnown: arr(out.meaningKnown), spellingKnown: arr(out.spellingKnown), meaningLearning: arr(out.meaningLearning), spellingLearning: arr(out.spellingLearning) };
+    })();
+
+    // 5 sections — known/mastered/learning for this date.
+    const sections = [
+      ["mastered", "Mastered", dayLists.mastered, null, null],
+      ["meaningKnown", "Meaning known", dayLists.meaningKnown, "wordToMeaning", null],
+      ["spellingKnown", "Spelling known", dayLists.spellingKnown, "spelling", null],
+      ["meaningLearning", "Meaning learning", dayLists.meaningLearning, "wordToMeaning", null],
+      ["spellingLearning", "Spelling learning", dayLists.spellingLearning, "spelling", null],
+    ];
+    const accKey = `calendar:${key}`;
+    // Default collapsed: users can expand only the section they want.
+    if (!ipAccordionState[accKey]) {
+      ipAccordionState[accKey] = [];
+    }
+    pgCurrentPanel = {
+      kind: "calendar",
+      page: sections[0][0],
+      accordionKey: accKey,
+      heroTitle: `📅 ${niceDate}`,
+      goalMet: !!day.goalMet,
+      subGoalsHtml,
+    };
+    pgPanelData = {};
+    sections.forEach(([pageKey, label, keys, mode, streakSkill]) => {
+      pgPanelData[pageKey] = {
+        pageKey,
+        tabLabel: `${label} · ${keys.length}`,
+        accordionLabel: label,
+        practiceLabel: `▶ Practice these ${keys.length} ${label.toLowerCase().replace(" today", "")}`,
+        keys: (keys || []).slice(),
+        noChip: !streakSkill,
+        streakSkill,
+        practicePool: (keys || []).slice(),
+        practiceMode: mode,
+        practiceFilter: null,
+      };
+    });
+    pgRenderPanel();
+  };
+  window.closeGoalDayDetailV2 = function() {
+    const el = document.getElementById("goalDayOverlayV2");
+    if (el) el.classList.remove("show");
+    if (pgCurrentPanel?.kind === "calendar" && typeof window.pgClosePanel === "function") window.pgClosePanel();
+  };
+
+  // Clicking a word in any info-panel word list opens that word's card (rendered
+  // per the current Learning Options — dictionary source / Chinese translation),
+  // with the card's existing back button returning to the panel it came from.
+  window.openWordCardFromList = function(key) {
+    try {
+      const w = (typeof words !== "undefined" && Array.isArray(words)) ? words.find(x => x.key === key) : null;
+      if (!w) { if (typeof toast === "function") toast("Not in your vocabulary list"); return; }
+      // Single-panel model: HIDE the list info panel and show the word card in
+      // its place (so the card is never stuck behind the list). A "← Back"
+      // button returns to the list; tapping the backdrop just closes the card.
+      const panel =
+        ["goalDayOverlayV2", "progressWordOverlay"]
+          .map(id => document.getElementById(id))
+          .find(el => el && (el.classList.contains("show") || el.classList.contains("show-behind"))) ||
+        document.querySelector(".history-overlay.show, .game-overlay.show");
+      window.__cardBackPanel = (panel && panel.classList.contains("show")) ? panel : null;
+      if (window.__cardBackPanel) {
+        window.__cardBackPanel.classList.remove("show");
+        document.body.classList.remove("history-overlay-open");
+        document.documentElement.classList.remove("history-overlay-open");
+      }
+      if (typeof window.__updateCardBackBtn === "function") window.__updateCardBackBtn();
+      // Mark the card as opened-from-a-list so the pull-up-to-advance UI is hidden
+      // and "Practice this word" routes to the practice wizard (step 2).
+      var _sheet = document.getElementById("sheet");
+      if (_sheet) _sheet.classList.add("from-list");
+      if (typeof openSheet === "function") openSheet(key);
+    } catch (e) { console.warn("[per-skill] openWordCardFromList failed", e); }
+  };
+
+  // ---- 9. Words tab filter: skill selector ---------------------------------
+  let wordsSkill = (localStorage.getItem(LS_KEYS.WORDS_SKILL) || "all");
+  if (!["all","meaning","spelling"].includes(wordsSkill)) wordsSkill = "all";
+  window.wordsSkill = function() { return wordsSkill; };
+
+  const WORDS_SOURCE_FILTER_KEY = "ielts_vocab_words_source_filter_v1";
+  const WORDS_SOURCE_LABELS = {
+    all: "All",
+    builtin: "Built-in",
+    related_created: "Related vocab",
+  };
+  let wordsSourceFilter = (localStorage.getItem(WORDS_SOURCE_FILTER_KEY) || "all");
+  if (!Object.prototype.hasOwnProperty.call(WORDS_SOURCE_LABELS, wordsSourceFilter)) wordsSourceFilter = "all";
+  window.wordsSourceFilter = function() { return wordsSourceFilter; };
+
+  function overallSkillStatus(w) {
+    const m = window.__meaningStatus(w);
+    const s = window.__spellingStatus(w);
+    if (m === "known" && s === "known") return "mastered";
+    if (m === "known" || s === "known") return "known";
+    if (m === "not_practiced" && s === "not_practiced") return "not_practiced";
+    return "learning";
+  }
+
+  function selectedSkillStatus(w) {
+    if (wordsSkill === "meaning") return window.__meaningStatus(w);
+    if (wordsSkill === "spelling") return window.__spellingStatus(w);
+    return overallSkillStatus(w);
+  }
+
+  function wordMatchesStatusFilterV2(w, status) {
+    if (!status || status === "__all") return true;
+    if (wordsSkill === "all") return overallSkillStatus(w) === status;
+    const axisStatus = selectedSkillStatus(w);
+    const overall = overallSkillStatus(w);
+    if (status === "mastered") return overall === "mastered";
+    if (status === "known") return axisStatus === "known" && overall !== "mastered";
+    return axisStatus === status;
+  }
+
+  function wordMatchesSourceFilter(w) {
+    if (wordsSourceFilter === "related_created") return isRelatedCreatedWord(w);
+    if (wordsSourceFilter === "builtin") return !isRelatedCreatedWord(w);
+    return true;
+  }
+
+  function wordHasVisiblePathV2(w) {
+    try {
+      if (typeof wordMatchesMeta === "function") {
+        if (!wordMatchesMeta(w, "level", currentLevelFilter)) return false;
+        if (!wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
+        if (!wordMatchesMeta(w, "suggestedCombinedTitle", currentBoldTitleFilter)) return false;
+        return true;
+      }
+    } catch {}
+    return true;
+  }
+
+  // Re-derive wordStatus per current skill selector
+  const _origWordStatus = wordStatus;
+  window.wordStatus = function(w) {
+    return selectedSkillStatus(w);
+  };
+  try { wordStatus = window.wordStatus; } catch {}
+
+  window.setWordsSkill = function(s) {
+    wordsSkill = s;
+    try { localStorage.setItem(LS_KEYS.WORDS_SKILL, s); } catch {}
+    if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
+    if (typeof renderWords === "function") renderWords();
+  };
+
+  window.setWordsSourceFilter = function(s) {
+    wordsSourceFilter = Object.prototype.hasOwnProperty.call(WORDS_SOURCE_LABELS, s) ? s : "all";
+    try { localStorage.setItem(WORDS_SOURCE_FILTER_KEY, wordsSourceFilter); } catch {}
+    shuffledWordKeys = [];
+    if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
+    if (typeof renderWords === "function") renderWords();
+  };
+
+  // Wrap setWordFilter so the new "known" (partial) and "mastered" status
+  // values clear the legacy currentQuick shortcut (it was hard-coded to
+  // map "known" → "kn" which checks the legacy known[key] flag = full Mastered,
+  // and would hide partial-Known words from the Known filter).
+  const _origSetWordFilter = window.setWordFilter;
+  window.setWordFilter = function(field, value) {
+    if (field === "status") {
+      currentStatusFilter = value;
+      currentQuick = null;
+      shuffledWordKeys = [];
+      if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
+      if (typeof renderWords === "function") renderWords();
+      return;
+    }
+    const result = typeof _origSetWordFilter === "function" ? _origSetWordFilter(field, value) : undefined;
+    return result;
+  };
+
+  // Patch renderFilterPanel to add a Skill selector row at the top.
+  // We store the captured original on window so we can call through to the
+  // current legacy version even after hardReoverride re-asserts ours later.
+  window.__origRenderFilterPanelForSkill = window.renderFilterPanel;
+  window.renderFilterPanel = function() {
+    const orig = window.__origRenderFilterPanelForSkill;
+    if (typeof orig === "function") orig();
+    const body = document.getElementById("filterPanelBody");
+    if (!body) return;
+    // Inject skill row once
+    let skillRow = document.getElementById("filterPanelSkillRow");
+    if (!skillRow) {
+      skillRow = document.createElement("div");
+      skillRow.id = "filterPanelSkillRow";
+      skillRow.className = "filter-group";
+      body.prepend(skillRow);
+    }
+    skillRow.innerHTML = `
+      <div class="filter-group-title">Skill view</div>
+      <div class="filter-chip-row">
+        <button class="filter-chip ${wordsSkill === "all" ? "active" : ""}" onclick="setWordsSkill('all')">All</button>
+        <button class="filter-chip ${wordsSkill === "meaning" ? "active" : ""}" onclick="setWordsSkill('meaning')">Meaning</button>
+        <button class="filter-chip ${wordsSkill === "spelling" ? "active" : ""}" onclick="setWordsSkill('spelling')">Spelling</button>
+      </div>
+    `;
+    // Insert/update a Mastered chip right after the Known chip in the status group.
+    const allStatusChips = Array.from(body.querySelectorAll(".filter-chip")).filter(b =>
+      /setWordFilter\('status'/.test(b.getAttribute("onclick") || "")
+    );
+    const knownChip = allStatusChips.find(b => /setWordFilter\('status',\s*'known'/.test(b.getAttribute("onclick") || ""));
+    const masteredCount = (typeof words !== "undefined" ? words : [])
+      .filter(w => wordMatchesStatusFilterV2(w, "mastered") && wordHasVisiblePathV2(w)).length;
+    const isActive = currentStatusFilter === "mastered";
+    if (knownChip && !document.getElementById("statusChipMastered")) {
+      const masteredBtn = document.createElement("button");
+      masteredBtn.id = "statusChipMastered";
+      masteredBtn.setAttribute("onclick", "setWordFilter('status','mastered')");
+      knownChip.parentNode.insertBefore(masteredBtn, knownChip.nextSibling);
+    }
+    const masteredChip = document.getElementById("statusChipMastered");
+    if (masteredChip) {
+      masteredChip.className = "filter-chip" + (isActive ? " active" : "");
+      masteredChip.innerHTML = `Mastered <span class="n">${masteredCount}</span>`;
+    }
+  };
+  // Stash for hard re-override.
+  window.__myRenderFilterPanel = window.renderFilterPanel;
+
+  // Final authoritative Words filter rules for per-skill state. This sits after
+  // the older filter patches so legacy quick filters cannot hide valid results.
+  const _origPerSkillRenderFilterPanel = window.renderFilterPanel;
+  window.renderFilterPanel = function() {
+    if (typeof _origPerSkillRenderFilterPanel === "function") _origPerSkillRenderFilterPanel();
+    const body = document.getElementById("filterPanelBody");
+    if (!body) return;
+    const rows = Array.from(body.querySelectorAll(".filter-group"));
+    const statusGroup = rows.find(g => /Practice status/i.test(g.querySelector(".filter-group-title")?.textContent || ""));
+    if (!statusGroup) return;
+    const skillRow = document.getElementById("filterPanelSkillRow");
+    if (skillRow && skillRow.nextElementSibling !== statusGroup) {
+      statusGroup.parentNode.insertBefore(skillRow, statusGroup);
+    }
+    let sourceRow = document.getElementById("filterPanelSourceRow");
+    if (!sourceRow) {
+      sourceRow = document.createElement("div");
+      sourceRow.id = "filterPanelSourceRow";
+      sourceRow.className = "filter-group";
+    }
+    const sourceBase = (typeof words !== "undefined" ? words : []).filter(wordHasVisiblePathV2);
+    const sourceCount = (value) => sourceBase.filter(w => {
+      if (value === "related_created") return isRelatedCreatedWord(w);
+      if (value === "builtin") return !isRelatedCreatedWord(w);
+      return true;
+    }).length;
+    sourceRow.innerHTML = `
+      <div class="filter-group-title">Word source</div>
+      <div class="filter-chip-row">
+        ${["all", "builtin", "related_created"].map(value => `
+          <button class="filter-chip ${wordsSourceFilter === value ? "active" : ""}" onclick="setWordsSourceFilter('${value}')">
+            ${escapeHtml(WORDS_SOURCE_LABELS[value])} <span class="n">${sourceCount(value)}</span>
+          </button>
+        `).join("")}
+      </div>
+    `;
+    if (skillRow && sourceRow.nextElementSibling !== skillRow) {
+      skillRow.parentNode.insertBefore(sourceRow, skillRow);
+    } else if (!skillRow && sourceRow.nextElementSibling !== statusGroup) {
+      statusGroup.parentNode.insertBefore(sourceRow, statusGroup);
+    }
+    const visibleWords = sourceBase.filter(wordMatchesSourceFilter);
+    const countFor = (status) => visibleWords.filter(w => wordMatchesStatusFilterV2(w, status)).length;
+    const knownLabel = wordsSkill === "all" ? "Known" : "Known";
+    statusGroup.querySelector(".filter-chip-row").innerHTML = [
+      ["__all", "All", visibleWords.length],
+      ["not_practiced", "Not practiced", countFor("not_practiced")],
+      ["learning", "Learning", countFor("learning")],
+      ["known", knownLabel, countFor("known")],
+      ["mastered", "Mastered", countFor("mastered")]
+    ].map(([value, label, count]) => {
+      const active = currentStatusFilter === value;
+      return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('status','${value}')">${label} <span class="n">${count}</span></button>`;
+    }).join("");
+  };
+  window.__myRenderFilterPanel = window.renderFilterPanel;
+  try { renderFilterPanel = window.renderFilterPanel; } catch {}
+
+  const _origPerSkillWordPasses = window.wordPasses;
+  window.wordPasses = function(w) {
+    try { currentQuick = null; } catch {}
+    if (!wordMatchesSourceFilter(w)) return false;
+    if (!wordMatchesStatusFilterV2(w, currentStatusFilter)) return false;
+    if (!wordHasVisiblePathV2(w)) return false;
+    if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
+    if (typeof wordInCategory === "function" && !wordInCategory(w, currentCategory)) return false;
+    return true;
+  };
+  try { wordPasses = window.wordPasses; } catch {}
+
+  // ---- 10. Session detail per-skill rows -----------------------------------
+  function skillCell(w, axis) {
+    const st = axis === "meaning" ? window.__meaningStatus(w) : window.__spellingStatus(w);
+    if (st === "known")        return `<span class="sd-cell ok">✓</span>`;
+    if (st === "not_practiced") return `<span class="sd-cell dim">—</span>`;
+    const streak = axis === "meaning" ? window.meaningStreak(w) : window.spellingStreak(w);
+    return `<span class="sd-cell mid">${Math.max(0, Math.min(3, streak))}/3</span>`;
+  }
+
+  window.__origPracticeOpenSessionDetail = window.practiceOpenSessionDetail;
+  window.practiceOpenSessionDetail = function(id) {
+    // Run the original first to make sure the overlay exists and is shown.
+    const orig = window.__origPracticeOpenSessionDetail;
+    if (typeof orig === "function") orig(id);
+    // Ensure the detail overlay sits ON TOP of the history-panel overlay
+    // (both share .history-overlay z-index of 90). Re-append to body end
+    // and bump z-index so the user sees the detail, not the panel.
+    const detail = document.getElementById("historyDetailOverlay");
+    if (detail) {
+      try {
+        document.body.appendChild(detail); // move to end of body
+        detail.style.setProperty("z-index", "200", "important");
+      } catch {}
+    }
+    // The original renderer now emits the unified ip-* list/action design.
+    // Keep this wrapper only for z-index/stacking, not for old table injection.
+  };
+  // Stash for hard re-override.
+  window.__myPracticeOpenSessionDetail = window.practiceOpenSessionDetail;
+
+  // ---- 10a2. Practice History page redesign --------------------------------
+  // Replaces the legacy Layer 0 (history quicklook + previous practice + new
+  // practice button) with a flat list of session cards: latest emphasized,
+  // others with a tight 12px deck-overlap. A fixed [+ New Practice] floats
+  // above the navbar. View / Repeat / Retry-wrong actions live inline on each
+  // card. We hook by wrapping window.renderPracticeRoot: call the original to
+  // let it dispatch wizard step, then if it rendered Layer 0 (detected by the
+  // l0-* class hooks), replace the body with our layout.
+  const PH_MODES = {
+    wordToMeaning: { ico: "💕", name: "Word → Meaning" },
+    meaningToWord: { ico: "🔁", name: "Meaning → Word" },
+    spelling:      { ico: "✏️", name: "Spelling" },
+  };
+  function phRelative(iso) {
+    if (!iso) return "";
+    const then = new Date(iso).getTime();
+    const now = Date.now();
+    const m = Math.round((now - then) / 60000);
+    if (m < 1) return "just now";
+    if (m < 60) return m + "m ago";
+    const h = Math.round(m / 60);
+    if (h < 24) return h + "h ago";
+    const d = Math.round(h / 24);
+    if (d < 7) return d + "d ago";
+    const wk = Math.round(d / 7);
+    if (wk < 5) return wk + "w ago";
+    return new Date(iso).toLocaleDateString();
+  }
+  function phIsExactPossible(sessionId) {
+    try {
+      const last = JSON.parse(localStorage.getItem("ielts_vocab_practice_last_loaded_pool_v1") || "null");
+      return !!(last && last.sessionId === sessionId && Array.isArray(last.wordKeys) && last.wordKeys.length);
+    } catch { return false; }
+  }
+  function phRenderCard(s, isLatest) {
+    const meta = PH_MODES[s.mode] || { ico: "🎮", name: s.mode || "Practice" };
+    const correct = (typeof s.correctAnswered === "number") ? s.correctAnswered
+                  : (Array.isArray(s.correctKeys) ? s.correctKeys.length : 0);
+    const total = s.sessionLength || s.total || s.totalAnswered || 0;
+    const date = phRelative(s.endedAt || s.startedAt);
+    const pool = s.poolDescription || "All words";
+    const poolSize = s.poolSize || total;
+    const wrong = Array.isArray(s.wrongKeys) ? s.wrongKeys.length : 0;
+    const sId = String(s.id || "").replace(/'/g, "\\'");
+    const exactPossible = phIsExactPossible(s.id);
+    const repeatLabel = exactPossible ? "↻" : "↻";
+    const repeatTitle = exactPossible ? "Repeat exact set" : "Repeat setup";
+    const repeatFn = exactPossible ? "practiceRepeatExactSession" : "practiceRepeatSetupFromSession";
+    // The card itself is tappable to open View detail. Buttons stop propagation.
+    return `
+      <div class="ph-card ${isLatest ? "latest" : ""}" onclick="practiceOpenSessionDetail('${sId}')">
+        <div class="ph-card-top">
+          <div class="ph-mode">
+            <span class="ph-mode-ico">${meta.ico}</span>
+            <span class="ph-mode-name">${escapeHtml(meta.name)}</span>
+          </div>
+          <div class="ph-score">${correct} / ${total}</div>
+        </div>
+        <div class="ph-pool">${escapeHtml(pool)} · ${poolSize} loaded</div>
+        <div class="ph-date">${escapeHtml(date)}</div>
+        <div class="ph-actions">
+          <button class="ph-btn" onclick="event.stopPropagation();practiceOpenSessionDetail('${sId}')">👁 View</button>
+          <button class="ph-btn primary ph-btn-icon" title="${escapeHtml(repeatTitle)}" aria-label="${escapeHtml(repeatTitle)}" onclick="event.stopPropagation();${repeatFn}('${sId}')">${repeatLabel}</button>
+          ${wrong > 0 ? `<button class="ph-btn danger" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">↩︎ ${wrong}</button>` : ""}
+        </div>
+      </div>
+    `;
+  }
+  function phRenderPage(root) {
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem("ielts_vocab_practice_history_v1") || "[]"); }
+    catch { history = []; }
+    history = (Array.isArray(history) ? history : []).slice().reverse(); // newest first
+    if (!history.length) {
+      root.innerHTML = `
+        <div class="ph-page">
+          <div class="ph-sticky-head">
+            <div class="ph-title">Practice History</div>
+          </div>
+          <div class="ph-empty">No sessions yet. Tap + New Practice below.</div>
+        </div>
+        <div class="ph-fab-bar"><button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button></div>
+      `;
+      return;
+    }
+    const latest = history[0];
+    const rest = history.slice(1);
+    const restCardsHtml = rest.map(s => phRenderCard(s, false)).join("");
+    root.innerHTML = `
+      <div class="ph-page">
+        <div class="ph-sticky-head">
+          <div class="ph-title">Practice History</div>
+          ${phRenderCard(latest, true)}
+        </div>
+        <div class="ph-feed">${restCardsHtml}</div>
+        <div class="ph-feed-padding"></div>
+      </div>
+      <div class="ph-fab-bar">
+        <button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button>
+      </div>
+    `;
+  }
+  function phShouldTakeOver(root) {
+    if (!root) return false;
+    // Take over whenever legacy Layer 0 is rendered. Layer 1/2 have their own
+    // markers (.pw-step-label / .pw-page with steps) and we leave them alone.
+    return !!(root.querySelector(".l0-history-card")
+           || root.querySelector(".l0-prev")
+           || root.querySelector(".l0-new-btn")
+           || root.querySelector(".l0-newbtn-wrap"));
+  }
+  function phTryTakeOver() {
+    const root = document.getElementById("practiceRoot");
+    if (phShouldTakeOver(root)) phRenderPage(root);
+  }
+  window.__origRenderPracticeRoot = window.renderPracticeRoot;
+  window.renderPracticeRoot = function() {
+    const orig = window.__origRenderPracticeRoot;
+    if (typeof orig === "function") orig();
+    phTryTakeOver();
+  };
+  try { renderPracticeRoot = window.renderPracticeRoot; } catch {}
+  window.__myRenderPracticeRoot = window.renderPracticeRoot;
+
+  // Defensive observer: catches IIFE-internal renderPracticeRoot calls (e.g.,
+  // after a session completes the legacy code calls bare renderPracticeRoot()
+  // which resolves to the IIFE-local function, bypassing our window override).
+  try {
+    const practiceRootEl = document.getElementById("practiceRoot");
+    const installPracticeRootObserver = (el) => {
+      if (!el || el.__phObserved) return;
+      el.__phObserved = true;
+      new MutationObserver(phTryTakeOver).observe(el, { childList: true, subtree: true });
+    };
+    if (practiceRootEl) installPracticeRootObserver(practiceRootEl);
+    else {
+      const bodyObs = new MutationObserver(() => {
+        const el = document.getElementById("practiceRoot");
+        if (el) { installPracticeRootObserver(el); bodyObs.disconnect(); }
+      });
+      bodyObs.observe(document.body, { childList: true, subtree: true });
+    }
+  } catch (e) { console.warn("[per-skill] practiceRoot observer failed:", e); }
+
+  // ---- 10b. renderHome override --------------------------------------------
+  // CRITICAL FIX: the legacy renderHome (assigned by the goal IIFE) is a
+  // closure that calls bare `renderGoalTab()` — which resolves to the legacy
+  // IIFE-local function, NOT window.renderGoalTab. Every nav-to-Goal would
+  // re-render the legacy goal tab (with legacy Edit button → legacy modal).
+  // We override window.renderHome so the bottom-nav goes through ours.
+  window.renderHome = function() {
+    if (typeof window.renderGoalTab === "function") window.renderGoalTab();
+  };
+  window.__myRenderHome = window.renderHome;
+
+  // ---- 10c. Word info panel per-skill chip row ------------------------------
+  // The word sheet (#sheet) doesn't show any per-skill state today. After the
+  // original showWord renders, append a small status row inside the hero so
+  // the user can see Meaning/Spelling Known + streak progress at a glance.
+  function renderWordSkillChips(w) {
+    if (!w || !w.key) return "";
+    const mSt = window.__meaningStatus(w);
+    const sSt = window.__spellingStatus(w);
+    const mStreak = window.meaningStreak(w);
+    const sStreak = window.spellingStreak(w);
+    function chip(label, st, streak) {
+      if (st === "known")        return `<span class="ws-chip ok">${label} ✓</span>`;
+      if (st === "not_practiced") return `<span class="ws-chip dim">${label} —</span>`;
+      return `<span class="ws-chip mid">${label} ${Math.max(0, Math.min(3, streak))}/3</span>`;
+    }
+    const mastered = (mSt === "known" && sSt === "known");
+    const banner = mastered ? `<span class="ws-mastered">🏆 Mastered</span>` : "";
+    return `<div class="ws-row">${chip("Meaning", mSt, mStreak)}${chip("Spelling", sSt, sStreak)}${banner}</div>`;
+  }
+
+  // Override tabBottomHtml so the per-skill chips REPLACE the legacy
+  // "💕 NN% / ✏️ NN%" stats line at the bottom of each sheet tab.
+  window.__origTabBottomHtml = window.tabBottomHtml;
+  window.tabBottomHtml = function(w) {
+    let html = "";
+    try {
+      const orig = window.__origTabBottomHtml;
+      html = typeof orig === "function" ? orig(w) : "";
+    } catch {}
+    if (!html) return html;
+    // Replace the entire .tab-stats line with our skill chips row.
+    const chipsRow = renderWordSkillChips(w);
+    html = html.replace(/<div class="tab-stats">[\s\S]*?<\/div>/, chipsRow);
+    return html;
+  };
+  try { tabBottomHtml = window.tabBottomHtml; } catch {}
+  window.__myTabBottomHtml = window.tabBottomHtml;
+
+  // We DON'T inject chips after heroChips anymore (per user feedback —
+  // they should sit at the bottom, not the hero). Keep showWord as the
+  // original; remove any stray hero ws-row that other code may add.
+  window.__origShowWordForSkill = window.showWord;
+  window.showWord = function(key) {
+    const orig = window.__origShowWordForSkill;
+    if (typeof orig === "function") orig(key);
+    // Remove any stray hero-injected chip row from prior builds.
+    const stray = document.querySelector(".sheet .hero-row .ws-row");
+    if (stray) stray.remove();
+  };
+  try { showWord = window.showWord; } catch {}
+  // Stash for hard re-override.
+  window.__myShowWord = window.showWord;
+
+  // ---- 10d. Backup payload extension ---------------------------------------
+  // Wrap buildLeanBackupPayload and applyLeanBackupPayload so the per-skill
+  // state, multi-goal config, and V2 daily record all travel with the backup
+  // and Drive sync payload.
+  function wordStateSkillExtension() {
+    const km = window.knownMeaning || {};
+    const ks = window.knownSpelling || {};
+    const mt = window.meaningStateUpdatedAt || {};
+    const st = window.spellingStateUpdatedAt || {};
+    const keyExists = k => (typeof words !== "undefined" ? words : []).some(w => w.key === k);
+    const meaningKnownWords = Object.keys(km).filter(k => keyExists(k) && km[k]).sort();
+    const spellingKnownWords = Object.keys(ks).filter(k => keyExists(k) && ks[k]).sort();
+    const meaningWordUpdatedAt = {};
+    const spellingWordUpdatedAt = {};
+    // Learning-meaning / Learning-spelling = had a mistake and has not recovered.
+    const meaningLearningWords = [];
+    const spellingLearningWords = [];
+    for (const key of Object.keys(progress || {})) {
+      if (!keyExists(key)) continue;
+      const p = progress[key] || {};
+      const mAtt = (p.wordToMeaning?.attempts || 0) + (p.meaningToWord?.attempts || 0) + (p.matching?.attempts || 0);
+      const mCor = (p.wordToMeaning?.correct || 0) + (p.meaningToWord?.correct || 0) + (p.matching?.correct || 0);
+      const sAtt = (p.spelling?.attempts || 0);
+      const sCor = (p.spelling?.correct || 0);
+      if (mAtt > mCor && (p._consecMeaning || 0) < 3 && !km[key]) meaningLearningWords.push(key);
+      if (sAtt > sCor && (p._consecSpelling || 0) < 3 && !ks[key]) spellingLearningWords.push(key);
+    }
+    for (const key of [...meaningKnownWords, ...meaningLearningWords]) {
+      if (keyExists(key)) meaningWordUpdatedAt[key] = mt[key] || "";
+    }
+    for (const key of [...spellingKnownWords, ...spellingLearningWords]) {
+      if (keyExists(key)) spellingWordUpdatedAt[key] = st[key] || "";
+    }
+    return { meaningKnownWords, spellingKnownWords,
+             meaningLearningWords: meaningLearningWords.sort(),
+             spellingLearningWords: spellingLearningWords.sort(),
+             meaningWordUpdatedAt,
+             spellingWordUpdatedAt };
+  }
+
+  if (typeof window.buildLeanBackupPayload === "function" || typeof buildLeanBackupPayload === "function") {
+    const _origBuild = (typeof buildLeanBackupPayload === "function") ? buildLeanBackupPayload : window.buildLeanBackupPayload;
+    const wrappedBuild = function () {
+      const base = _origBuild.apply(this, arguments) || {};
+      base.schema = "ielts-vocab-cloud-sync-v4"; // bump schema for per-skill
+      const ext = wordStateSkillExtension();
+      base.wordState = Object.assign({}, base.wordState || {}, ext);
+      reconcilePayloadWordStateFromPerSkill(base, ext);
+      ensurePerSkillWordTimestampsInPayload(base, ext);
+      const goalV2 = window.loadGoalV2();
+      const dailyV2 = window.loadDailyRecordV2();
+      base.goalTracking = Object.assign({}, base.goalTracking || {}, {
+        goalV2: goalV2 || null,
+        dailyRecordV2: dailyV2 || {},
+      });
+      if (base.syncInfo) {
+        base.syncInfo.meaningKnownCount  = ext.meaningKnownWords.length;
+        base.syncInfo.spellingKnownCount = ext.spellingKnownWords.length;
+        base.syncInfo.masteredFullCount  = ext.meaningKnownWords.filter(k => (window.knownSpelling || {})[k]).length;
+      }
+      return base;
+    };
+    try { buildLeanBackupPayload = wrappedBuild; } catch {}
+    window.buildLeanBackupPayload = wrappedBuild;
+    window.buildCloudSyncPayloadV3 = wrappedBuild;
+    window.buildCloudSyncPayloadV4 = wrappedBuild;
+  }
+
+  // ---- 10e. Wrap the CANONICAL V4 builder / applier --------------------------
+  // exportBackup actually prefers window.buildLeanPayloadV4 over the legacy
+  // buildLeanBackupPayload. Drive sync also uses V4. Without these wraps the
+  // exported file does NOT carry per-skill / multi-goal state.
+  function ensurePerSkillWordTimestampsInPayload(payload, ext) {
+    if (!payload || !payload.wordState || !ext) return;
+    const ts = payload.wordState.wordUpdatedAt || {};
+    const fallback = payload.meta?.updatedAt || new Date().toISOString();
+    for (const list of [
+      ext.meaningKnownWords,
+      ext.spellingKnownWords,
+      ext.meaningLearningWords,
+      ext.spellingLearningWords
+    ]) {
+      for (const key of (Array.isArray(list) ? list : [])) {
+        if (key && !ts[key]) ts[key] = fallback;
+      }
+    }
+    payload.wordState.wordUpdatedAt = ts;
+
+    const meaningTs = payload.wordState.meaningWordUpdatedAt || {};
+    const spellingTs = payload.wordState.spellingWordUpdatedAt || {};
+    for (const key of [...(ext.meaningKnownWords || []), ...(ext.meaningLearningWords || [])]) {
+      if (key && !meaningTs[key]) meaningTs[key] = (ext.meaningWordUpdatedAt || {})[key] || ts[key] || fallback;
+    }
+    for (const key of [...(ext.spellingKnownWords || []), ...(ext.spellingLearningWords || [])]) {
+      if (key && !spellingTs[key]) spellingTs[key] = (ext.spellingWordUpdatedAt || {})[key] || ts[key] || fallback;
+    }
+    payload.wordState.meaningWordUpdatedAt = meaningTs;
+    payload.wordState.spellingWordUpdatedAt = spellingTs;
+  }
+
+  function reconcilePayloadWordStateFromPerSkill(payload, ext) {
+    if (!payload || !payload.wordState || !ext) return;
+    const meaningKnown = new Set(ext.meaningKnownWords || []);
+    const spellingKnown = new Set(ext.spellingKnownWords || []);
+    const mastered = [...meaningKnown].filter(k => spellingKnown.has(k)).sort();
+    const masteredSet = new Set(mastered);
+    const learning = [...new Set([...(ext.meaningLearningWords || []), ...(ext.spellingLearningWords || [])])]
+      .filter(k => !masteredSet.has(k))
+      .sort();
+    payload.wordState.masteredWords = mastered;
+    payload.wordState.learningWords = learning;
+    if (payload.syncInfo) {
+      payload.syncInfo.masteredCount = mastered.length;
+      payload.syncInfo.learningCount = learning.length;
+    }
+  }
+
+  function reconcileLegacyStoresFromPerSkillWordState(ws) {
+    if (!ws || typeof ws !== "object") return;
+    if (!Array.isArray(ws.meaningKnownWords) && !Array.isArray(ws.spellingKnownWords)) return;
+
+    const meaningKnown = new Set(ws.meaningKnownWords || []);
+    const spellingKnown = new Set(ws.spellingKnownWords || []);
+    for (const k of (Array.isArray(ws.masteredWords) ? ws.masteredWords : [])) {
+      meaningKnown.add(k);
+      spellingKnown.add(k);
+    }
+    const mastered = [...meaningKnown].filter(k => spellingKnown.has(k)).sort();
+    const masteredSet = new Set(mastered);
+    const hasPerSkillLearning = Array.isArray(ws.meaningLearningWords) || Array.isArray(ws.spellingLearningWords);
+    const learning = hasPerSkillLearning
+      ? [...new Set([...(ws.meaningLearningWords || []), ...(ws.spellingLearningWords || [])])]
+          .filter(k => !masteredSet.has(k))
+          .sort()
+      : uniqueList(ws.learningWords || []).filter(k => !masteredSet.has(k) && !meaningKnown.has(k) && !spellingKnown.has(k));
+
+    const knownObj = {};
+    for (const k of mastered) knownObj[k] = true;
+    const reviewObj = {};
+    for (const k of learning) reviewObj[k] = true;
+
+    try { localStorage.setItem(LS.KNOWN, JSON.stringify(knownObj)); } catch {}
+    try { localStorage.setItem(LS.REVIEW, JSON.stringify(reviewObj)); } catch {}
+    try { known = knownObj; } catch {}
+    try { needsReview = reviewObj; } catch {}
+  }
+
+  function buildV4Augmentation() {
+    const ext = wordStateSkillExtension();
+    const goalV2 = window.loadGoalV2 ? window.loadGoalV2() : null;
+    const dailyV2 = window.loadDailyRecordV2 ? window.loadDailyRecordV2() : {};
+    return { ext, goalV2, dailyV2 };
+  }
+  function applyV4Augmentation(payload) {
+    const wasApplyingRemote = !!window.__cloudApplyingRemotePayloadV4;
+    window.__cloudApplyingRemotePayloadV4 = true;
+    try {
+      const ws = (payload && payload.wordState) || {};
+      if (Array.isArray(ws.meaningKnownWords)) {
+        window.knownMeaning = {};
+        for (const k of ws.meaningKnownWords) window.knownMeaning[k] = true;
+      }
+      if (Array.isArray(ws.spellingKnownWords)) {
+        window.knownSpelling = {};
+        for (const k of ws.spellingKnownWords) window.knownSpelling[k] = true;
+      }
+      if (Array.isArray(ws.meaningKnownWords) || Array.isArray(ws.spellingKnownWords)) {
+        for (const k of (Array.isArray(ws.masteredWords) ? ws.masteredWords : [])) {
+          window.knownMeaning = window.knownMeaning || {};
+          window.knownSpelling = window.knownSpelling || {};
+          window.knownMeaning[k] = true;
+          window.knownSpelling[k] = true;
+        }
+        window.meaningStateUpdatedAt = (ws.meaningWordUpdatedAt && typeof ws.meaningWordUpdatedAt === "object") ? ws.meaningWordUpdatedAt : (window.meaningStateUpdatedAt || {});
+        window.spellingStateUpdatedAt = (ws.spellingWordUpdatedAt && typeof ws.spellingWordUpdatedAt === "object") ? ws.spellingWordUpdatedAt : (window.spellingStateUpdatedAt || {});
+      }
+      if (!Array.isArray(ws.meaningKnownWords) && !Array.isArray(ws.spellingKnownWords)) {
+        // Legacy v4 with only masteredWords[] → treat as full Mastered.
+        const mastered = Array.isArray(ws.masteredWords) ? ws.masteredWords : [];
+        window.knownMeaning  = window.knownMeaning  || {};
+        window.knownSpelling = window.knownSpelling || {};
+        for (const k of mastered) { window.knownMeaning[k] = true; window.knownSpelling[k] = true; }
+      }
+      hydrateSkillLearningFromWordState(ws);
+      reconcileLegacyStoresFromPerSkillWordState(ws);
+      const gt = (payload && payload.goalTracking) || {};
+      restoreGoalTrackingV2OrLegacy(gt, payload && payload.practice);
+      if (typeof window.saveSkillState === "function") window.saveSkillState();
+      try { if (typeof saveAll === "function") saveAll(); } catch {}
+      try { localStorage.setItem("ielts_vocab_mastery_migration_v1", "v1-done"); } catch {}
+      if (typeof window.renderGoalTab === "function") window.renderGoalTab();
+      if (typeof window.renderProgressTab === "function") window.renderProgressTab();
+    } catch (e) { console.warn("[per-skill] applyV4Augmentation failed:", e); }
+    finally { window.__cloudApplyingRemotePayloadV4 = wasApplyingRemote; }
+  }
+
+  function hydrateSkillLearningFromWordState(ws) {
+    if (!ws || typeof ws !== "object") return;
+    const km = window.knownMeaning || {};
+    const ks = window.knownSpelling || {};
+    const touchMeaningLearning = (key) => {
+      if (!key || km[key]) return;
+      if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
+      if (!progress[key].matching) progress[key].matching = { attempts: 0, correct: 0 };
+      if ((progress[key].matching.attempts || 0) === 0) progress[key].matching = { attempts: 1, correct: 0 };
+    };
+    const touchSpellingLearning = (key) => {
+      if (!key || ks[key]) return;
+      if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
+      if (!progress[key].spelling) progress[key].spelling = { attempts: 0, correct: 0 };
+      if ((progress[key].spelling.attempts || 0) === 0) progress[key].spelling = { attempts: 1, correct: 0 };
+    };
+    for (const k of ws.meaningLearningWords || []) touchMeaningLearning(k);
+    for (const k of ws.spellingLearningWords || []) touchSpellingLearning(k);
+    // Legacy aggregate learning words do not say which skill, so only use them
+    // when no per-skill learning arrays are present. Put them under Meaning
+    // Learning only so old backups do not falsely double-count both skills.
+    if (!Array.isArray(ws.meaningLearningWords) && !Array.isArray(ws.spellingLearningWords)) {
+      for (const k of ws.learningWords || []) {
+        touchMeaningLearning(k);
+      }
+    }
+  }
+
+  function installV4BuilderWrap() {
+    const cur = window.buildLeanPayloadV4;
+    if (typeof cur !== "function" || cur.__perSkillV4Wrapped) return;
+    const wrapped = function(source) {
+      const base = cur.apply(this, arguments) || {};
+      const { ext, goalV2, dailyV2 } = buildV4Augmentation();
+      base.wordState = Object.assign({}, base.wordState || {}, ext);
+      reconcilePayloadWordStateFromPerSkill(base, ext);
+      ensurePerSkillWordTimestampsInPayload(base, ext);
+      base.goalTracking = Object.assign({}, base.goalTracking || {}, {
+        goalV2: goalV2 || null,
+        dailyRecordV2: dailyV2 || {},
+      });
+      if (base.syncInfo) {
+        base.syncInfo.meaningKnownCount  = ext.meaningKnownWords.length;
+        base.syncInfo.spellingKnownCount = ext.spellingKnownWords.length;
+        base.syncInfo.masteredFullCount  = ext.meaningKnownWords.filter(k => (window.knownSpelling || {})[k]).length;
+        base.syncInfo.perSkillSchema = "v1";
+      }
+      return base;
+    };
+    wrapped.__perSkillV4Wrapped = true;
+    window.buildLeanPayloadV4 = wrapped;
+  }
+  function installV4ApplyWrap() {
+    const cur = window.applyLeanPayloadV4;
+    if (typeof cur !== "function" || cur.__perSkillV4Wrapped) return;
+    const wrapped = function(payload) {
+      const r = cur.apply(this, arguments);
+      applyV4Augmentation(payload);
+      return r;
+    };
+    wrapped.__perSkillV4Wrapped = true;
+    window.applyLeanPayloadV4 = wrapped;
+  }
+  // Initial install (in case V4 fns are already on window when this module loads).
+  installV4BuilderWrap();
+  installV4ApplyWrap();
+  // Re-assert later in case the legacy preference-timestamp/mode-intro wrappers
+  // overwrite us. The flag check prevents double-wrap.
+  [3000, 4500, 6000, 8000].forEach(ms => setTimeout(() => {
+    installV4BuilderWrap();
+    installV4ApplyWrap();
+  }, ms));
+
+  // ---- 10f. Console-runnable roundtrip self-test ----------------------------
+  // Run from DevTools console:
+  //   window.__perSkillRoundtripTest()
+  // It captures current state, exports a fresh payload, wipes per-skill LS,
+  // applies the payload, and reports a diff. Read-only — restores from the
+  // exported snapshot, doesn't destroy your real data unless you say so.
+  window.__perSkillRoundtripTest = function (opts) {
+    opts = opts || {};
+    const log = (...a) => console.log("[roundtrip]", ...a);
+    const snap = () => ({
+      knownMeaning: JSON.parse(JSON.stringify(window.knownMeaning || {})),
+      knownSpelling: JSON.parse(JSON.stringify(window.knownSpelling || {})),
+      goalV2: window.loadGoalV2(),
+      dailyRecordV2: window.loadDailyRecordV2(),
+    });
+    const before = snap();
+    log("BEFORE", {
+      meaningKnown: Object.keys(before.knownMeaning).length,
+      spellingKnown: Object.keys(before.knownSpelling).length,
+      goalItems: (before.goalV2 && before.goalV2.items && before.goalV2.items.length) || 0,
+      dailyDays: Object.keys(before.dailyRecordV2).length,
+    });
+    const builder = window.buildLeanPayloadV4 || window.buildLeanBackupPayload;
+    if (typeof builder !== "function") { log("FAIL: no builder on window"); return null; }
+    const payload = builder("roundtrip-test");
+    log("payload.schema =", payload.schema);
+    log("payload.wordState keys:", Object.keys(payload.wordState || {}));
+    log("payload.goalTracking keys:", Object.keys(payload.goalTracking || {}));
+    log("payload.syncInfo:", payload.syncInfo || null);
+
+    // Wipe per-skill LS in memory + storage.
+    window.knownMeaning = {};
+    window.knownSpelling = {};
+    try { localStorage.removeItem("ielts_vocab_known_meaning_v1"); } catch {}
+    try { localStorage.removeItem("ielts_vocab_known_spelling_v1"); } catch {}
+    try { localStorage.removeItem("ielts_vocab_goal_v2"); } catch {}
+    try { localStorage.removeItem("ielts_vocab_daily_record_v2"); } catch {}
+
+    // Apply through the V4 applier if available, otherwise the legacy path.
+    if (typeof window.applyLeanPayloadV4 === "function") window.applyLeanPayloadV4(payload);
+    else if (typeof window.applyLeanBackupPayload === "function") window.applyLeanBackupPayload(payload);
+    else { log("FAIL: no applier on window"); return null; }
+
+    const after = snap();
+    const sameSet = (a, b) => {
+      const A = Object.keys(a).sort(); const B = Object.keys(b).sort();
+      return A.length === B.length && A.every((k, i) => k === B[i]);
+    };
+    const result = {
+      meaningKnownMatches: sameSet(before.knownMeaning, after.knownMeaning),
+      spellingKnownMatches: sameSet(before.knownSpelling, after.knownSpelling),
+      goalMatches: JSON.stringify(before.goalV2) === JSON.stringify(after.goalV2),
+      dailyMatches: JSON.stringify(before.dailyRecordV2) === JSON.stringify(after.dailyRecordV2),
+    };
+    log("AFTER  meaningKnown:", Object.keys(after.knownMeaning).length,
+        "spellingKnown:", Object.keys(after.knownSpelling).length,
+        "goalItems:", (after.goalV2 && after.goalV2.items && after.goalV2.items.length) || 0,
+        "dailyDays:", Object.keys(after.dailyRecordV2).length);
+    log("RESULT", result);
+    const allPass = Object.values(result).every(Boolean);
+    log(allPass ? "✅ ALL PASS" : "❌ MISMATCH — see RESULT above");
+    return { before, after, payload, result, pass: allPass };
+  };
+
+  if (typeof window.applyLeanBackupPayload === "function" || typeof applyLeanBackupPayload === "function") {
+    const _origApply = (typeof applyLeanBackupPayload === "function") ? applyLeanBackupPayload : window.applyLeanBackupPayload;
+    const wrappedApply = function (data) {
+      const r = _origApply.apply(this, arguments);
+      try {
+        const ws = (data && data.wordState) || {};
+        // 1. Hydrate per-skill known sets from explicit lists if provided.
+        if (Array.isArray(ws.meaningKnownWords)) {
+          window.knownMeaning = {};
+          for (const k of ws.meaningKnownWords) window.knownMeaning[k] = true;
+        }
+        if (Array.isArray(ws.spellingKnownWords)) {
+          window.knownSpelling = {};
+          for (const k of ws.spellingKnownWords) window.knownSpelling[k] = true;
+        }
+        if (Array.isArray(ws.meaningKnownWords) || Array.isArray(ws.spellingKnownWords)) {
+          for (const k of (Array.isArray(ws.masteredWords) ? ws.masteredWords : [])) {
+            window.knownMeaning = window.knownMeaning || {};
+            window.knownSpelling = window.knownSpelling || {};
+            window.knownMeaning[k] = true;
+            window.knownSpelling[k] = true;
+          }
+          window.meaningStateUpdatedAt = (ws.meaningWordUpdatedAt && typeof ws.meaningWordUpdatedAt === "object") ? ws.meaningWordUpdatedAt : (window.meaningStateUpdatedAt || {});
+          window.spellingStateUpdatedAt = (ws.spellingWordUpdatedAt && typeof ws.spellingWordUpdatedAt === "object") ? ws.spellingWordUpdatedAt : (window.spellingStateUpdatedAt || {});
+        }
+        // 2. If only legacy masteredWords list is present, treat as full Mastered (both).
+        if (!Array.isArray(ws.meaningKnownWords) && !Array.isArray(ws.spellingKnownWords)) {
+          const mastered = Array.isArray(ws.masteredWords) ? ws.masteredWords : [];
+          window.knownMeaning  = window.knownMeaning  || {};
+          window.knownSpelling = window.knownSpelling || {};
+          for (const k of mastered) { window.knownMeaning[k] = true; window.knownSpelling[k] = true; }
+        }
+        hydrateSkillLearningFromWordState(ws);
+        reconcileLegacyStoresFromPerSkillWordState(ws);
+        // 3. Restore multi-goal + V2 daily record.
+        const gt = (data && data.goalTracking) || {};
+        restoreGoalTrackingV2OrLegacy(gt, data && data.practice);
+        if (typeof window.saveSkillState === "function") window.saveSkillState();
+        try { if (typeof saveAll === "function") saveAll(); } catch {}
+        // Mark migration as already done — we just imported authoritative state.
+        try { localStorage.setItem("ielts_vocab_mastery_migration_v1", "v1-done"); } catch {}
+        if (typeof window.renderGoalTab === "function") window.renderGoalTab();
+        if (typeof window.renderProgressTab === "function") window.renderProgressTab();
+      } catch (e) { console.warn("[per-skill] apply backup extension failed:", e); }
+      return r;
+    };
+    try { applyLeanBackupPayload = wrappedApply; } catch {}
+    window.applyLeanBackupPayload = wrappedApply;
+    window.applyCloudSyncPayloadV3 = wrappedApply;
+    window.applyCloudSyncPayloadV4 = wrappedApply;
+  }
+
+  // ---- 11. CSS injection ---------------------------------------------------
+  const css = `
+    /* Hide the retired single-slider goal modal before JS cleanup can flash it. */
+    #goalSetupOverlay {
+      display: none !important;
+      visibility: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+
+    /* Multi-goal setup — fluid card that fits any phone width, with each
+       sub-goal item using explicit grid rows so nothing overflows. */
+    #goalSetupOverlayV2.g-setup-overlay {
+      padding: 16px !important;
+      z-index: 240 !important;
+      align-items: center !important;
+    }
+    #goalSetupOverlayV2 .g2-setup-card {
+      max-width: 430px !important;
+      width: 100% !important;
+      padding: 22px 16px 18px !important;
+      text-align: left !important;
+      box-sizing: border-box !important;
+      border-radius: 22px !important;
+      position: relative !important;
+    }
+    #goalSetupOverlayV2 .g2-close-btn {
+      display: none;
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--ink-soft);
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+    }
+    #goalSetupOverlayV2.can-close .g2-close-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #goalSetupOverlayV2 .g-setup-emoji,
+    #goalSetupOverlayV2 .g-setup-title,
+    #goalSetupOverlayV2 .g-setup-sub { text-align: center; display: block; }
+    #goalSetupOverlayV2 .g2-items {
+      display: flex; flex-direction: column; gap: 10px;
+      margin: 14px 0; width: 100%; box-sizing: border-box;
+      min-width: 0;
+    }
+    #goalSetupOverlayV2 .g2-empty { font-size: 13px; color: var(--muted); padding: 8px; text-align: center; }
+
+    /* Fixed two-skill goal bubbles. */
+    #goalSetupOverlayV2 .g2-item {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1fr) 86px !important;
+      align-items: center;
+      gap: 12px !important;
+      background: linear-gradient(135deg, #FFFFFF 0%, #F7F2FF 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box !important;
+      min-width: 0;
+      overflow: hidden;
+    }
+    #goalSetupOverlayV2 .g2-fixed-copy {
+      min-width: 0;
+    }
+    #goalSetupOverlayV2 .g2-fixed-label {
+      font-family: 'Fraunces', serif;
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.1;
+      color: var(--ink);
+    }
+    #goalSetupOverlayV2 .g2-fixed-sub {
+      margin-top: 4px;
+      font-size: 12px;
+      font-weight: 800;
+      color: var(--ink-soft);
+    }
+    #goalSetupOverlayV2 .g2-type-toggle {
+      grid-column: 1 / -1 !important;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      min-width: 0;
+    }
+    #goalSetupOverlayV2 .g2-type-btn {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: white;
+      color: var(--ink-soft);
+      min-height: 38px;
+      padding: 8px 6px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 900;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+    }
+    #goalSetupOverlayV2 .g2-type-btn.active {
+      background: var(--grad);
+      color: white;
+      border-color: transparent;
+    }
+    #goalSetupOverlayV2 .g2-type {
+      grid-column: 1 / -1 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      min-width: 0 !important;
+      font: inherit; padding: 9px 10px;
+      border-radius: 8px; border: 1px solid var(--line);
+      background: white; color: var(--ink);
+      box-sizing: border-box !important;
+      appearance: menulist;
+    }
+    #goalSetupOverlayV2 .g2-count {
+      grid-column: 2 / 3 !important;
+      width: 100% !important;
+      min-width: 0 !important;
+      font: inherit;
+      font-size: 18px;
+      font-weight: 900;
+      padding: 11px 10px;
+      border-radius: 14px; border: 1px solid var(--line);
+      background: white; text-align: center;
+      box-sizing: border-box !important;
+      color: var(--ink);
+      box-shadow: var(--shadow-sm);
+    }
+    #goalSetupOverlayV2 .g-setup-btn {
+      width: 100% !important;
+      margin-top: 12px;
+      box-sizing: border-box !important;
+    }
+
+    /* Today sub-goal counters */
+    .g2-today-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+      gap: 8px;
+      margin: 10px 0 12px;
+      max-width: 100%;
+    }
+    .g2-today-metric {
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.78);
+      border-radius: 14px;
+      padding: 10px 8px 9px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+    .g2-today-metric.met {
+      border-color: #D9F99D;
+      background: #F7FEE7;
+    }
+    .g2-today-metric-value {
+      font-family: 'Fraunces', serif;
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1;
+      color: var(--ink);
+      white-space: nowrap;
+    }
+    .g2-today-metric-value span {
+      font-family: inherit;
+      font-size: 14px;
+      color: var(--ink-soft);
+      font-weight: 700;
+    }
+    .g2-today-metric-label {
+      margin-top: 6px;
+      font-size: 10px;
+      font-weight: 900;
+      line-height: 1.15;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+    }
+
+    /* Today sub-goal list */
+    .g2-today-list { display: flex; flex-direction: column; gap: 10px; padding: 10px 14px 8px; }
+    .g2-today-row {
+      background: white; border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px;
+    }
+    .g2-today-row.met { border-color: #D9F99D; background: #F7FEE7; }
+    .g2-today-head { display: flex; justify-content: space-between; font-weight: 800; font-size: 13px; margin-bottom: 6px; }
+    .g2-today-bar { background: #EFE9F8; border-radius: 999px; height: 8px; overflow: hidden; }
+    .g2-today-bar-fill { background: linear-gradient(90deg,#A78BFA,#F472B6); height: 100%; transition: width .3s; }
+
+    /* Calendar 3-tier color */
+    .g-cal-cell.tier-fail    { background: #F7F4FB; color: var(--ink); }
+    .g-cal-cell.tier-partial { background: #FEF3C7; color: #854D0E; }
+    .g-cal-cell.tier-full    { background: #D9F99D; color: #3F6212; font-weight: 900; }
+    .g-cal-cell.today        { outline: 2px solid var(--purple-deep); outline-offset: -2px; }
+    .g-cal-cell.empty        { background: transparent; }
+    .g-cal-legend {
+      display: flex; gap: 12px; padding: 8px 14px 12px; font-size: 11px; color: var(--muted); font-weight: 700; align-items: center; flex-wrap: wrap;
+    }
+    .g-cal-legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; margin-right: 4px; vertical-align: middle; }
+    .g-cal-legend-swatch.tier-fail    { background: #F7F4FB; border: 1px solid var(--line); }
+    .g-cal-legend-swatch.tier-partial { background: #FEF3C7; }
+    .g-cal-legend-swatch.tier-full    { background: #D9F99D; }
+
+    /* Session-detail per-skill table */
+    .sd-table {
+      background: white; border: 1px solid var(--line); border-radius: 12px;
+      margin: 8px 0 12px; overflow: hidden;
+    }
+    .sd-head, .sd-row {
+      display: grid; grid-template-columns: 1fr 80px 80px;
+      align-items: center; padding: 8px 10px; gap: 6px;
+      border-bottom: 1px solid #F0EBFA;
+    }
+    .sd-head { background: #FAF7FF; font-weight: 800; color: var(--ink-soft); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+    .sd-row.wrong { background: #FFF1F2; }
+    .sd-word { font-weight: 700; color: var(--ink); }
+    .sd-cell { text-align: center; font-weight: 800; font-size: 14px; }
+    .sd-cell.ok  { color: #65A30D; }
+    .sd-cell.mid { color: #854D0E; }
+    .sd-cell.dim { color: #9B95AE; }
+
+    /* Day chips per event type */
+    .g-day-chip.meaning  { background: #EDE9FE; color: #5B21B6; }
+    .g-day-chip.spelling { background: #FCE7F3; color: #9D174D; }
+    .g-day-chip.mastered { background: #ECFCCB; color: #3F6212; }
+
+    /* Practice History page redesign */
+    .ph-page {
+      padding: 0 16px 12px;
+      box-sizing: border-box;
+    }
+    /* Header + latest card stay in normal flow. Avoid fixed-position height
+       measurement here: iPhone standalone safe-area makes that create a huge
+       fake gap between the latest card and the next card. */
+    .ph-sticky-head {
+      position: relative;
+      max-width: 480px;
+      margin: 0 auto;
+      z-index: 30;
+      background: var(--bg);
+      padding: calc(14px + var(--safe-top)) 0 8px;
+      /* Extend the bg colour past the 480px container so the bar blends
+         seamlessly with the page on wider viewports. */
+      box-shadow: 0 0 0 100vmax var(--bg);
+      clip-path: inset(0 -100vmax);
+    }
+    .ph-title {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      font-size: 26px; line-height: 1.1;
+      margin: 0 0 14px 4px;
+      color: var(--ink);
+    }
+    .ph-feed { display: flex; flex-direction: column; gap: 14px; padding-top: 14px; }
+    .ph-card {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 14px 16px;
+      box-shadow: 0 4px 14px rgba(60, 30, 120, 0.08);
+      position: relative;
+      transition: transform .15s, box-shadow .15s;
+      cursor: pointer;
+    }
+    .ph-card.latest {
+      border-width: 1.5px;
+      border-color: var(--purple-deep, #7C3AED);
+      box-shadow: 0 10px 28px rgba(60, 30, 120, 0.18);
+      margin: 0;
+    }
+    .ph-card:active { transform: scale(.99); }
+    .ph-card-top {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 8px;
+    }
+    .ph-mode {
+      display: flex; align-items: center; gap: 6px;
+      font-weight: 800; color: var(--ink); font-size: 15px;
+      min-width: 0;
+    }
+    .ph-mode-ico { font-size: 18px; line-height: 1; }
+    .ph-mode-name { white-space: nowrap; }
+    .ph-score {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      font-size: 22px; line-height: 1;
+      color: var(--purple-deep, #7C3AED);
+      background: #EDE9FE;
+      border: 1px solid #DDD6FE;
+      border-radius: 999px;
+      padding: 6px 14px;
+      flex-shrink: 0;
+      white-space: nowrap;
+    }
+    .ph-pool {
+      font-size: 12px; color: var(--ink-soft);
+      font-weight: 600; margin-top: 6px;
+    }
+    .ph-date {
+      font-size: 10px; color: var(--muted);
+      font-weight: 700; margin-top: 3px;
+      text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .ph-actions {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .ph-btn {
+      background: white;
+      color: var(--purple-deep, #7C3AED);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 9px 8px;
+      font-size: 12px; font-weight: 800;
+      cursor: pointer;
+      text-align: center;
+      font-family: inherit;
+      transition: background .12s, transform .12s;
+      min-width: 0;
+    }
+    .ph-btn-icon {
+      font-size: 18px;
+      line-height: 1;
+      letter-spacing: 0;
+    }
+    .ph-btn:active { transform: scale(.96); }
+    .ph-btn:hover { background: #F3E8FF; }
+    /* Primary action — Repeat. Soft mint, mint-ink text. */
+    .ph-btn.primary {
+      background: #CCFBF1;
+      color: #115E59;
+      border-color: #99F6E4;
+      box-shadow: none;
+    }
+    .ph-btn.primary:hover { background: #99F6E4; }
+    /* Danger — Retry wrong. Soft coral. */
+    .ph-btn.danger {
+      background: #FFE4E6;
+      color: #BE123C;
+      border-color: #FECDD3;
+    }
+    .ph-btn.danger:hover { background: #FECDD3; }
+    .ph-feed-padding { height: 110px; }
+    .ph-empty {
+      padding: 28px 16px;
+      text-align: center;
+      font-size: 13px; color: var(--muted); font-weight: 700;
+    }
+    .ph-fab-bar {
+      position: fixed;
+      left: 0; right: 0;
+      /* Sit clearly above the bottom navbar with breathing room. */
+      bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+      max-width: 480px; margin: 0 auto;
+      padding: 8px 18px;
+      z-index: 50;
+      display: flex; justify-content: flex-end;
+      pointer-events: none;
+    }
+    .ph-fab-btn {
+      pointer-events: auto;
+      background: linear-gradient(135deg, #A78BFA, #F472B6);
+      color: white;
+      border: none;
+      border-radius: 999px;
+      width: 58px;
+      height: 58px;
+      min-width: 58px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px; font-weight: 900;
+      line-height: 1;
+      font-family: inherit;
+      box-shadow: 0 12px 30px rgba(60, 30, 120, 0.34);
+      cursor: pointer;
+      transition: transform .12s, box-shadow .12s;
+    }
+    .ph-fab-btn:active { transform: scale(.96); }
+
+    /* Word sheet: per-skill chip row */
+    .ws-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+    .ws-chip {
+      font-size: 11px; font-weight: 800; padding: 4px 8px; border-radius: 999px;
+      border: 1px solid var(--line); background: white; color: var(--ink-soft);
+      letter-spacing: 0.02em;
+    }
+    .ws-chip.ok  { background: #ECFCCB; color: #3F6212; border-color: #D9F99D; }
+    .ws-chip.mid { background: #FEF3C7; color: #854D0E; border-color: #FDE68A; }
+    .ws-chip.dim { background: #F3EFFA; color: #9B95AE; border-color: #ECE7F5; }
+    .ws-mastered { font-size: 11px; font-weight: 900; color: #854D0E; margin-left: 4px; }
+
+    /* Practice wizard Step 1 / Step 2 — keep header left-aligned at every
+       width and align it with the 20px-inset content cards below. */
+    #practiceRoot .pw-hero,
+    #practiceRoot .pw-title,
+    #practiceRoot .pw-step-label,
+    #practiceRoot .pw-sub {
+      text-align: left !important;
+    }
+    #practiceRoot .pw-step1-page,
+    #practiceRoot .pw-step2-page {
+      padding-left: 16px !important;
+      padding-right: 16px !important;
+    }
+    #practiceRoot .pw-step1-page .pw-hero,
+    #practiceRoot .pw-step2-page .pw-hero {
+      padding-left: 4px !important;
+      padding-right: 4px !important;
+    }
+    #practiceRoot .pw-step1-page .pw-section,
+    #practiceRoot .pw-step2-page .l2-mode-list,
+    #practiceRoot .pw-step1-page .pw-nav,
+    #practiceRoot .pw-step2-page .pw-nav {
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    #practiceRoot .pw-step1-page .pw-count-banner,
+    #practiceRoot .pw-step2-page .pw-summary-strip {
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+    }
+  `;
+  const styleEl = document.createElement("style");
+  styleEl.setAttribute("data-source", "per-skill-test-model");
+  styleEl.textContent = css;
+  document.head.appendChild(styleEl);
+
+  // ---- 11. Progress tab (new 5th tab) --------------------------------------
+  // Layout:
+  //   Row 1: 3 equal-size square cards — Sessions / Loaded / Mastered
+  //   Row 2: full-width rectangle — "Known"     | meaning N | spelling N
+  //   Row 3: full-width rectangle — "Learning"  | meaning N | spelling N
+  //   Below: existing progress chart with skill toggle + grouping toggle,
+  //          restyled to iOS-style segmented controls.
+  //
+  // Info panels (bottom-sheet, history-overlay class):
+  //   Mastered  — single-page list of mastered words + Practice them button
+  //   Known     — two pages [Meaning | Spelling], swipe + tab toggle
+  //   Learning  — two pages, each word with x/3 streak progress
+  //
+  // Practice handoff: panel buttons set a pre-built pool and jump the wizard
+  // to Step 2 (mode + length picker). Modes stay user-pickable.
+  //
+  // Lifetime session counter: separate LS key, increments on session save;
+  // independent of the records cap.
+
+  // Ensure the progressRoot exists. If the HTML wasn't updated yet (e.g., the
+  // browser cached an older shell), inject the page + nav button at runtime.
+  function ensureProgressTabDom() {
+    let page = document.querySelector('.page[data-page="progress"]');
+    if (!page) {
+      page = document.createElement("div");
+      page.className = "page";
+      page.setAttribute("data-page", "progress");
+      page.innerHTML = '<div id="progressRoot"></div>';
+      const practicePage = document.querySelector('.page[data-page="practice"]');
+      if (practicePage && practicePage.parentNode) {
+        practicePage.parentNode.insertBefore(page, practicePage);
+      } else {
+        document.querySelector(".screen")?.appendChild(page);
+      }
+    }
+    const nav = document.querySelector(".navbar");
+    if (nav && !nav.querySelector('[data-nav="progress"]')) {
+      const btn = document.createElement("button");
+      btn.className = "navbtn";
+      btn.setAttribute("data-nav", "progress");
+      btn.setAttribute("onclick", "goto('progress')");
+      btn.innerHTML = '<span class="ico">📊</span>Progress';
+      const practiceBtn = nav.querySelector('[data-nav="practice"]');
+      if (practiceBtn) nav.insertBefore(btn, practiceBtn);
+      else nav.appendChild(btn);
+    }
+  }
+
+  // Lifetime session counter
+  const PG_LIFETIME_KEY = "ielts_vocab_lifetime_sessions_v1";
+  // Lifetime sessions = number of DISTINCT practice sessions (by id) in the
+  // merged history. Derived, never an ever-incrementing counter — the old
+  // counter ticked on every history growth, including sync/merge, which
+  // double-counted and inflated the number across devices.
+  function pgLifetimeSessions() {
+    try {
+      const hist = JSON.parse(localStorage.getItem("ielts_vocab_practice_history_v1") || "[]") || [];
+      const ids = {};
+      (Array.isArray(hist) ? hist : []).forEach(s => { const id = s && (s.id || s.sessionId || s.startedAt); if (id) ids[String(id)] = 1; });
+      const n = Object.keys(ids).length;
+      try { localStorage.setItem(PG_LIFETIME_KEY, String(n)); } catch {}
+      return n;
+    } catch { return 0; }
+  }
+  function pgIncrementLifetimeSessions() { /* retired: count is derived, see pgLifetimeSessions() */ }
+  function pgSeedLifetimeIfNeeded() { try { pgLifetimeSessions(); } catch {} }
+  // Retired: the old polling hook inflated the counter on every history growth
+  // (including merges). The count is now derived on read.
+  function pgInstallLifetimeHook() {}
+
+  // Words grouped by mastery for the info panels
+  function pgKeyExists(k) { return !!pgWordFor(k); }
+  function pgMasteredKeys()       { return Object.keys(window.knownMeaning || {}).filter(k => pgKeyExists(k) && (window.knownSpelling || {})[k]); }
+  function pgMeaningKnownOnly()   { return Object.keys(window.knownMeaning || {}).filter(k => pgKeyExists(k) && !(window.knownSpelling || {})[k]); }
+  function pgSpellingKnownOnly()  { return Object.keys(window.knownSpelling || {}).filter(k => pgKeyExists(k) && !(window.knownMeaning || {})[k]); }
+  function pgMeaningLearning() {
+    const out = [];
+    for (const key of Object.keys(progress || {})) {
+      const p = progress[key] || {};
+      const att = (p.wordToMeaning?.attempts || 0) + (p.meaningToWord?.attempts || 0) + (p.matching?.attempts || 0);
+      if (pgKeyExists(key) && att > 0 && !(window.knownMeaning || {})[key]) out.push(key);
+    }
+    return out;
+  }
+  function pgSpellingLearning() {
+    const out = [];
+    for (const key of Object.keys(progress || {})) {
+      const att = progress[key]?.spelling?.attempts || 0;
+      if (pgKeyExists(key) && att > 0 && !(window.knownSpelling || {})[key]) out.push(key);
+    }
+    return out;
+  }
+  function pgUntouchedKeys() {
+    return (Array.isArray(words) ? words : []).filter(w => {
+      const key = w?.key;
+      if (!key || !pgKeyExists(key)) return false;
+      if ((window.knownMeaning || {})[key] || (window.knownSpelling || {})[key] || (known || {})[key]) return false;
+      const p = progress[key] || {};
+      const m = p.matching?.attempts || 0;
+      const s = p.spelling?.attempts || 0;
+      return m === 0 && s === 0;
+    }).map(w => w.key);
+  }
+  function pgWordFor(k) { return (typeof words !== "undefined") ? words.find(w => w.key === k) : null; }
+  function pgWordDisplay(k) {
+    const w = pgWordFor(k);
+    return w ? w.word : k;
+  }
+  function pgWordAddedRank(k) {
+    const w = pgWordFor(k) || {};
+    const raw = w.addedAt || w.createdAt || w.dateAdded || w.savedAt || w.updatedAt || w.importedAt || "";
+    const t = raw ? Date.parse(raw) : NaN;
+    if (!Number.isNaN(t)) return t;
+    const idx = Array.isArray(words) ? words.findIndex(x => x && x.key === k) : -1;
+    return idx >= 0 ? idx : 0;
+  }
+  function pgPracticeLoadedCount() {
+    try {
+      const hist = JSON.parse(localStorage.getItem("ielts_vocab_practice_history_v1") || "[]");
+      return (Array.isArray(hist) ? hist : []).reduce((sum, s) => {
+        const loadedKeys = Array.isArray(s?.loadedWordKeys) ? s.loadedWordKeys
+          : Array.isArray(s?.wordKeys) ? s.wordKeys
+          : Array.isArray(s?.poolKeys) ? s.poolKeys
+          : null;
+        const n = loadedKeys ? loadedKeys.length : Number(s?.sessionLength || s?.total || s?.uniqueWordsCorrect || 0);
+        return sum + Math.max(0, n || 0);
+      }, 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  // ---- 11a. renderProgressTab ----------------------------------------------
+  window.renderProgressTab = function() {
+    ensureProgressTabDom();
+    const root = document.getElementById("progressRoot");
+    if (!root) return;
+    const sessionsCount = pgLifetimeSessions();
+    const loadedCount = pgPracticeLoadedCount();
+    const masteredCount = pgMasteredKeys().length;
+    const meaningKnown = pgMeaningKnownOnly().length;
+    const spellingKnown = pgSpellingKnownOnly().length;
+    const meaningLearning = pgMeaningLearning().length;
+    const spellingLearning = pgSpellingLearning().length;
+
+    root.innerHTML = `
+      <div class="pg-page">
+        <div class="pg-title">Progress</div>
+
+        <div class="pg-summary-card">
+          <div class="pg-summary-label">Summary</div>
+          <div class="pg-summary-wrap">
+            <div class="pg-row pg-row-1">
+              <button class="pg-sq pg-card-sessions" onclick="goto('practice')">
+                <div class="pg-num">${sessionsCount}</div>
+                <div class="pg-label">sessions</div>
+              </button>
+              <div class="pg-sq pg-sq-static pg-card-loaded">
+                <div class="pg-num">${loadedCount.toLocaleString()}</div>
+                <div class="pg-label">loaded</div>
+              </div>
+              <button class="pg-sq pg-card-mastered" onclick="pgOpenMasteredPanel()">
+                <div class="pg-num">${masteredCount}</div>
+                <div class="pg-label">Mastered</div>
+              </button>
+            </div>
+
+            <button class="pg-rect pg-card-known" onclick="pgOpenKnownPanel('meaning')">
+              <div class="pg-rect-title">Known</div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${meaningKnown}</div>
+                <div class="pg-label">meaning</div>
+              </div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${spellingKnown}</div>
+                <div class="pg-label">spelling</div>
+              </div>
+            </button>
+
+            <button class="pg-rect pg-card-learning" onclick="pgOpenLearningPanel('meaning')">
+              <div class="pg-rect-title">Learning</div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${meaningLearning}</div>
+                <div class="pg-label">meaning</div>
+              </div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${spellingLearning}</div>
+                <div class="pg-label">spelling</div>
+              </div>
+            </button>
+          </div>
+        </div>
+
+        <div class="pg-chart-host">${progressChartHtml()}</div>
+      </div>
+    `;
+    requestAnimationFrame(() => {
+      if (typeof window.animateProgressBars === "function") window.animateProgressBars();
+    });
+  };
+  window.__myRenderProgressTab = window.renderProgressTab;
+
+  // ---- 11b. Info panels ----------------------------------------------------
+  function ensurePgPanel() {
+    let el = document.getElementById("pgPanelOverlay");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "pgPanelOverlay";
+    el.className = "game-overlay history-overlay ip-no-topbar";
+    // No topbar / no ✕ — the grab handle stays as the visual affordance and
+    // tapping the backdrop closes the panel (handled by the global overlay
+    // backdrop manager).
+    el.innerHTML = `
+      <div id="pgPanelTabs" style="display:none"></div>
+      <div class="game-body" id="pgPanelBody"></div>
+    `;
+    document.body.appendChild(el);
+    return el;
+  }
+  const ipSortState = {};
+  const ipSearchState = {};
+  const ipAccordionState = {};
+
+  function ipSortKey(scope) {
+    return `${pgCurrentPanel?.kind || "panel"}:${scope || pgCurrentPanel?.page || "all"}`;
+  }
+
+  function ipSortedKeys(keys, scope) {
+    const mode = ipSortState[ipSortKey(scope)] || "az";
+    const arr = (Array.isArray(keys) ? keys : []).slice();
+    if (mode === "latest" || mode === "oldest") {
+      arr.sort((a, b) => pgWordAddedRank(a) - pgWordAddedRank(b));
+      if (mode === "latest") arr.reverse();
+    } else {
+      arr.sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+      if (mode === "za") arr.reverse();
+    }
+    return arr;
+  }
+
+  function ipSortHtml(scope) {
+    const key = ipSortKey(scope);
+    const mode = ipSortState[key] || "az";
+    const searching = !!ipSearchState[key]?.open;
+    const query = ipSearchState[key]?.query || "";
+    return `
+      <span class="ip-list-tools">
+        <label class="ip-sort-wrap">
+          <select class="ip-sort" onchange="ipSetSort('${escapeHtml(scope || "")}', this.value)">
+          <option value="az" ${mode === "az" ? "selected" : ""}>A→Z</option>
+          <option value="za" ${mode === "za" ? "selected" : ""}>Z→A</option>
+          <option value="latest" ${mode === "latest" ? "selected" : ""}>Latest</option>
+          <option value="oldest" ${mode === "oldest" ? "selected" : ""}>Oldest</option>
+          </select>
+        </label>
+        <button class="ip-search-btn ${searching ? "active" : ""}" type="button" onclick="event.stopPropagation();ipToggleSearch('${escapeHtml(scope || "")}')">🔍</button>
+        ${searching ? `<input class="ip-search-input" value="${escapeHtml(query)}" placeholder="similar word" onclick="event.stopPropagation()" oninput="ipSetSearch('${escapeHtml(scope || "")}', this.value)">` : ""}
+      </span>
+    `;
+  }
+
+  window.ipSetSort = function(scope, value) {
+    ipSortState[ipSortKey(scope)] = ["za", "latest", "oldest"].includes(value) ? value : "az";
+    pgRenderPanel();
+  };
+  window.ipToggleSearch = function(scope) {
+    const key = ipSortKey(scope);
+    ipSearchState[key] = ipSearchState[key] || { open: false, query: "" };
+    ipSearchState[key].open = !ipSearchState[key].open;
+    if (!ipSearchState[key].open) ipSearchState[key].query = "";
+    pgRenderPanel();
+    if (ipSearchState[key].open) setTimeout(() => {
+      const el = document.querySelector(".ip-search-input");
+      if (el) el.focus();
+    }, 40);
+  };
+  window.ipSetSearch = function(scope, value) {
+    const key = ipSortKey(scope);
+    ipSearchState[key] = ipSearchState[key] || { open: true, query: "" };
+    ipSearchState[key].query = normalizeKey(value || "");
+    pgRenderPanel();
+  };
+
+  function ipChipHtml(k, opts) {
+    if (!opts || opts.noChip) return "";
+    if (opts.streakSkill) {
+      const streak = opts.streakSkill === "meaning"
+        ? (progress[k]?._consecMeaning || 0)
+        : (progress[k]?._consecSpelling || 0);
+      return `<span class="ip-word-chip ip-chip-streak">${Math.max(0, Math.min(3, streak))}/3</span>`;
+    }
+    if (opts.chipClass || opts.chipText) {
+      return `<span class="ip-word-chip ${escapeHtml(opts.chipClass || "ip-chip-known")}">${escapeHtml(opts.chipText || "✓")}</span>`;
+    }
+    return "";
+  }
+
+  function pgWordListHtml(keys, opts) {
+    opts = opts || {};
+    const scope = opts.sortScope || opts.pageKey;
+    const searchKey = ipSortKey(scope);
+    const query = ipSearchState[searchKey]?.query || "";
+    const sorted = ipSortedKeys(keys, scope).filter(k => {
+      if (!query) return true;
+      const w = pgWordFor(k);
+      return normalizeKey([pgWordDisplay(k), w?.word, w?.key, ...(w?.grammarLabels || [])].filter(Boolean).join(" ")).includes(query);
+    });
+    if (!sorted.length) return `<div class="pg-empty">No words in this category yet.</div>`;
+    return `<div class="ip-word-list">${sorted.map(k => {
+      const label = escapeHtml(pgWordDisplay(k));
+      const safe = String(k).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return `<div class="ip-word ip-word-clickable" role="button" tabindex="0" onclick="openWordCardFromList('${safe}')"><span class="ip-word-text">${label}</span>${ipChipHtml(k, opts)}<span class="ip-word-go">›</span></div>`;
+    }).join("")}</div>`;
+  }
+
+  function ipHeroHtml(opts) {
+    if (!opts.heroTitle) return "";
+    return `
+      <div class="ip-hero">
+        <div class="ip-hero-main">
+          <div class="ip-hero-title">${escapeHtml(opts.heroTitle)}</div>
+          ${opts.heroCount == null ? "" : `<div class="ip-hero-count">${escapeHtml(String(opts.heroCount))}</div>`}
+        </div>
+        ${opts.subtitle ? `<div class="ip-hero-sub">${escapeHtml(opts.subtitle)}</div>` : ""}
+        ${opts.subtitle2 ? `<div class="ip-hero-sub strong">${escapeHtml(opts.subtitle2)}</div>` : ""}
+      </div>`;
+  }
+
+  function ipStickyActionHtml(opts) {
+    const n = (opts.practicePool || opts.keys || []).length;
+    if (!opts.stickyAction || !n) return "";
+    const label = opts.practiceLabel || `Practice these ${n} words`;
+    return `
+      <div class="ip-action-bar">
+        <button class="ip-action-btn primary" onclick="pgStartPracticeFromPanel('${opts.pageKey}')">${escapeHtml(label)}</button>
+      </div>`;
+  }
+
+  function pgPanelPageHtml(items, opts) {
+    const body = pgWordListHtml(items.keys, opts);
+    return `
+      <div class="pg-panel-page ip-panel-page ${opts.stickyAction ? "has-action-bar" : ""}" data-page="${opts.pageKey}">
+        ${ipHeroHtml(opts)}
+        <div class="ip-list-head">${ipSortHtml(opts.pageKey)}</div>
+        ${body}
+        ${ipStickyActionHtml(opts)}
+      </div>
+    `;
+  }
+
+  function ipAccordionKey() {
+    return pgCurrentPanel?.accordionKey || `${pgCurrentPanel?.kind || "panel"}:accordion`;
+  }
+
+  function ipOpenPages(pages) {
+    const key = ipAccordionKey();
+    const saved = ipAccordionState[key];
+    if (Array.isArray(saved)) return new Set(saved.filter(p => pages.includes(p)));
+    if (typeof saved === "string" && pages.includes(saved)) return new Set([saved]);
+    return new Set();
+  }
+
+  function ipSaveOpenPages(open) {
+    ipAccordionState[ipAccordionKey()] = [...open];
+  }
+
+  function ipAccordionSectionHtml(pageKey, item) {
+    const keys = item.keys || [];
+    const pages = Object.keys(pgPanelData || {});
+    const noToggle = !!item.noToggle;
+    const open = noToggle ? true : ipOpenPages(pages).has(pageKey);
+    // Derive a status class so the section's count badge picks up the
+    // matching palette tint via CSS (.ip-acc-section.status-X .ip-acc-count).
+    let status = "default";
+    const isCalendar = pgCurrentPanel && pgCurrentPanel.kind === "calendar";
+    const isMastered = pgCurrentPanel && pgCurrentPanel.kind === "mastered";
+    const isKnown = pgCurrentPanel && pgCurrentPanel.kind === "known";
+    const isLearning = pgCurrentPanel && pgCurrentPanel.kind === "learning";
+    if (pageKey === "mastered" || isMastered) status = "mastered";
+    else if (pageKey === "meaningKnown") status = isCalendar ? "meaning" : "known";
+    else if (pageKey === "spellingKnown") status = isCalendar ? "spelling" : "known";
+    else if (pageKey === "meaningLearning" || pageKey === "spellingLearning") status = "learning";
+    else if (pageKey === "untouched") status = "untouched";
+    else if (isKnown) status = "known";
+    else if (isLearning) status = "learning";
+    const sortChip = open && keys.length ? ipSortHtml(pageKey) : "";
+    const playBtn = open && keys.length
+      ? `<button class="ip-play-btn" onclick="event.stopPropagation();pgStartPracticeFromPanel('${pageKey}')" title="Practice these">▶</button>`
+      : "";
+    const headInner = noToggle
+      ? `<div class="ip-acc-tools">
+           ${sortChip}
+           <span class="ip-acc-count">${keys.length}</span>
+           ${playBtn}
+         </div>`
+      : `<button class="ip-acc-toggle" onclick="ipToggleAccordion('${pageKey}')">
+           <span class="ip-acc-chev">${open ? "▼" : "▶"}</span>
+           <span class="ip-acc-label">${escapeHtml(item.accordionLabel || item.tabLabel || pageKey)}</span>
+         </button>
+         <div class="ip-acc-tools">
+           ${sortChip}
+           <span class="ip-acc-count">${keys.length}</span>
+           ${playBtn}
+         </div>`;
+    return `
+      <div class="ip-acc-section status-${status} ${open ? "open" : ""} ${noToggle ? "no-toggle" : ""}">
+        <div class="ip-acc-head">${headInner}</div>
+        ${open ? `
+          <div class="ip-acc-body">
+            ${pgWordListHtml(keys, Object.assign({}, item, { sortScope: pageKey }))}
+          </div>
+        ` : ""}
+      </div>
+    `;
+  }
+
+  window.ipToggleAccordion = function(pageKey) {
+    if (!pgCurrentPanel || !pgPanelData) return;
+    const pages = Object.keys(pgPanelData);
+    const open = ipOpenPages(pages);
+    if (open.has(pageKey)) open.delete(pageKey);
+    else open.add(pageKey);
+    ipSaveOpenPages(open);
+    pgCurrentPanel.page = pageKey;
+    pgRenderPanel();
+  };
+
+  function ipChartPanelHtml() {
+    const pages = Object.keys(pgPanelData || {});
+    return `
+      <div class="pg-panel-page ip-panel-page ip-accordion-panel">
+        ${ipHeroHtml({
+          heroTitle: pgCurrentPanel?.heroTitle || "Progress",
+          heroCount: pgCurrentPanel?.heroCount,
+          subtitle: pgCurrentPanel?.subtitle || ""
+        })}
+        ${pages.map(p => ipAccordionSectionHtml(p, pgPanelData[p])).join("")}
+      </div>
+    `;
+  }
+
+  function ipCalendarPanelHtml() {
+    const pages = Object.keys(pgPanelData || {});
+    const goalChip = pgCurrentPanel?.goalMet ? `<div class="g-day-banner">🎯 Goal met</div>` : "";
+    // Calendar-specific hero: goal-met pill sits inline on the right of the date.
+    const calendarHero = `
+      <div class="ip-hero">
+        <div class="ip-hero-main">
+          <div class="ip-hero-title">${escapeHtml(pgCurrentPanel?.heroTitle || "📅 Day")}</div>
+          ${goalChip}
+        </div>
+      </div>`;
+    return `
+      <div class="pg-panel-page ip-panel-page ip-accordion-panel">
+        ${calendarHero}
+        ${pgCurrentPanel?.subGoalsHtml || ""}
+        ${pages.map(p => ipAccordionSectionHtml(p, pgPanelData[p])).join("")}
+      </div>
+    `;
+  }
+
+  let pgCurrentPanel = null; // { kind, page }
+  let pgPanelData = null;    // map of pageKey → { keys, ... }
+
+  function pgRenderPanel() {
+    const el = ensurePgPanel();
+    const tabsEl = document.getElementById("pgPanelTabs");
+    const bodyEl = document.getElementById("pgPanelBody");
+    if (!pgCurrentPanel || !pgPanelData) return;
+    // Set data-kind on the panel body so the hero count pill picks up
+    // the matching pastel hue via CSS.
+    try { bodyEl.dataset.kind = pgCurrentPanel.kind || ""; } catch {}
+    tabsEl.innerHTML = "";
+    if (pgCurrentPanel.kind === "calendar") {
+      bodyEl.innerHTML = ipCalendarPanelHtml();
+    } else {
+      // mastered / known / learning / chart all use the accordion renderer.
+      bodyEl.innerHTML = ipChartPanelHtml();
+    }
+    el.classList.add("show");
+  }
+  window.pgClosePanel = function() {
+    const el = document.getElementById("pgPanelOverlay");
+    if (el) el.classList.remove("show");
+    pgCurrentPanel = null; pgPanelData = null;
+  };
+  window.pgSwitchPanelPage = function(page) {
+    if (!pgCurrentPanel) return;
+    pgCurrentPanel.page = page;
+    pgRenderPanel();
+  };
+  window.pgOpenMasteredPanel = function() {
+    const keys = pgMasteredKeys().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const accKey = "summary:mastered";
+    pgCurrentPanel = {
+      kind: "mastered",
+      page: "all",
+      accordionKey: accKey,
+      heroTitle: "🏆 Mastered",
+      heroCount: keys.length,
+      subtitle: "Both meaning and spelling known",
+    };
+    pgPanelData = {
+      all: {
+        pageKey: "all",
+        accordionLabel: "Mastered",
+        practiceLabel: `Practice these ${keys.length} mastered`,
+        keys,
+        chipClass: "ip-chip-mastered",
+        chipText: "✓",
+        noToggle: true,
+        practicePool: keys,
+        practiceMode: null,
+      },
+    };
+    pgRenderPanel();
+  };
+  window.pgOpenKnownPanel = function(defaultPage) {
+    const m = pgMeaningKnownOnly().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const s = pgSpellingKnownOnly().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const accKey = "summary:known";
+    // Default collapsed: open only when the user taps a subtitle.
+    if (!ipAccordionState[accKey]) {
+      ipAccordionState[accKey] = [];
+    }
+    const total = new Set([...m, ...s]).size;
+    pgCurrentPanel = {
+      kind: "known",
+      page: defaultPage || "meaning",
+      accordionKey: accKey,
+      heroTitle: "💡 Known",
+      heroCount: total,
+      subtitle: "Correct answer for meaning or spelling",
+    };
+    pgPanelData = {
+      meaning: { pageKey: "meaning", accordionLabel: "Meaning",
+                 practiceLabel: `Practice these ${m.length} meaning-known`,
+                 keys: m, chipClass: "ip-chip-known", chipText: "✓",
+                 practicePool: m, practiceMode: "wordToMeaning" },
+      spelling:{ pageKey: "spelling", accordionLabel: "Spelling",
+                 practiceLabel: `Practice these ${s.length} spelling-known`,
+                 keys: s, chipClass: "ip-chip-known", chipText: "✓",
+                 practicePool: s, practiceMode: "spelling" },
+    };
+    pgRenderPanel();
+  };
+  window.pgOpenLearningPanel = function(defaultPage) {
+    const m = pgMeaningLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const s = pgSpellingLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const accKey = "summary:learning";
+    if (!ipAccordionState[accKey]) {
+      ipAccordionState[accKey] = [];
+    }
+    const total = new Set([...m, ...s]).size;
+    pgCurrentPanel = {
+      kind: "learning",
+      page: defaultPage || "meaning",
+      accordionKey: accKey,
+      heroTitle: "📚 Learning",
+      heroCount: total,
+      subtitle: "Started but not yet correct",
+    };
+    pgPanelData = {
+      meaning: { pageKey: "meaning", accordionLabel: "Meaning",
+                 practiceLabel: `Practice these ${m.length} meaning-learning`,
+                 keys: m,
+                 practicePool: m, practiceMode: "wordToMeaning", streakSkill: "meaning" },
+      spelling:{ pageKey: "spelling", accordionLabel: "Spelling",
+                 practiceLabel: `Practice these ${s.length} spelling-learning`,
+                 keys: s,
+                 practicePool: s, practiceMode: "spelling", streakSkill: "spelling" },
+    };
+    pgRenderPanel();
+  };
+
+  // Swipe gesture on the panel body
+  function pgInstallSwipe() {
+    const body = document.getElementById("pgPanelBody");
+    if (!body || body.__pgSwipeReady) return;
+    body.__pgSwipeReady = true;
+    let startX = 0, startY = 0, dx = 0, dy = 0;
+    body.addEventListener("touchstart", e => {
+      startX = e.touches[0].clientX; startY = e.touches[0].clientY; dx = 0; dy = 0;
+    }, { passive: true });
+    body.addEventListener("touchmove", e => {
+      dx = e.touches[0].clientX - startX;
+      dy = e.touches[0].clientY - startY;
+    }, { passive: true });
+    body.addEventListener("touchend", () => {
+      if (!pgCurrentPanel || !pgPanelData) return;
+      if (pgCurrentPanel.kind === "chart" || pgCurrentPanel.kind === "calendar") return;
+      const pages = Object.keys(pgPanelData);
+      if (pages.length < 2) return;
+      if (Math.abs(dx) < 60 || Math.abs(dy) > Math.abs(dx)) return;
+      const idx = pages.indexOf(pgCurrentPanel.page);
+      const next = dx < 0 ? Math.min(pages.length - 1, idx + 1) : Math.max(0, idx - 1);
+      if (next !== idx) pgSwitchPanelPage(pages[next]);
+    });
+  }
+  setTimeout(pgInstallSwipe, 1500);
+
+  // ---- 11c. Practice handoff ------------------------------------------------
+  // Jumps the practice wizard to Step 2 with a pre-built pool. Mode is pre-
+  // selected when supplied; user can switch at Step 2 freely.
+  window.pgStartPracticeFromPanel = function(pageKey) {
+    if (!pgPanelData || !pgPanelData[pageKey]) return;
+    const cfg = pgPanelData[pageKey];
+    const poolKeys = (cfg.practicePool || []).slice();
+    if (!poolKeys.length) { if (typeof toast === "function") toast("No words in this pool yet"); return; }
+    window.pgPendingPracticePool = { keys: poolKeys, mode: cfg.practiceMode || null, source: cfg.tabLabel, filter: cfg.practiceFilter || null };
+    pgClosePanel();
+    // Navigate to Practice tab; the wizard hook below picks up the pending
+    // pool and routes the user to Step 2.
+    if (typeof goto === "function") goto("practice");
+    setTimeout(pgConsumePendingPool, 60);
+  };
+
+  function pgConsumePendingPool() {
+    const pending = window.pgPendingPracticePool;
+    if (!pending) return;
+    window.pgPendingPracticePool = null;
+    if (!Array.isArray(pending.keys) || !pending.keys.length) return;
+    try {
+      if (typeof window.practicePrepareCustomPool === "function") {
+        window.practicePrepareCustomPool({
+          keys: pending.keys,
+          mode: pending.mode || null,
+          length: pending.keys.length,
+          filter: pending.filter || null,
+          studyUntilMastered: true,
+          source: "From Progress · " + (pending.source || "selection")
+        });
+        return;
+      }
+    } catch (e) { console.warn("[progress] handoff failed:", e); }
+  }
+
+  // ---- 11d. goto('progress') wiring ----------------------------------------
+  // The legacy `goto` (at file-top scope) doesn't know about "progress".
+  // Wrap it so progress dispatches to renderProgressTab and the navbar
+  // active state updates correctly.
+  window.__origGoto = window.goto;
+  window.goto = function(page) {
+    if (page === "progress") {
+      document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.dataset.page === "progress"));
+      document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b.dataset.nav === "progress"));
+      window.scrollTo(0, 0);
+      window.renderProgressTab();
+      return;
+    }
+    if (typeof window.__origGoto === "function") return window.__origGoto(page);
+  };
+  try { goto = window.goto; } catch {}
+  window.__myGoto = window.goto;
+  if (!window.__fastBottomNavFeedbackV1) {
+    window.__fastBottomNavFeedbackV1 = true;
+    document.addEventListener("pointerdown", (ev) => {
+      const btn = ev.target && ev.target.closest ? ev.target.closest(".navbtn[data-nav]") : null;
+      if (!btn) return;
+      const page = btn.getAttribute("data-nav");
+      document.querySelectorAll(".navbtn").forEach(b => b.classList.toggle("active", b === btn));
+      document.querySelectorAll(".page").forEach(p => p.classList.toggle("active", p.dataset.page === page));
+    }, { passive: true });
+  }
+
+  // ---- 11e. CSS for Progress tab + segmented-control toggles ---------------
+  const pgCss = `
+    .pg-page { padding: 14px 16px 24px; box-sizing: border-box; padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
+    .pg-title {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      font-size: 26px; line-height: 1.1; margin: 4px 0 14px; color: var(--ink);
+    }
+    /* Match the existing aesthetic: pastel-backed cards, Fraunces number in
+       a deeper hue of the same family, small uppercase label. */
+    .pg-row { display: flex; gap: 10px; }
+    .pg-row-1 { margin-bottom: 10px; }
+    .pg-sq, .pg-rect, .pg-sq-static {
+      height: 64px; border-radius: 12px;
+      box-sizing: border-box; font-family: inherit;
+      border: 1px solid transparent;
+      box-shadow: 0 4px 14px rgba(60, 30, 120, 0.06);
+      transition: transform .12s, box-shadow .12s;
+    }
+    .pg-sq, .pg-rect { cursor: pointer; }
+    .pg-sq:active, .pg-rect:active { transform: scale(.98); }
+    .pg-sq, .pg-sq-static {
+      flex: 1 1 0; min-width: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 8px 6px;
+    }
+    .pg-rect {
+      width: 100%;
+      display: flex; align-items: center; gap: 12px;
+      margin-bottom: 8px;
+      padding: 8px 14px;
+    }
+
+    /* All cards: white background with a soft purple-tinted border. Color
+       lives in the number, label, and a 3px colored stripe down the left edge. */
+    /* Outer container: the single white card holding all summary cells. */
+    .pg-summary-wrap {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 4px 14px rgba(60, 30, 120, 0.08);
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .pg-summary-wrap .pg-row-1 { margin-bottom: 8px; }
+    .pg-summary-wrap .pg-rect { margin-bottom: 8px; }
+    .pg-summary-wrap .pg-rect:last-child { margin-bottom: 0; }
+
+    /* Inner cells: keep pastel backgrounds, shrink shadow + border. */
+    .pg-sq, .pg-rect, .pg-sq-static {
+      box-shadow: none;
+      border: 1px solid transparent;
+    }
+    /* Sessions + Loaded — neutral lavender. */
+    .pg-card-sessions { background: #EDE9F8; border-color: #DDD6EF; }
+    .pg-card-loaded   { background: #F4F1FA; border-color: #E5E0F0; }
+    .pg-card-sessions .pg-num,
+    .pg-card-loaded   .pg-num { color: var(--ink); }
+    .pg-card-sessions .pg-label,
+    .pg-card-loaded   .pg-label { color: var(--muted); }
+    /* Mastered — green. */
+    .pg-card-mastered { background: #ECFCCB; border-color: #D9F99D; }
+    .pg-card-mastered .pg-num   { color: #3F6212; }
+    .pg-card-mastered .pg-label { color: #3F6212; }
+    /* Known — purple. */
+    .pg-card-known { background: #EDE9FE; border-color: #DDD6FE; }
+    .pg-card-known .pg-num        { color: #7C3AED; }
+    .pg-card-known .pg-rect-title { color: #5B21B6; }
+    .pg-card-known .pg-label      { color: #7C3AED; }
+    /* Learning — red/pink. */
+    .pg-card-learning { background: #FFE4E6; border-color: #FECDD3; }
+    .pg-card-learning .pg-num        { color: #BE123C; }
+    .pg-card-learning .pg-rect-title { color: #881337; }
+    .pg-card-learning .pg-label      { color: #E11D48; }
+
+    .pg-card-sessions .pg-num  { color: #7C3AED; }
+    .pg-card-sessions .pg-label{ color: #8B5CF6; }
+    .pg-card-loaded   .pg-num  { color: #4A4360; }
+    .pg-card-loaded   .pg-label{ color: #9B95AE; }
+    .pg-card-mastered .pg-num  { color: #3F6212; }
+    .pg-card-mastered .pg-label{ color: #65A30D; }
+    .pg-card-known    .pg-num        { color: #7C3AED; }
+    .pg-card-known    .pg-rect-title { color: #5B21B6; }
+    .pg-card-known    .pg-label      { color: #7C3AED; }
+    .pg-card-learning .pg-num        { color: #BE123C; }
+    .pg-card-learning .pg-rect-title { color: #881337; }
+    .pg-card-learning .pg-label      { color: #E11D48; }
+    .pg-rect-title {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      font-size: 14px; color: var(--ink); flex: 1 1 auto;
+    }
+    .pg-rect-cell {
+      flex: 0 0 auto; min-width: 70px;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    .pg-num {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      font-size: 19px; line-height: 1; color: var(--ink);
+    }
+    .pg-rect .pg-num { font-size: 18px; }
+    .pg-label {
+      font-size: 10px; color: var(--muted); font-weight: 800;
+      margin-top: 3px; letter-spacing: 0.06em; text-transform: uppercase;
+    }
+    .pg-sq .pg-label { font-size: 10px; margin-top: 4px; }
+
+    .pg-chart-host { margin-top: 6px; }
+    .pg-summary-card {
+      margin: 0 0 6px;
+      width: 100%;
+      box-sizing: border-box;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 4px 14px rgba(60, 30, 120, 0.06);
+      padding: 14px 16px 16px;
+    }
+    .pg-summary-card .pg-summary-wrap {
+      padding: 0;
+      margin: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+    .pg-page .g-prog-chart-card {
+      margin: 6px 0 0; width: 100%; box-sizing: border-box;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 4px 14px rgba(60, 30, 120, 0.06);
+      padding: 14px 16px 16px;
+    }
+    .pg-page .g-prog-chart-title {
+      font-family: inherit; font-weight: 800;
+      font-size: 11px; color: var(--muted);
+      letter-spacing: 0.07em; text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .pg-summary-label {
+      font-family: inherit; font-weight: 800;
+      font-size: 11px; color: var(--muted);
+      letter-spacing: 0.07em; text-transform: uppercase;
+      margin: 0 0 12px;
+    }
+    /* Segmented toggle: lavender track + purple-gradient active pill. */
+    .pg-page .g-prog-chart-tabs.tab-row {
+      background: #F4F1FA;
+      box-shadow: inset 0 0 0 1px #E5E0F0;
+    }
+    .pg-page .g-prog-chart-tabs.tab-row button.active {
+      background: linear-gradient(135deg, #A78BFA, #F472B6);
+      color: white;
+      box-shadow: 0 4px 10px rgba(124, 58, 237, 0.28);
+    }
+    .pg-page .g-prog-row {
+      background: transparent;
+      padding: 9px 2px;
+      border-top: 1px solid #F0EBFA;
+    }
+    .pg-page .g-prog-row:first-of-type { border-top: 0; }
+    .pg-page .g-prog-head {
+      display: flex; justify-content: space-between;
+      font-weight: 800; font-size: 12px; color: var(--ink);
+      margin-bottom: 5px;
+    }
+    .pg-page .g-prog-count {
+      font-family: 'Fraunces', serif; font-weight: 700;
+      color: var(--purple-deep, #7C3AED); font-size: 13px;
+    }
+    .pg-page .g-prog-bar {
+      background: #F3EFFA;
+      border-radius: 999px;
+      height: 7px; overflow: hidden;
+      display: flex;
+    }
+    .pg-page .g-prog-seg.mastered { background: #65A30D; }
+    .pg-page .g-prog-seg.learning { background: #E11D48; }
+    .pg-page .g-prog-foot {
+      font-size: 10px; color: var(--muted); font-weight: 700;
+      margin-top: 5px;
+    }
+    /* Segmented-control restyle for the chart's two tab rows */
+    .g-prog-chart-tabs.tab-row {
+      background: #F0EBFA;
+      border-radius: 999px;
+      padding: 4px;
+      display: flex; gap: 4px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+    }
+    .g-prog-chart-tabs.tab-row button {
+      flex: 1 1 0;
+      background: transparent;
+      border: none;
+      border-radius: 999px;
+      padding: 9px 8px;
+      font-size: 12px; font-weight: 800;
+      color: var(--ink-soft);
+      cursor: pointer;
+      font-family: inherit;
+      transition: all .18s;
+    }
+    .g-prog-chart-tabs.tab-row button.active {
+      background: white;
+      color: var(--ink);
+      box-shadow: 0 2px 6px rgba(60, 30, 120, 0.14);
+    }
+
+    /* Info-panel widgets */
+    .pg-panel-tabs { display: flex; gap: 6px; flex: 1; justify-content: center; flex-wrap: wrap; min-width: 0; }
+    .pg-tab {
+      background: #F0EBFA; border: none; border-radius: 999px;
+      padding: 6px 14px; font-weight: 800; font-size: 12px;
+      color: var(--ink-soft); cursor: pointer; font-family: inherit;
+      transition: background .15s, color .15s;
+    }
+    .g-prog-row--tap { cursor: pointer; }
+    .g-prog-row--tap:active { transform: scale(.99); }
+    .pg-tab.active { background: var(--purple-deep, #7C3AED); color: white; }
+    .pg-tab-single { font-weight: 800; color: var(--ink-soft); padding: 6px 0; }
+    .pg-panel-page { padding: 14px 16px 24px; }
+    .pg-panel-meta {
+      font-size: 12px; color: var(--muted); font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .pg-words { display: flex; flex-direction: column; gap: 6px; }
+    .pg-word {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 12px;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 13px;
+    }
+    .pg-w-text { color: var(--ink); font-weight: 700; }
+    .pg-w-streak {
+      color: #854D0E; background: #FEF3C7;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: 11px; font-weight: 800;
+    }
+    .pg-empty {
+      text-align: center; padding: 32px 16px;
+      color: var(--muted); font-weight: 700; font-size: 13px;
+    }
+    .pg-panel-actions {
+      margin-top: 18px; display: flex; justify-content: center;
+    }
+    .pg-practice-btn {
+      background: linear-gradient(135deg, #A78BFA, #F472B6);
+      color: white; border: none; border-radius: 999px;
+      padding: 12px 32px;
+      font-size: 14px; font-weight: 800;
+      cursor: pointer; font-family: inherit;
+      box-shadow: 0 8px 20px rgba(60, 30, 120, 0.28);
+    }
+    .pg-practice-btn:active { transform: scale(.96); }
+
+    /* ============================================================
+       Unified info-panel components — visually aligned with the rest
+       of the app: flat titles, soft pastel pills, white cards with
+       --shadow-sm, palette-tinted accents.
+       ============================================================ */
+    /* When an overlay has .ip-no-topbar, the topbar markup is omitted.
+       Give the grab-handle chrome its own breathing room so the hero title
+       starts lower without bloating every card/list inside the panel. */
+    .history-overlay.ip-no-topbar::before {
+      margin: 14px auto 28px !important;
+      flex-shrink: 0 !important;
+    }
+    .history-overlay.ip-no-topbar .game-body {
+      padding: 0 20px 24px !important;
+      max-height: calc(88dvh - 56px - var(--safe-bottom)) !important;
+    }
+    .ip-panel-page {
+      padding: 0 0 24px;
+      box-sizing: border-box;
+    }
+    .ip-panel-page.has-action-bar {
+      padding-bottom: calc(108px + var(--safe-bottom));
+    }
+
+    /* === Hero — flat on page bg, sits flush near the grab handle === */
+    .ip-hero {
+      margin: 0 0 14px;
+    }
+    .ip-hero-main {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .ip-hero-title {
+      font-family: 'Fraunces', serif;
+      font-weight: 700;
+      font-size: 26px;
+      line-height: 1.1;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+    }
+    .ip-hero-count {
+      font-family: 'Fraunces', serif;
+      font-weight: 700;
+      font-size: 16px;
+      line-height: 1;
+      color: var(--purple-deep, #7C3AED);
+      background: #EDE9FE;
+      border: 1px solid #DDD6FE;
+      padding: 6px 14px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    /* Subtitles lighter: Nunito 600 13px (was 700) */
+    .ip-hero-sub {
+      margin-top: 6px;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .ip-hero-sub.strong {
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 11px;
+      font-weight: 800;
+      margin-top: 4px;
+    }
+
+    /* Hero count-pill hue per panel kind (set via data-kind on the panel body). */
+    [data-kind="mastered"] .ip-hero-count { background: #ECFCCB; border-color: #D9F99D; color: #3F6212; }
+    [data-kind="known"]    .ip-hero-count { background: #EDE9FE; border-color: #DDD6FE; color: #7C3AED; }
+    [data-kind="learning"] .ip-hero-count { background: #FFE4E6; border-color: #FECDD3; color: #BE123C; }
+    [data-kind="chart"]    .ip-hero-count { background: #F4F1FA; border-color: #E5E0F0; color: var(--ink-soft); }
+    [data-kind="session"]  .ip-hero-count { background: #EDE9FE; border-color: #DDD6FE; color: #7C3AED; }
+
+    /* === Section label (Sub-goals etc.) === */
+    .ip-section-label {
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      margin: 18px 4px 8px;
+    }
+
+    /* === Sub-goal bubbles (calendar) === */
+    .ip-subgoal-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .ip-subgoal {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px 8px 10px;
+      text-align: center;
+      box-shadow: var(--shadow-sm);
+    }
+    .ip-subgoal.met {
+      background: #ECFCCB;
+      border-color: #D9F99D;
+    }
+    .ip-subgoal-value {
+      font-family: 'Fraunces', serif;
+      font-weight: 700;
+      font-size: 24px;
+      color: var(--ink);
+      line-height: 1;
+    }
+    .ip-subgoal-value span {
+      font-family: inherit;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .ip-subgoal.met .ip-subgoal-value { color: #3F6212; }
+    .ip-subgoal.met .ip-subgoal-value span { color: #3F6212; opacity: 0.72; }
+    .ip-subgoal-label {
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--muted);
+      font-weight: 900;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      line-height: 1.25;
+    }
+    .ip-subgoal.met .ip-subgoal-label { color: #3F6212; }
+
+    /* === Goal-met banner: small inline pill, sits right of the date title === */
+    .g-day-banner {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: var(--green-soft);
+      color: #3F6212;
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 12px;
+      border: 1px solid #D9F99D;
+      white-space: nowrap;
+    }
+
+    /* === Sort chip (styled native select) === */
+    .ip-sort-wrap {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+    .ip-sort {
+      appearance: none;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: white;
+      color: var(--ink-soft);
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 11px;
+      letter-spacing: 0.03em;
+      padding: 5px 22px 5px 11px;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+    }
+    .ip-sort:focus { outline: none; border-color: var(--purple); }
+    .ip-sort-wrap::after {
+      content: "▾";
+      position: absolute;
+      right: 9px; top: 50%;
+      transform: translateY(-50%);
+      font-size: 9px;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .ip-list-tools {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+    }
+    .ip-search-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: white;
+      color: var(--ink-soft);
+      box-shadow: var(--shadow-sm);
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .ip-search-btn.active {
+      background: #EDE9FE;
+      border-color: #DDD6FE;
+      color: #7C3AED;
+    }
+    .ip-search-input {
+      width: min(116px, 28vw);
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 0 10px;
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 11px;
+      color: var(--ink);
+      background: white;
+      box-shadow: var(--shadow-sm);
+    }
+    .ip-search-input:focus {
+      outline: none;
+      border-color: var(--purple);
+    }
+
+    /* === Play icon button (per-section, inline) === */
+    .ip-play-btn {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      border: none;
+      background: var(--grad);
+      color: white;
+      font-size: 12px;
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      padding-left: 2px;
+    }
+    .ip-play-btn:active { transform: scale(.94); }
+
+    /* === Word card — Nunito 800, 14px (same as action buttons) === */
+    .ip-word-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .ip-word {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 12px;
+    }
+    .ip-word-text {
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 14px;
+      line-height: 1.2;
+      color: var(--ink);
+      min-width: 0;
+      word-break: break-word;
+    }
+    .ip-word-chip {
+      flex-shrink: 0;
+      border-radius: 999px;
+      padding: 3px 9px;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1.35;
+      border: 1px solid transparent;
+    }
+    .ip-chip-mastered,
+    .ip-chip-right    { background: #ECFCCB; color: #3F6212; border-color: #D9F99D; }
+    .ip-chip-known    { background: #EDE9FE; color: #7C3AED; border-color: #DDD6FE; }
+    .ip-chip-streak,
+    .ip-chip-wrong    { background: #FFE4E6; color: #BE123C; border-color: #FECDD3; }
+    .ip-chip-meaning  { background: #EDE9FE; color: #5B21B6; border-color: #DDD6FE; }
+    .ip-chip-spelling { background: #FCE7F3; color: #9D174D; border-color: #FBCFE8; }
+
+    /* === Accordion section (head = toggle + tools cluster on the right) === */
+    .ip-acc-section {
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      margin: 0 0 10px;
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      transition: box-shadow .15s;
+    }
+    .ip-acc-section.open { box-shadow: 0 6px 18px rgba(60, 30, 120, 0.08); }
+    /* Header row holds the toggle on the left + the tools cluster on the right.
+       Splitting these into two siblings avoids the nested-<button> bug from the
+       earlier draft (which dropped the play icon to a new line). Generous
+       padding so the content breathes inside the bubble. */
+    .ip-acc-head {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 18px 22px;
+      color: var(--ink);
+      font-family: inherit;
+    }
+    .ip-acc-section.open .ip-acc-head {
+      border-bottom: 1px solid var(--line);
+    }
+    .ip-acc-toggle {
+      flex: 1 1 0;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      color: inherit;
+    }
+    .ip-acc-chev {
+      color: var(--purple-deep, #7C3AED);
+      font-size: 11px;
+      width: 12px;
+      display: inline-flex;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    /* Accordion subtitle: Nunito 800 14px — same family/weight as the word
+       cards and action buttons, much lighter than the previous Fraunces 18. */
+    .ip-acc-label {
+      font-family: inherit;
+      font-weight: 800;
+      font-size: 14px;
+      color: var(--ink);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+    /* Tools cluster, order: sort → count → play. */
+    .ip-acc-tools {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+      flex-wrap: nowrap;
+    }
+    .ip-acc-count {
+      font-family: 'Fraunces', serif;
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--purple-deep);
+      background: #EDE9FE;
+      border: 1px solid #DDD6FE;
+      padding: 3px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .ip-acc-body {
+      padding: 16px 22px 22px;
+    }
+    /* Status-tinted count badges on accordion section heads. */
+    .ip-acc-section.status-mastered .ip-acc-count { background: #ECFCCB; color: #3F6212; border-color: #D9F99D; }
+    .ip-acc-section.status-known    .ip-acc-count { background: #EDE9FE; color: #7C3AED; border-color: #DDD6FE; }
+    .ip-acc-section.status-learning .ip-acc-count { background: #FFE4E6; color: #BE123C; border-color: #FECDD3; }
+    .ip-acc-section.status-meaning  .ip-acc-count { background: #EDE9FE; color: #5B21B6; border-color: #DDD6FE; }
+    .ip-acc-section.status-spelling .ip-acc-count { background: #FCE7F3; color: #9D174D; border-color: #FBCFE8; }
+    .ip-acc-section.status-untouched .ip-acc-count { background: #F3F4F6; color: #4B5563; border-color: #E5E7EB; }
+    /* Mastered: chrome-less single bubble — no chevron, no label, tools right. */
+    .ip-acc-section.no-toggle .ip-acc-head {
+      justify-content: flex-end;
+      padding: 16px 22px;
+    }
+    /* Session detail: bubble with no head row at all. */
+    .ip-acc-section.bare .ip-acc-head { display: none; }
+    .ip-acc-section.bare .ip-acc-body { padding: 20px 22px; }
+
+    /* === Sticky action bar — matches .navbar pattern === */
+    .ip-action-bar {
+      position: fixed;
+      left: 0; right: 0;
+      bottom: 0;
+      max-width: 480px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      background: rgba(250, 247, 255, 0.92);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      padding: 12px 16px calc(14px + var(--safe-bottom));
+      border-top: 1px solid var(--line);
+      z-index: 5;
+    }
+    .ip-action-bar.single { grid-template-columns: 1fr; }
+    .ip-action-btn {
+      border-radius: 14px;
+      padding: 14px 14px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: transform .12s;
+    }
+    .ip-action-btn:active { transform: scale(.97); }
+    .ip-action-btn.primary {
+      background: var(--grad);
+      color: white;
+      box-shadow: var(--shadow-md);
+    }
+    .ip-action-btn.danger {
+      background: #FFE4E6;
+      color: #BE123C;
+      border-color: #FECDD3;
+    }
+
+    /* === Tab strip on Known/Learning panels — reuse chart segmented look === */
+    .ip-panel-tabs {
+      margin: 0 0 14px;
+      width: 100%;
+    }
+
+    /* ============================================================
+       Progress chart bar segments — deep saturated hues from each
+       summary card's family. Same family as the card fill, but the
+       deeper accent tone so bars stand out on the lavender track.
+       ============================================================ */
+    .g-prog-seg.mastered { background: #65A30D; }   /* Mastered card accent */
+    .g-prog-seg.known    { background: #7C3AED; }   /* Known    card accent */
+    .g-prog-seg.learning { background: #E11D48; }   /* Learning card accent */
+    .g-prog-seg.untouched { background: #ECE7F5; }
+    /* Same rules need to win against pg-page's more-specific overrides too. */
+    .pg-page .g-prog-seg.mastered { background: #65A30D; }
+    .pg-page .g-prog-seg.known    { background: #7C3AED; }
+    .pg-page .g-prog-seg.learning { background: #E11D48; }
+    /* Clearer progress controls: remove the foggy glass feel. */
+    .pg-page .g-prog-chart-tabs.tab-row {
+      background: white !important;
+      border: 1px solid var(--line) !important;
+      box-shadow: none !important;
+    }
+    .pg-page .g-prog-chart-tabs.tab-row button {
+      box-shadow: none !important;
+    }
+    .pg-page .g-prog-chart-tabs.tab-row button.active {
+      background: var(--grad) !important;
+      color: white !important;
+      box-shadow: none !important;
+    }
+    .navbtn, .navbar button, .bottom-nav button {
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .history-overlay.show { z-index: 90 !important; }
+    .backdrop.show { z-index: 650 !important; }
+    .sheet.show { z-index: 700 !important; }
+  `;
+  const pgStyleEl = document.createElement("style");
+  pgStyleEl.setAttribute("data-source", "per-skill-progress-tab");
+  pgStyleEl.textContent = pgCss;
+  document.head.appendChild(pgStyleEl);
+
+  const uiTightenStyle = document.createElement("style");
+  uiTightenStyle.setAttribute("data-source", "final-ui-tighten-20260615");
+  uiTightenStyle.textContent = `
+    .app {
+      padding-top: max(10px, env(safe-area-inset-top, 0px)) !important;
+    }
+    .words-header,
+    .simple-words-header {
+      padding-top: 6px !important;
+    }
+    .page[data-page="words"] {
+      overflow: visible !important;
+    }
+    #wordsHeader {
+      position: fixed !important;
+      top: 0 !important;
+      left: 50% !important;
+      right: auto !important;
+      transform: translateX(-50%) !important;
+      width: 100% !important;
+      max-width: 480px !important;
+      z-index: 950 !important;
+      margin: 0 !important;
+      background: var(--bg) !important;
+      -webkit-backdrop-filter: none !important;
+      backdrop-filter: none !important;
+      border-bottom: 1px solid rgba(228, 223, 239, 0.88) !important;
+      box-shadow: 0 8px 22px rgba(139, 92, 246, 0.08) !important;
+      padding-top: max(10px, env(safe-area-inset-top, 0px)) !important;
+      isolation: isolate !important;
+    }
+    #wordsHeader::before {
+      display: none !important;
+      content: none !important;
+    }
+    #wordsHeader .simple-titlebar {
+      position: relative !important;
+      z-index: 2 !important;
+    }
+    #wordsBody {
+      padding-top: calc(var(--words-header-height, 74px) + 8px) !important;
+      margin-top: 0 !important;
+    }
+    #practiceRoot .ph-sticky-head {
+      padding-top: 6px !important;
+    }
+    #practiceRoot .pw-hero,
+    #practiceRoot .pw-step1-page .pw-hero,
+    #practiceRoot .pw-step2-page .pw-hero {
+      padding-top: 6px !important;
+    }
+    #practiceRoot .ph-feed {
+      padding-top: 10px !important;
+    }
+    .history-overlay {
+      padding-bottom: 0 !important;
+    }
+    .history-overlay .game-body,
+    .history-overlay.ip-no-topbar .game-body,
+    #goalDayOverlay .game-body,
+    #goalDayOverlayV2 .game-body,
+    #pgPanelOverlay .game-body,
+    #progressWordOverlay .game-body,
+    #historyDetailOverlay .game-body {
+      padding-bottom: 10px !important;
+      max-height: calc(88dvh - 42px) !important;
+    }
+    .history-overlay.ip-no-topbar::before {
+      margin: 10px auto 14px !important;
+    }
+    .ip-panel-page,
+    .pg-panel-page {
+      padding-bottom: 8px !important;
+    }
+    .ip-panel-page.has-action-bar {
+      padding-bottom: 84px !important;
+    }
+  `;
+  document.head.appendChild(uiTightenStyle);
+
+  // ---- 12. Boot sequence ---------------------------------------------------
+  function cleanupLegacyGoalModal() {
+    // The legacy goal IIFE may have synchronously mounted #goalSetupOverlay
+    // (the old single-slider modal) right before this module overrode
+    // window.renderGoalTab. Remove it so the user only sees the V2 setup.
+    const stale = document.getElementById("goalSetupOverlay");
+    if (stale) stale.remove();
+  }
+
+  // ---- Hard re-override to defeat the legacy goal-sync guard ----------------
+  // The legacy "final goal sync guard" IIFE (around line 11172) runs BEFORE
+  // this module and captures the LEGACY renderGoalTab/openGoalSetup as
+  // originalRenderGoalTab/originalOpenGoalSetup. Even when its setTimeout
+  // installs at 100/500/1200/2500ms re-wrap our function on window, the
+  // guard's wrapper still forwards to the LEGACY captured original — so the
+  // user sees the legacy UI.
+  //
+  // Strategy: hold a reference to our V2 functions, and at t > 2500ms (after
+  // the guard's last install attempt) re-assert window.* to ours and tag the
+  // flag the guard checks so it stops re-wrapping. Re-assert every 500ms as
+  // a final safety until 8s.
+  const __myRenderGoalTabRef = function () {
+    // Defined below; we look it up indirectly so the latest body is used.
+    return window.__myRenderGoalTab && window.__myRenderGoalTab.apply(this, arguments);
+  };
+  const __myOpenGoalSetupRef = function () {
+    return window.__myOpenGoalSetup && window.__myOpenGoalSetup.apply(this, arguments);
+  };
+  function hardReoverride() {
+    if (typeof window.__myRenderGoalTab === "function") {
+      window.renderGoalTab = window.__myRenderGoalTab;
+      window.renderGoalTab.__finalSingleGoalSyncGuardV1 = true; // guard skip
+      try { renderGoalTab = window.__myRenderGoalTab; } catch {}
+    }
+    if (typeof window.__myOpenGoalSetup === "function") {
+      window.openGoalSetup = window.__myOpenGoalSetup;
+      window.openGoalSetup.__finalSingleGoalSyncGuardV1 = true; // guard skip
+      window.openGoalSetup.__safeModeIntroWrapperFixV1 = true;  // mode-intro guard skip
+      window.openGoalSetup.__modeIntroPrewarmWrappedV1 = true;
+      window.openGoalSetup.__modeIntroReloadFixWrappedV1 = true;
+      try { openGoalSetup = window.__myOpenGoalSetup; } catch {}
+    }
+    if (typeof window.__myRenderHome === "function") {
+      window.renderHome = window.__myRenderHome;
+      try { renderHome = window.__myRenderHome; } catch {}
+    }
+    if (typeof window.__myRenderFilterPanel === "function") {
+      window.renderFilterPanel = window.__myRenderFilterPanel;
+      try { renderFilterPanel = window.__myRenderFilterPanel; } catch {}
+    }
+    if (typeof window.__myPracticeOpenSessionDetail === "function") {
+      window.practiceOpenSessionDetail = window.__myPracticeOpenSessionDetail;
+      // mark as already-backdrop-wrapped so the history-overlay backdrop
+      // module doesn't re-wrap and shadow ours.
+      window.practiceOpenSessionDetail.__historyBackdropWrapped = true;
+      try { practiceOpenSessionDetail = window.__myPracticeOpenSessionDetail; } catch {}
+    }
+    if (typeof window.__myShowWord === "function") {
+      window.showWord = window.__myShowWord;
+      try { showWord = window.__myShowWord; } catch {}
+    }
+    if (typeof window.__myRenderPracticeRoot === "function") {
+      window.renderPracticeRoot = window.__myRenderPracticeRoot;
+      try { renderPracticeRoot = window.__myRenderPracticeRoot; } catch {}
+    }
+    if (typeof window.__myGoto === "function") {
+      window.goto = window.__myGoto;
+      try { goto = window.__myGoto; } catch {}
+    }
+  }
+
+  function init() {
+    runMigration();
+    window.__skillStateReady = true;
+    cleanupLegacyGoalModal();
+    ensureProgressTabDom();
+    pgSeedLifetimeIfNeeded();
+    pgInstallLifetimeHook();
+
+    // Always write the legacy-goal stub so the "final goal sync guard"
+    // (legacy installWrappers) considers the goal set and forwards calls to
+    // our wrapped functions instead of blocking with "Restoring…" or
+    // "goal-exists" short-circuits.
+    try {
+      const legacyKey = (typeof LS !== "undefined" && LS && LS.GOAL) ? LS.GOAL : "ielts_vocab_goal_v1";
+      const cur = JSON.parse(localStorage.getItem(legacyKey) || "{}");
+      if (!Number(cur.wordsPerDay || cur.dailyTarget || cur.target || 0)) {
+        localStorage.setItem(legacyKey, JSON.stringify({ wordsPerDay: 1, __v2Stub: true }));
+      }
+    } catch {}
+
+    // If V2 goal not yet set, ensure storage is clean so setup re-runs.
+    const v2 = window.loadGoalV2();
+    if (!v2 || !Array.isArray(v2.items) || !v2.items.length) {
+      try { localStorage.removeItem(LS_KEYS.GOAL_V2); } catch {}
+    }
+
+    if (typeof window.renderGoalTab === "function" && document.getElementById("goalRoot")) {
+      try { window.renderGoalTab(); } catch {}
+    }
+
+    // Schedule hard re-overrides AFTER the legacy goal-sync guard's last
+    // setTimeout install (its schedule is [100, 500, 1200, 2500]). We then
+    // re-assert every 500ms up to 8s as a final safety net.
+    [3000, 3500, 4500, 6000, 8000].forEach(ms => setTimeout(() => {
+      hardReoverride();
+      // Re-render with our function once the override is asserted.
+      if (document.querySelector('[data-page="home"].active')) {
+        try { window.renderGoalTab(); } catch {}
+      }
+    }, ms));
+
+    console.log("[per-skill] test module ready");
+  }
+
+  setTimeout(() => {
+    if (!document.documentElement.classList.contains("per-skill-goal-ready")) {
+      try {
+        hardReoverride();
+        if (typeof window.__myRenderGoalTab === "function") window.__myRenderGoalTab();
+      } catch {}
+    }
+  }, 9000);
+
+  // Synchronous cleanup at IIFE eval time — catches the case where the
+  // legacy IIFE's tryInitRender already fired before this module loaded.
+  cleanupLegacyGoalModal();
+
+  // Legacy Goal can still render from IIFE-local timers. If its old single-goal
+  // markup appears, hide it immediately and restore the V2 panel.
+  try {
+    let correctingLegacyGoal = false;
+    const isLegacyGoalMarkup = (root) => {
+      if (!root) return false;
+      return !!(
+        root.querySelector(".g-today-bar") ||
+        root.textContent.includes("more to go") ||
+        root.textContent.includes("words / day")
+      );
+    };
+    const correctLegacyGoal = () => {
+      const root = document.getElementById("goalRoot");
+      if (!root || correctingLegacyGoal || !isLegacyGoalMarkup(root)) return;
+      correctingLegacyGoal = true;
+      try { document.documentElement.classList.remove("per-skill-goal-ready"); } catch {}
+      setTimeout(() => {
+        try {
+          hardReoverride();
+          if (typeof window.__myRenderGoalTab === "function") window.__myRenderGoalTab();
+        } finally {
+          correctingLegacyGoal = false;
+        }
+      }, 0);
+    };
+    const rootNow = document.getElementById("goalRoot");
+    if (rootNow) {
+      new MutationObserver(correctLegacyGoal).observe(rootNow, { childList: true, subtree: true, characterData: true });
+      correctLegacyGoal();
+    } else {
+      const bodyObs = new MutationObserver(() => {
+        const root = document.getElementById("goalRoot");
+        if (root) {
+          new MutationObserver(correctLegacyGoal).observe(root, { childList: true, subtree: true, characterData: true });
+          correctLegacyGoal();
+          bodyObs.disconnect();
+        }
+      });
+      bodyObs.observe(document.body, { childList: true, subtree: true });
+    }
+  } catch (e) { console.warn("[per-skill] legacy goal render observer failed:", e); }
+
+  // Relabel "mastered" → "Mastered" in the Practice wizard's Step 1 chip row.
+  // The wizard's STATUS_LABELS const is IIFE-local so we can't override it;
+  // observe the wizard root and fix the text content after each render.
+  try {
+    const relabel = (root) => {
+      const buttons = root.querySelectorAll('.pw-chip[onclick*="statuses"]');
+      buttons.forEach(b => {
+        // Each button's first text node is the label.
+        for (const node of b.childNodes) {
+          if (node.nodeType === 3) {
+            const t = node.nodeValue.trim();
+            if (t === "mastered")      node.nodeValue = "Mastered";
+            else if (t === "known")    node.nodeValue = "Known";
+            else if (t === "learning") node.nodeValue = "Learning";
+            else if (t === "not_practiced") node.nodeValue = "Not practiced";
+          }
+        }
+      });
+    };
+    const wizardRoot = document.getElementById("practiceRoot");
+    const tryRelabel = () => {
+      const root = document.getElementById("practiceRoot");
+      if (root) relabel(root);
+    };
+    if (wizardRoot) {
+      new MutationObserver(tryRelabel).observe(wizardRoot, { childList: true, subtree: true });
+    } else {
+      // practiceRoot may not exist yet; wait for it.
+      const bodyObs = new MutationObserver(() => {
+        const root = document.getElementById("practiceRoot");
+        if (root) {
+          new MutationObserver(tryRelabel).observe(root, { childList: true, subtree: true });
+          bodyObs.disconnect();
+        }
+      });
+      bodyObs.observe(document.body, { childList: true, subtree: true });
+    }
+  } catch (e) { console.warn("[per-skill] wizard relabel observer failed:", e); }
+
+  // Defensive: a MutationObserver that nukes the legacy #goalSetupOverlay any
+  // time it gets mounted (some legacy code paths still call the IIFE-local
+  // openGoalSetup which we can't reach). We always re-route to V2.
+  try {
+    const mo = new MutationObserver(() => {
+      const stale = document.getElementById("goalSetupOverlay");
+      if (stale) {
+        stale.remove();
+        // If we don't have a V2 goal yet, mount the V2 setup in its place.
+        const v2 = window.loadGoalV2 && window.loadGoalV2();
+        if ((!v2 || !Array.isArray(v2.items) || !v2.items.length) && typeof window.openGoalSetup === "function") {
+          window.openGoalSetup();
+        }
+      }
+    });
+    mo.observe(document.body, { childList: true });
+  } catch (e) { console.warn("[per-skill] legacy modal observer failed:", e); }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    // Defer slightly so the legacy IIFEs install their windows first.
+    setTimeout(init, 0);
+  }
+
+  window.__perSkillReady = true;
+})();
+
+
+
+
+/* ============================================================================
+   CLEAN SYNC v6  (single authoritative sync system)
+   Replaces all previous "NEW SYNC STEP 1..23" code and the old sync systems.
+
+   Source of truth = the per-skill UI model:
+     - window.knownMeaning   <-> ielts_vocab_known_meaning_v1   {key:true}
+     - window.knownSpelling  <-> ielts_vocab_known_spelling_v1  {key:true}
+     - meaning/spelling state timestamps
+     - progress              <-> ielts_vocab_progress_v1   (LEARNING is derived from this)
+     - legacy known          <-> ielts_vocab_known_v1
+     - goal v2/v1, daily v2/v1, practice history, lifetime sessions, preferences
+
+   Cross-device model: every sync does pull -> merge(local,remote) -> push merged
+   -> apply merged -> re-render. The backend also merges (defense in depth), so
+   the result is order-independent and devices converge to the union.
+   ============================================================================ */
+(function cleanSyncV6(){
+  if (window.__cleanSyncV6Installed) return;
+  window.__cleanSyncV6Installed = true;
+
+  var LOG = "[sync v6]";
+  var SCHEMA = "ielts-vocab-sync-v6";
+  window.__APP_BUILD = "v6-build-20260613";
+  try { console.log("%c[build] " + window.__APP_BUILD, "color:#16a34a;font-weight:bold"); } catch(e){}
+
+  // ---- canonical localStorage keys ----------------------------------------
+  var K = {
+    KNOWN_MEANING:  "ielts_vocab_known_meaning_v1",
+    KNOWN_SPELLING: "ielts_vocab_known_spelling_v1",
+    MEANING_TS:     "ielts_vocab_meaning_state_updated_at_v1",
+    SPELLING_TS:    "ielts_vocab_spelling_state_updated_at_v1",
+    PROGRESS:       "ielts_vocab_progress_v1",
+    LEGACY_KNOWN:   "ielts_vocab_known_v1",
+    GOAL_V2:        "ielts_vocab_goal_v2",
+    GOAL_V1:        "ielts_vocab_goal_v1",
+    DAILY_V2:       "ielts_vocab_daily_record_v2",
+    DAILY_V1:       "ielts_vocab_daily_record_v1",
+    HISTORY:        "ielts_vocab_practice_history_v1",
+    LIFETIME:       "ielts_vocab_lifetime_sessions_v1",
+    DICT_SOURCE:    "ielts_vocab_dict_source_v1",
+    ZH_MODE:        "ielts_vocab_zh_translation_mode_v1",
+    MODE_INTRO:     "ielts_vocab_mode_intro_done_v1",
+    DICT_TS:        "ielts_vocab_dict_source_updated_at_v1",
+    ZH_TS:          "ielts_vocab_zh_translation_mode_updated_at_v1",
+    INTRO_TS:       "ielts_vocab_mode_intro_updated_at_v1",
+    LAST_SYNC:      "ielts_vocab_cloud_last_sync_v1",
+    DATA_UPDATED:   "ielts_vocab_cloud_data_updated_v1",
+    PENDING:        "ielts_vocab_cloud_pending_sync_v1"
+  };
+
+  // ---- small helpers -------------------------------------------------------
+  function nowIso(){ return new Date().toISOString(); }
+  function norm(v){ try { if (typeof normalizeKey === "function") return normalizeKey(v); } catch(e){} return String(v||"").trim().toLowerCase().replace(/\s+/g," "); }
+  function lsGet(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+  function lsSet(k,v){ try { if (typeof safeLocalSet === "function") safeLocalSet(k,String(v)); else localStorage.setItem(k,String(v)); } catch(e){} }
+  function readJson(k,f){ try { var r = localStorage.getItem(k); if (r==null) return f; var p = JSON.parse(r); return p==null ? f : p; } catch(e){ return f; } }
+  function writeJson(k,v){ try { lsSet(k, JSON.stringify(v)); } catch(e){} }
+  function isObj(o){ return o && typeof o === "object" && !Array.isArray(o); }
+  function asArr(v){ return Array.isArray(v) ? v : []; }
+  function maxIso(){ var a=[]; for (var i=0;i<arguments.length;i++){ if (arguments[i]) a.push(String(arguments[i])); } a.sort(); return a.length ? a[a.length-1] : ""; }
+  function mapKeys(o){ return isObj(o) ? Object.keys(o).filter(function(k){ return o[k]; }) : []; }
+  // Lifetime sessions = number of DISTINCT practice sessions (by id) across all
+  // devices. Derived from the merged history, never an ever-incrementing counter
+  // (that double-counted every sync/merge and inflated the number).
+  function uniqueSessionCount(sessions){
+    var ids = {};
+    asArr(sessions).forEach(function(s){ var id = s && (s.id || s.sessionId || s.startedAt); if (id) ids[String(id)] = 1; });
+    return Object.keys(ids).length;
+  }
+
+  // ---- read canonical state into a v6 payload ------------------------------
+  function readKnownMap(globalName, lsKey){
+    var g = window[globalName];
+    if (isObj(g)) return g;
+    var v = readJson(lsKey, {});
+    return isObj(v) ? v : {};
+  }
+
+  function buildPayload(source){
+    var km = readKnownMap("knownMeaning", K.KNOWN_MEANING);
+    var ks = readKnownMap("knownSpelling", K.KNOWN_SPELLING);
+    var mts = isObj(window.meaningStateUpdatedAt) ? window.meaningStateUpdatedAt : readJson(K.MEANING_TS, {});
+    var sts = isObj(window.spellingStateUpdatedAt) ? window.spellingStateUpdatedAt : readJson(K.SPELLING_TS, {});
+    var prog = (typeof progress === "object" && progress) ? progress : readJson(K.PROGRESS, {});
+    var legacyKnown = (typeof known === "object" && known) ? known : readJson(K.LEGACY_KNOWN, {});
+
+    var now = nowIso();
+    var knownMeaning = {}, knownSpelling = {};
+    mapKeys(km).forEach(function(k){ var n=norm(k); if(n) knownMeaning[n] = mts[k] || mts[n] || now; });
+    mapKeys(ks).forEach(function(k){ var n=norm(k); if(n) knownSpelling[n] = sts[k] || sts[n] || now; });
+
+    var sessions = asArr(readJson(K.HISTORY, []));
+    var lifetime = uniqueSessionCount(sessions);
+
+    return {
+      schema: SCHEMA,
+      meta: { app: "IELTS Vocabulary Webapp", source: source || "manual", exportedAt: now, updatedAt: lsGet(K.DATA_UPDATED) || now },
+      knownMeaning: knownMeaning,
+      knownSpelling: knownSpelling,
+      progress: filterMeaningfulProgress(prog),   // match what saveAll persists, so sync doesn't see phantom diffs
+      legacyKnown: isObj(legacyKnown) ? legacyKnown : {},
+      goal: { v2: readJson(K.GOAL_V2, null), v1: readJson(K.GOAL_V1, null) },
+      daily: { v2: readJson(K.DAILY_V2, {}), v1: readJson(K.DAILY_V1, {}) },
+      practice: { sessions: sessions, lifetimeSessions: lifetime, updatedAt: lsGet("ielts_vocab_practice_history_updated_at_v1") || now },
+      preferences: {
+        dictionarySource: (lsGet(K.DICT_SOURCE) === "learner") ? "learner" : "collegiate",
+        dictionarySourceUpdatedAt: lsGet(K.DICT_TS) || "",
+        translationMode: ((lsGet(K.ZH_MODE) === "on" || lsGet(K.ZH_MODE) === "blur") ? lsGet(K.ZH_MODE) : "off"),
+        translationModeUpdatedAt: lsGet(K.ZH_TS) || "",
+        modeIntroDone: lsGet(K.MODE_INTRO) === "1",
+        modeIntroUpdatedAt: lsGet(K.INTRO_TS) || ""
+      }
+    };
+  }
+
+  // ---- convert an old v5/v3/v4 Drive payload into v6 (preserve old data) ----
+  // Old payloads stored "learning" as word lists. The per-skill UI derives
+  // learning from `progress`, so we synthesize progress entries (1 attempt,
+  // 0 correct) for learning words so they still render as "learning".
+  function looksV6(p){ return p && (p.schema === SCHEMA || isObj(p.knownMeaning) || isObj(p.knownSpelling) || isObj(p.progress)); }
+
+  function upgradeToV6(p){
+    if (!isObj(p)) return null;
+    if (looksV6(p)) {
+      return {
+        schema: SCHEMA,
+        meta: isObj(p.meta) ? p.meta : { updatedAt: nowIso() },
+        knownMeaning: isObj(p.knownMeaning) ? p.knownMeaning : {},
+        knownSpelling: isObj(p.knownSpelling) ? p.knownSpelling : {},
+        progress: isObj(p.progress) ? p.progress : {},
+        legacyKnown: isObj(p.legacyKnown) ? p.legacyKnown : {},
+        goal: isObj(p.goal) ? p.goal : { v2: null, v1: null },
+        daily: isObj(p.daily) ? p.daily : { v2: {}, v1: {} },
+        practice: isObj(p.practice) ? p.practice : { sessions: [], lifetimeSessions: 0 },
+        preferences: isObj(p.preferences) ? p.preferences : {}
+      };
+    }
+
+    var ws = isObj(p.wordState) ? p.wordState : {};
+    var updatedAt = (p.meta && (p.meta.updatedAt || p.meta.mergedAt || p.meta.exportedAt)) || nowIso();
+
+    var meaningKnown = asArr(ws.meaningKnownWords);
+    var spellingKnown = asArr(ws.spellingKnownWords);
+    // v3/v4 fallback: mastered = both known; knownOnly counted as meaning-known.
+    if (!meaningKnown.length && !spellingKnown.length) {
+      var mastered = asArr(ws.masteredWords), knownOnly = asArr(ws.knownWords);
+      meaningKnown = mastered.concat(knownOnly);
+      spellingKnown = mastered.slice();
+    }
+    var meaningLearning = asArr(ws.meaningLearningWords);
+    var spellingLearning = asArr(ws.spellingLearningWords);
+    if (!meaningLearning.length && !spellingLearning.length) {
+      var learn = asArr(ws.learningWords);
+      meaningLearning = learn.slice();
+      spellingLearning = learn.slice();
+    }
+
+    var knownMeaning = {}, knownSpelling = {};
+    meaningKnown.forEach(function(w){ var n=norm(w); if(n) knownMeaning[n] = updatedAt; });
+    spellingKnown.forEach(function(w){ var n=norm(w); if(n) knownSpelling[n] = updatedAt; });
+
+    // Synthesize progress so learning words render as "learning".
+    var prog = {};
+    function ensure(n){ if(!prog[n]) prog[n] = {}; return prog[n]; }
+    meaningLearning.forEach(function(w){ var n=norm(w); if(n && !knownMeaning[n]){ var e=ensure(n); e.matching={attempts:1,correct:0}; } });
+    spellingLearning.forEach(function(w){ var n=norm(w); if(n && !knownSpelling[n]){ var e=ensure(n); e.spelling={attempts:1,correct:0}; } });
+
+    var gt = isObj(p.goalTracking) ? p.goalTracking : {};
+    var pr = isObj(p.practice) ? p.practice : {};
+    var sessions = asArr(pr.sessions);
+
+    return {
+      schema: SCHEMA,
+      meta: { app: "IELTS Vocabulary Webapp", source: "upgraded-from-" + (p.schema || "old"), updatedAt: updatedAt },
+      knownMeaning: knownMeaning,
+      knownSpelling: knownSpelling,
+      progress: prog,
+      legacyKnown: {},
+      goal: { v2: gt.goalV2 || null, v1: gt.goal || null },
+      daily: { v2: gt.dailyRecordV2 || {}, v1: gt.dailyRecord || {} },
+      practice: { sessions: sessions, lifetimeSessions: Number(pr.lifetimeSessions) || sessions.length, updatedAt: pr.practiceHistoryUpdatedAt || updatedAt },
+      preferences: isObj(p.preferences) ? p.preferences : {}
+    };
+  }
+
+  // ---- merge two v6 payloads (union, newest-wins) --------------------------
+  function mergeKnown(a, b){
+    var out = {};
+    [a, b].forEach(function(m){ if (isObj(m)) Object.keys(m).forEach(function(k){ var n=norm(k); if(!n) return; out[n] = maxIso(out[n], m[k]); }); });
+    return out;
+  }
+  function mergeSkillBlock(name, a, b){
+    var ea = a && a[name], eb = b && b[name];
+    if (!isObj(ea) && !isObj(eb)) return undefined;
+    ea = isObj(ea) ? ea : {}; eb = isObj(eb) ? eb : {};
+    return {
+      attempts: Math.max(Number(ea.attempts)||0, Number(eb.attempts)||0),
+      correct: Math.max(Number(ea.correct)||0, Number(eb.correct)||0)
+    };
+  }
+  // A progress record only counts if it has real practice signal. saveAll() drops
+  // anything else (compactProgressForStorage), so the merge must drop it too —
+  // otherwise Drive's junk entries are re-downloaded forever (perpetual "Merged").
+  function isMeaningfulProg(r){
+    try { if (typeof hasMeaningfulProgressRecord === "function") return hasMeaningfulProgressRecord(r); } catch(e){}
+    if (!r || typeof r !== "object") return false;
+    if (Number(r.attempts||0)>0 || Number(r.correct||0)>0 || Number(r.wrong||0)>0 || Number(r._consecCorrect||0)>0) return true;
+    for (var kk in r){ var v=r[kk]; if (v && typeof v==="object" && (Number(v.attempts||0)>0||Number(v.correct||0)>0||Number(v.wrong||0)>0||v.lastAttemptAt||v.lastCorrectAt)) return true; }
+    return false;
+  }
+  function filterMeaningfulProgress(prog){
+    prog = isObj(prog)?prog:{}; var out={};
+    Object.keys(prog).forEach(function(k){ if (isMeaningfulProg(prog[k])) out[k]=prog[k]; });
+    return out;
+  }
+  function mergeProgress(a, b){
+    a = isObj(a)?a:{}; b = isObj(b)?b:{};
+    var keys = {}; Object.keys(a).forEach(function(k){keys[k]=1;}); Object.keys(b).forEach(function(k){keys[k]=1;});
+    var out = {};
+    Object.keys(keys).forEach(function(k){
+      var ra = a[k], rb = b[k]; var merged = {};
+      ["matching","wordToMeaning","meaningToWord","spelling"].forEach(function(sk){
+        var m = mergeSkillBlock(sk, ra, rb); if (m) merged[sk] = m;
+      });
+      merged._consecMeaning = Math.max((ra&&ra._consecMeaning)||0, (rb&&rb._consecMeaning)||0);
+      merged._consecSpelling = Math.max((ra&&ra._consecSpelling)||0, (rb&&rb._consecSpelling)||0);
+      if (isMeaningfulProg(merged)) out[k] = merged;   // drop junk so it can't ping-pong
+    });
+    return out;
+  }
+  function mergeSessions(a, b){
+    var byId = {};
+    asArr(b).concat(asArr(a)).forEach(function(s){
+      if (!isObj(s)) return;
+      var id = String(s.id || s.sessionId || s.startedAt || "");
+      if (!id) return;
+      byId[id] = byId[id] ? Object.assign({}, byId[id], s) : s;
+    });
+    var list = Object.keys(byId).map(function(id){ return byId[id]; });
+    list.sort(function(x,y){ return String(x.startedAt||x.endedAt||"").localeCompare(String(y.startedAt||y.endedAt||"")); });
+    return list.slice(-300);
+  }
+  function pickNewer(a, b){
+    var ta = (a && a.updatedAt) || "", tb = (b && b.updatedAt) || "";
+    if (a && !b) return a; if (b && !a) return b;
+    return String(ta) >= String(tb) ? a : b;
+  }
+  function mergeDaily(a, b){
+    a = isObj(a)?a:{}; b = isObj(b)?b:{};
+    var out = {}; var days = {};
+    Object.keys(a).forEach(function(d){days[d]=1;}); Object.keys(b).forEach(function(d){days[d]=1;});
+    Object.keys(days).forEach(function(d){
+      var ra=a[d], rb=b[d];
+      if (!isObj(ra) || !isObj(rb)) { out[d] = ra || rb; return; }
+      var m = Object.assign({}, ra, rb);
+      var ev = {};
+      ["meaningKnown","spellingKnown","mastered"].forEach(function(f){
+        var av = (ra.events&&ra.events[f])||[], bv = (rb.events&&rb.events[f])||[];
+        ev[f] = Array.from(new Set(asArr(av).concat(asArr(bv))));
+      });
+      if (isObj(ra.events) || isObj(rb.events)) m.events = ev;
+      ["newWordsMastered","practicedWords","sessionIds"].forEach(function(f){
+        if (Array.isArray(ra[f]) || Array.isArray(rb[f])) m[f] = Array.from(new Set(asArr(ra[f]).concat(asArr(rb[f]))));
+      });
+      m.goalMet = !!(ra.goalMet || rb.goalMet);
+      out[d] = m;
+    });
+    return out;
+  }
+  function mergePreferences(a, b){
+    a = isObj(a)?a:{}; b = isObj(b)?b:{};
+    function pick(field, ts){
+      var at = a[ts]||"", bt = b[ts]||"";
+      return String(at) >= String(bt) ? {v:a[field], t:at} : {v:b[field], t:bt};
+    }
+    var d = pick("dictionarySource","dictionarySourceUpdatedAt");
+    var z = pick("translationMode","translationModeUpdatedAt");
+    var i = pick("modeIntroDone","modeIntroUpdatedAt");
+    return {
+      dictionarySource: (d.v === "learner" || d.v === "collegiate") ? d.v : (a.dictionarySource || b.dictionarySource || "collegiate"),
+      dictionarySourceUpdatedAt: d.t,
+      translationMode: (z.v === "on" || z.v === "blur" || z.v === "off") ? z.v : (a.translationMode || b.translationMode || "off"),
+      translationModeUpdatedAt: z.t,
+      modeIntroDone: !!i.v,
+      modeIntroUpdatedAt: i.t
+    };
+  }
+  function mergePayloads(localP, remoteP){
+    var L = upgradeToV6(localP) || {}, R = upgradeToV6(remoteP) || {};
+    return {
+      schema: SCHEMA,
+      meta: { app: "IELTS Vocabulary Webapp", source: "merge", updatedAt: nowIso(),
+              mergedFrom: [ (L.meta&&L.meta.source)||"", (R.meta&&R.meta.source)||"" ] },
+      knownMeaning: mergeKnown(L.knownMeaning, R.knownMeaning),
+      knownSpelling: mergeKnown(L.knownSpelling, R.knownSpelling),
+      progress: mergeProgress(L.progress, R.progress),
+      legacyKnown: Object.assign({}, R.legacyKnown, L.legacyKnown),
+      goal: { v2: pickNewer(L.goal&&L.goal.v2, R.goal&&R.goal.v2) || null,
+              v1: pickNewer(L.goal&&L.goal.v1, R.goal&&R.goal.v1) || null },
+      daily: { v2: mergeDaily(L.daily&&L.daily.v2, R.daily&&R.daily.v2),
+               v1: mergeDaily(L.daily&&L.daily.v1, R.daily&&R.daily.v1) },
+      practice: (function(){ var ms = mergeSessions(L.practice&&L.practice.sessions, R.practice&&R.practice.sessions);
+                  return { sessions: ms, lifetimeSessions: uniqueSessionCount(ms),
+                  updatedAt: maxIso(L.practice&&L.practice.updatedAt, R.practice&&R.practice.updatedAt) }; })(),
+      preferences: mergePreferences(L.preferences, R.preferences)
+    };
+  }
+
+  // ---- apply a v6 payload into canonical state + re-render -----------------
+  function applyPayload(raw, opts){
+    opts = opts || {};
+    var p = upgradeToV6(raw);
+    if (!p) return false;
+    // Race guard: a practice session or answer can be saved to localStorage
+    // while a sync is mid-flight (its payload was built before the save). Union
+    // the incoming payload with the CURRENT local state so nothing local is lost.
+    // Skipped for explicit force-restore (overwrite:true).
+    if (!opts.overwrite) {
+      try { p = mergePayloads(buildPayload("apply-guard"), p); } catch(e){}
+    }
+    window.__v6Applying = true;
+    try {
+      var km = {}, ks = {}, mts = {}, sts = {};
+      Object.keys(p.knownMeaning||{}).forEach(function(k){ km[k]=true; mts[k]=p.knownMeaning[k]; });
+      Object.keys(p.knownSpelling||{}).forEach(function(k){ ks[k]=true; sts[k]=p.knownSpelling[k]; });
+
+      window.knownMeaning = km; window.knownSpelling = ks;
+      window.meaningStateUpdatedAt = mts; window.spellingStateUpdatedAt = sts;
+      writeJson(K.KNOWN_MEANING, km); writeJson(K.KNOWN_SPELLING, ks);
+      writeJson(K.MEANING_TS, mts); writeJson(K.SPELLING_TS, sts);
+
+      if (isObj(p.progress)) { try { progress = p.progress; } catch(e){} writeJson(K.PROGRESS, p.progress); }
+
+      // legacy known = mastered (both sides known), unioned with explicit legacyKnown
+      var legacy = isObj(p.legacyKnown) ? Object.assign({}, p.legacyKnown) : {};
+      Object.keys(km).forEach(function(k){ if (ks[k]) legacy[k] = true; });
+      try { known = legacy; } catch(e){} writeJson(K.LEGACY_KNOWN, legacy);
+
+      if (p.goal && p.goal.v2) writeJson(K.GOAL_V2, p.goal.v2);
+      if (p.goal && p.goal.v1) writeJson(K.GOAL_V1, p.goal.v1);
+      if (p.daily && isObj(p.daily.v2)) writeJson(K.DAILY_V2, p.daily.v2);
+      if (p.daily && isObj(p.daily.v1)) writeJson(K.DAILY_V1, p.daily.v1);
+
+      if (p.practice) {
+        if (Array.isArray(p.practice.sessions)) writeJson(K.HISTORY, p.practice.sessions);
+        if (p.practice.lifetimeSessions != null) lsSet(K.LIFETIME, String(p.practice.lifetimeSessions));
+        if (p.practice.updatedAt) lsSet("ielts_vocab_practice_history_updated_at_v1", p.practice.updatedAt);
+      }
+
+      var pref = p.preferences || {};
+      if (pref.dictionarySource === "learner" || pref.dictionarySource === "collegiate") { lsSet(K.DICT_SOURCE, pref.dictionarySource); if (pref.dictionarySourceUpdatedAt) lsSet(K.DICT_TS, pref.dictionarySourceUpdatedAt); }
+      if (pref.translationMode === "on" || pref.translationMode === "blur" || pref.translationMode === "off") {
+        lsSet(K.ZH_MODE, pref.translationMode);
+        lsSet("ielts_vocab_zh_translation_v1", pref.translationMode === "off" ? "0" : "1");
+        if (pref.translationModeUpdatedAt) lsSet(K.ZH_TS, pref.translationModeUpdatedAt);
+      }
+      if (Object.prototype.hasOwnProperty.call(pref, "modeIntroDone")) { lsSet(K.MODE_INTRO, pref.modeIntroDone ? "1":"0"); if (pref.modeIntroUpdatedAt) lsSet(K.INTRO_TS, pref.modeIntroUpdatedAt); }
+
+      lsSet(K.DATA_UPDATED, (p.meta && p.meta.updatedAt) || nowIso());
+
+      // re-render every tab
+      window.__skillStateReady = true;
+      [ "renderAll","renderGoalTab","renderProgressTab","renderProgress","renderPracticeRoot",
+        "renderPracticeHistory","renderWordList","renderWords","renderHome","updateStats","renderCalendar"
+      ].forEach(function(fn){ try { if (typeof window[fn] === "function") window[fn](); else if (typeof eval(fn) === "function") eval(fn+"()"); } catch(e){} });
+      return true;
+    } finally {
+      setTimeout(function(){ window.__v6Applying = false; }, 0);
+    }
+  }
+
+  // ---- backend transport ---------------------------------------------------
+  function status(){
+    return fetch("/api/sync/status", { method:"GET", credentials:"include", cache:"no-store" })
+      .then(function(r){ return r.json().catch(function(){ return {}; }); })
+      .catch(function(){ return { connected:false }; });
+  }
+  function pull(){
+    return fetch("/api/sync/pull", { method:"GET", credentials:"include", cache:"no-store", headers:{ "Cache-Control":"no-cache" } })
+      .then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(d){
+          if (r.status === 401) return { connected:false, pendingAuth:true, connectUrl: d.connectUrl || "/api/google/start", payload:null };
+          if (!r.ok || d.ok === false) throw new Error(d.detail || ("Pull HTTP " + r.status));
+          return { connected:true, payload: d.payload || null };
+        });
+      });
+  }
+  function push(payload){
+    return fetch("/api/sync/merge", { method:"POST", credentials:"include", headers:{ "Content-Type":"application/json" }, body: JSON.stringify({ payload: payload }) })
+      .then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(d){
+          if (r.status === 401) return { connected:false, pendingAuth:true, payload:null };
+          if (!r.ok || d.ok === false) throw new Error(d.detail || ("Push HTTP " + r.status));
+          return { connected:true, payload: d.payload || payload };
+        });
+      });
+  }
+
+  // ---- the one sync routine -----------------------------------------------
+  var running = false, queued = false, lastSyncedSig = null;
+
+  function counts(p){
+    p = upgradeToV6(p) || {};
+    return { knownMeaning: Object.keys(p.knownMeaning||{}).length,
+             knownSpelling: Object.keys(p.knownSpelling||{}).length,
+             learningWords: Object.keys(p.progress||{}).length,
+             sessions: asArr(p.practice&&p.practice.sessions).length,
+             lifetime: (p.practice&&p.practice.lifetimeSessions)||0 };
+  }
+
+  // Stable, CANONICAL content signature. Must be order-independent so that a
+  // freshly-built local payload and a merged payload with the same data produce
+  // the same string (otherwise every sync looks like a change -> false "Merged").
+  function progSig(prog){
+    prog = isObj(prog) ? prog : {};
+    return Object.keys(prog).sort().map(function(k){
+      var r = prog[k] || {};
+      function blk(name){ var b = r[name] || {}; return (b.attempts||0) + "/" + (b.correct||0); }
+      return k + ":" + blk("matching") + "," + blk("wordToMeaning") + "," + blk("meaningToWord") + "," +
+             blk("spelling") + ",cm" + (r._consecMeaning||0) + ",cs" + (r._consecSpelling||0);
+    }).join("|");
+  }
+  function payloadSig(p){
+    p = upgradeToV6(p) || {};
+    try {
+      var g = p.goal || {}, gv2 = g.v2 || {}, gv1 = g.v1 || {};
+      var dv2 = (p.daily && p.daily.v2) || {};
+      var daily = Object.keys(dv2).sort().map(function(d){ var r = dv2[d] || {}; return d + ":" + (r.goalMet ? 1 : 0); });
+      var pref = p.preferences || {};
+      return JSON.stringify({
+        km: Object.keys(p.knownMeaning||{}).sort(),
+        ks: Object.keys(p.knownSpelling||{}).sort(),
+        pr: progSig(p.progress),
+        // legacyKnown is a derived mirror of (meaning∩spelling) known; excluded so
+        // its union doesn't make a local-only change look like a download.
+        // Goal: compare CONTENT only (the items), not the updatedAt timestamp,
+        // and ignore the legacy v1 stub — those churn locally and would make a
+        // no-op sync look like a download (false "Merged").
+        g2: JSON.stringify(gv2.items || []),
+        dl: daily,
+        ses: asArr(p.practice&&p.practice.sessions).map(function(s){ return s&&(s.id||s.startedAt); }).sort(),
+        lt: (p.practice||{}).lifetimeSessions || 0,
+        pf: [pref.dictionarySource||"", pref.translationMode||"", pref.modeIntroDone?1:0]
+      });
+    } catch(e){ return String(Math.random()); }
+  }
+
+  // ---- diagnostics: why does a sync look like a download? ------------------
+  function sigParts(p){
+    p = upgradeToV6(p) || {};
+    var gv2 = (p.goal||{}).v2 || {};
+    var dv2 = (p.daily&&p.daily.v2)||{};
+    return {
+      knownMeaning: Object.keys(p.knownMeaning||{}).sort(),
+      knownSpelling: Object.keys(p.knownSpelling||{}).sort(),
+      progress: progSig(p.progress),
+      goalItems: JSON.stringify(gv2.items||[]),
+      dailyMet: Object.keys(dv2).sort().map(function(d){ var r=dv2[d]||{}; return d+":"+(r.goalMet?1:0); }),
+      sessions: asArr(p.practice&&p.practice.sessions).map(function(s){ return s&&(s.id||s.startedAt); }).sort(),
+      lifetime: (p.practice||{}).lifetimeSessions||0,
+      prefs: [ (p.preferences||{}).dictionarySource||"", (p.preferences||{}).translationMode||"", (p.preferences||{}).modeIntroDone?1:0 ]
+    };
+  }
+  function diffSigParts(localP, otherP){
+    var a = sigParts(localP), b = sigParts(otherP), out = {};
+    Object.keys(a).forEach(function(k){
+      if (JSON.stringify(a[k]) === JSON.stringify(b[k])) return;
+      var info = { local: a[k], other: b[k] };
+      if (Array.isArray(a[k]) && Array.isArray(b[k])) {
+        var sa = new Set(a[k]), sb = new Set(b[k]);
+        info = {
+          localCount: a[k].length, otherCount: b[k].length,
+          onlyInOther: b[k].filter(function(x){ return !sa.has(x); }).slice(0, 25),
+          onlyInLocal: a[k].filter(function(x){ return !sb.has(x); }).slice(0, 25)
+        };
+      }
+      out[k] = info;
+    });
+    return out;
+  }
+  function lsHealth(){
+    var ok = false, err = "";
+    try { localStorage.setItem("__v6_ls_test", "1"); ok = localStorage.getItem("__v6_ls_test") === "1"; localStorage.removeItem("__v6_ls_test"); }
+    catch(e){ err = String(e && e.message || e); }
+    var used = 0; try { for (var k in localStorage) { if (Object.prototype.hasOwnProperty.call(localStorage, k)) used += (localStorage.getItem(k)||"").length + k.length; } } catch(e){}
+    return { writable: ok, error: err, approxKB: Math.round(used/1024) };
+  }
+
+  // Lifecycle triggers (focus/visibility/startup/etc.) fire in bursts; throttle
+  // them so we don't hammer the backend with overlapping requests (each of which
+  // can fail on a Cloud Run cold start). Real edits are never throttled.
+  var LIFECYCLE = /^(startup|pageshow|visible|oauth-return|window-focus|queued-followup|hidden-flush)$/;
+  var lastSuccessAt = 0;
+
+  function isWordSheetOpen(){
+    try { var s = document.getElementById("sheet"); return !!(s && s.classList.contains("show")); } catch(e){ return false; }
+  }
+
+  function doSync(reason, opts){
+    opts = opts || {};
+    var manual = !!opts.redirect || /manual/.test(String(reason||""));
+    // Never disrupt an open word card with a background sync's re-render. Defer
+    // until the card is closed (closeSheet kicks a sync if changes are pending).
+    if (!manual && isWordSheetOpen()) {
+      return Promise.resolve({ status:"deferred-sheet-open", reason:reason });
+    }
+    if (LIFECYCLE.test(String(reason||"")) && lsGet(K.PENDING) !== "1" && (Date.now() - lastSuccessAt) < 8000) {
+      return Promise.resolve({ status:"throttled", reason:reason });
+    }
+    if (running) { queued = true; return Promise.resolve({ status:"queued", reason:reason }); }
+    running = true;
+    return status().then(function(st){
+      if (!st || !st.connected) {
+        if (opts.redirect) { window.location.href = "/api/google/start"; }
+        return { status:"not-connected", reason:reason };
+      }
+      var localP = buildPayload(reason || "sync");
+      var localSig = payloadSig(localP);
+      return pull().then(function(pr){
+        if (pr.pendingAuth) { if (opts.redirect) window.location.href = pr.connectUrl || "/api/google/start"; return { status:"pending-auth" }; }
+        var remoteSig = payloadSig(pr.payload);
+        var merged = mergePayloads(localP, pr.payload);
+        var mergedSig = payloadSig(merged);
+        var downloaded = mergedSig !== localSig;   // cloud added something to this device
+        var needUpload = mergedSig !== remoteSig;  // Drive is missing something we have
+
+        function finish(finalP){
+          // Only re-apply (and re-render every tab) when the cloud actually
+          // brought new data to this device. A no-op or upload-only sync leaves
+          // local unchanged, so skip the render — this also stops background
+          // syncs from disrupting an open word card / scroll position.
+          if (downloaded) applyPayload(finalP);
+          lastSyncedSig = payloadSig(finalP);
+          lastSuccessAt = Date.now();
+          try { lsSet(K.LAST_SYNC, nowIso()); localStorage.removeItem(K.PENDING); } catch(e){}
+          updateSettingsUi();
+          // Only flash on a REAL change: download -> "Merged", upload-only -> "Auto-synced".
+          if (downloaded) flashSyncLabel("Merged");
+          else if (needUpload) flashSyncLabel("Auto-synced");
+          console.log(LOG, "synced (" + (reason||"") + "):", counts(finalP),
+                      downloaded ? "[merged]" : (needUpload ? "[uploaded]" : "[noop]"));
+          if (downloaded) {
+            // Record WHAT was downloaded + whether the apply actually persisted,
+            // so a perpetual "Merged" can be diagnosed (e.g. failing localStorage).
+            var diff = diffSigParts(localP, finalP);
+            var afterApply = diffSigParts(buildPayload("post-apply-check"), finalP); // empty if apply stuck
+            window.__v6LastDiff = { reason: reason, at: nowIso(), changed: diff, stillDifferentAfterApply: afterApply, ls: lsHealth() };
+            console.warn(LOG, "[merged] changed fields:", diff, "| persisted OK:", Object.keys(afterApply).length === 0, "| ls:", window.__v6LastDiff.ls);
+          }
+          return { status:"synced", reason:reason, downloaded:downloaded, uploaded:needUpload, counts: counts(finalP) };
+        }
+
+        // Drive already has everything we have -> no push needed.
+        if (!needUpload) return finish(merged);
+        return push(merged).then(function(pu){ return finish(pu.payload || merged); });
+      });
+    }).catch(function(err){
+      console.warn(LOG, "sync failed:", err); try { lsSet(K.PENDING, "1"); } catch(e){}
+      // Transient network/cold-start failure: retry once after a short delay so
+      // it self-heals instead of waiting for the next trigger.
+      if (!opts.__retried) {
+        setTimeout(function(){ doSync(reason, { redirect: opts.redirect, __retried: true }); }, 3000);
+      }
+      return { status:"failed", error: String(err && err.message || err) };
+    }).then(function(res){
+      running = false;
+      if (queued) { queued = false; setTimeout(function(){ doSync("queued-followup"); }, 1500); }
+      return res;
+    });
+  }
+
+  // ---- debounced auto-sync on changes -------------------------------------
+  var timer = null, BOOT_UNTIL = Date.now() + 8000;
+  function scheduleSync(reason, delayMs){
+    if (window.__v6Applying) return;                // don't sync our own apply
+    // Ignore "changes" that don't actually change the data (boot/render re-saves,
+    // goal recalcs, etc.) so we don't sync — and flash — for nothing.
+    try { if (lastSyncedSig !== null && payloadSig(buildPayload("dirty-check")) === lastSyncedSig) return; } catch(e){}
+    try { lsSet(K.DATA_UPDATED, nowIso()); lsSet(K.PENDING, "1"); } catch(e){}
+    if (timer) clearTimeout(timer);
+    var delay = delayMs || (Date.now() < BOOT_UNTIL ? 6000 : 2500);
+    timer = setTimeout(function(){ timer = null; doSync(reason || "auto"); }, delay);
+  }
+
+  // Wrap the real save functions so any state change schedules a sync.
+  function wrap(name, reason){
+    var fn = window[name] || (typeof eval === "function" ? (function(){ try { return eval(name); } catch(e){ return null; } })() : null);
+    if (typeof fn !== "function" || fn.__v6wrapped) return;
+    var wrapped = function(){ var r = fn.apply(this, arguments); try { scheduleSync(reason || name); } catch(e){} return r; };
+    wrapped.__v6wrapped = true;
+    window[name] = wrapped;
+    try { eval(name + " = window['" + name + "']"); } catch(e){}
+  }
+  ["saveAll","saveKnown","saveSkillState","saveGoalV2","saveDailyRecordV2","savePracticeHistory"].forEach(function(n){ wrap(n, n); });
+
+  // Goal module emits cloudMarkChanged; route it here.
+  window.cloudMarkChanged = function(reason){ scheduleSync(reason || "goal-change"); };
+
+  // Learning options (Dictionary Source / Chinese translation / mode-intro).
+  // Their setters call LOCAL schedulePreferenceUpload()/uploadPreferencesNow()
+  // closures that are now dead, so we wrap the user-facing window setters instead.
+  // On a preference change we stamp the per-field updatedAt keys our merge uses
+  // for newest-wins, then trigger an auto-sync.
+  function stampPreferencesNow(){
+    var t = nowIso();
+    lsSet(K.DICT_TS, t); lsSet(K.ZH_TS, t); lsSet(K.INTRO_TS, t);
+    lsSet(K.DATA_UPDATED, t);
+  }
+  function prefWrap(name, reason){
+    var fn = window[name];
+    if (typeof fn !== "function" || fn.__v6prefWrapped) return;
+    var wrapped = function(){
+      var r = fn.apply(this, arguments);
+      try { if (!window.__v6Applying) { stampPreferencesNow(); scheduleSync(reason || name, 600); } } catch(e){}
+      return r;
+    };
+    wrapped.__v6prefWrapped = true;
+    window[name] = wrapped;
+  }
+  [ "setDictionarySourceFromUser", "setChineseTranslationModeFromUser",
+    "setDictionarySource", "setChineseTranslationMode",
+    "completeModeIntro", "skipModeIntroForNow"
+  ].forEach(function(n){ prefWrap(n, "preference-change:" + n); });
+  // Keep these callable but harmless if old code still reaches the window copies.
+  window.uploadPreferencesNow = function(){ stampPreferencesNow(); scheduleSync("preference-change", 600); return Promise.resolve({ status: "scheduled-v6" }); };
+  window.schedulePreferenceUpload = function(){ stampPreferencesNow(); scheduleSync("preference-change", 600); };
+
+  // ---- Settings "Sync now" button + status text ---------------------------
+  function timeAgo(ts){ if(!ts) return "Never"; var t=Date.parse(ts); if(!isFinite(t)) return "Unknown"; var s=Math.floor((Date.now()-t)/1000); if(s<20)return"just now"; if(s<60)return s+"s ago"; var m=Math.floor(s/60); if(m<60)return m+"m ago"; var h=Math.floor(m/60); if(h<24)return h+"h ago"; return Math.floor(h/24)+"d ago"; }
+
+  // Small black toast shown on every successful sync.
+  function flashSyncLabel(text){
+    try {
+      var el = document.createElement("div");
+      el.textContent = (text === "Merged" ? "⇅ " : "✓ ") + text;
+      el.setAttribute("role", "status");
+      el.style.cssText = [
+        "position:fixed","left:50%","bottom:28px","transform:translateX(-50%) translateY(8px)",
+        "background:#111","color:#fff","font:600 13px/1.2 -apple-system,system-ui,sans-serif",
+        "padding:8px 14px","border-radius:999px","box-shadow:0 4px 14px rgba(0,0,0,.28)",
+        "z-index:2147483647","opacity:0","transition:opacity .2s ease, transform .2s ease",
+        "pointer-events:none","letter-spacing:.2px"
+      ].join(";");
+      document.body.appendChild(el);
+      requestAnimationFrame(function(){ el.style.opacity = "1"; el.style.transform = "translateX(-50%) translateY(0)"; });
+      setTimeout(function(){ el.style.opacity = "0"; el.style.transform = "translateX(-50%) translateY(8px)"; setTimeout(function(){ try { el.remove(); } catch(e){} }, 250); }, 1600);
+    } catch(e){}
+  }
+  window.flashSyncLabel = flashSyncLabel;
+
+  // A full-width white "back bar" at the TOP of the word card when it was opened
+  // from an info-panel list. It scrolls away with the content (not sticky) and
+  // has a small round button on the left to return to that list. Backdrop /
+  // normal close does NOT return — that just closes to background.
+  function returnToPanelFromCard(){
+    var p = window.__cardBackPanel; window.__cardBackPanel = null;
+    if (typeof window.closeSheet === "function") window.closeSheet();
+    if (p) setTimeout(function(){ try {
+      p.classList.add("show");
+      document.body.classList.add("history-overlay-open");
+      document.documentElement.classList.add("history-overlay-open");
+    } catch(e){} }, 40);
+    updateCardBackBar();
+  }
+  window.returnToPanelFromCard = returnToPanelFromCard;
+
+  function ensureCardBackBar(){
+    var sheetBody = document.getElementById("sheetBody");
+    if (!sheetBody) return null;
+    var bar = document.getElementById("cardBackBar");
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.id = "cardBackBar";
+      bar.style.display = "none";
+      bar.innerHTML = '<button type="button" id="cardBackBtn" aria-label="Back to list">←</button><span class="cb-label">Back to list</span>';
+      sheetBody.insertBefore(bar, sheetBody.firstChild);
+      bar.addEventListener("click", function(ev){ ev.preventDefault(); ev.stopPropagation(); returnToPanelFromCard(); });
+    }
+    return bar;
+  }
+  function updateCardBackBar(){
+    var bar = ensureCardBackBar();
+    if (!bar) return;
+    bar.style.display = window.__cardBackPanel ? "flex" : "none";
+  }
+  window.__updateCardBackBtn = updateCardBackBar;   // name kept; openWordCardFromList/closeSheet call it
+  setTimeout(ensureCardBackBar, 1500);
+
+  // When a word card opened from an info-panel list is closed, return to that
+  // panel (mirrors the existing progress-overlay return behaviour).
+  if (typeof window.closeSheet === "function" && !window.closeSheet.__v6ReturnWrapped) {
+    var _origCloseSheet = window.closeSheet;
+    window.closeSheet = function(){
+      var r = _origCloseSheet.apply(this, arguments);
+      // Backdrop / normal close just closes the card to the background — the list
+      // panel was already hidden, and we do NOT reopen it (that's the Back btn's
+      // job). Clear the back state and hide the button.
+      window.__cardBackPanel = null;
+      try { var _s = document.getElementById("sheet"); if (_s) _s.classList.remove("from-list"); } catch(e){}
+      if (typeof window.__updateCardBackBtn === "function") window.__updateCardBackBtn();
+      // Run any sync that was deferred while the card was open.
+      try { if (lsGet(K.PENDING) === "1") setTimeout(function(){ doSync("after-sheet-close"); }, 400); } catch(e){}
+      return r;
+    };
+    window.closeSheet.__v6ReturnWrapped = true;
+    try { closeSheet = window.closeSheet; } catch(e){}
+  }
+
+  // Styling for clickable words in info-panel lists.
+  try {
+    var _ipStyle = document.createElement("style");
+    _ipStyle.textContent =
+      ".ip-word.ip-word-clickable{cursor:pointer;display:flex;align-items:center;gap:8px;}" +
+      ".ip-word.ip-word-clickable:active{opacity:.6;}" +
+      ".ip-word.ip-word-clickable .ip-word-text{flex:1;}" +
+      ".ip-word.ip-word-clickable .ip-word-go{opacity:.4;font-weight:700;margin-left:4px;}" +
+      // Word card always on top of any info-panel overlay.
+      "#backdrop.show{z-index:1590 !important;}" +
+      "#sheet.show{z-index:1600 !important;}" +
+      // Scroll isolation: scrolling inside a panel/card must not scroll the page
+      // or the backdrop behind it. (No touch-action on the backdrop — that blocks
+      // tap-to-close on iOS.)
+      "html,body{overscroll-behavior:none;}" +
+      "#sheet,#sheetBody,.game-body,.ip-word-list,.history-overlay .game-body{overscroll-behavior:contain;-webkit-overflow-scrolling:touch;}" +
+      // Stop async content (Chinese/related) from shifting the card scroll away
+      // from the top.
+      ".sheet-body{overflow-anchor:none;}" +
+      // Lock background scroll whenever any overlay (card OR info panel) is open.
+      "body.overlay-open{overflow:hidden !important;}" +
+      "html.overlay-open{overflow:hidden !important;}" +
+      // Pull-up-to-advance button: bounce the down arrow + pulse the ring.
+      "@keyframes nwBounce{0%,100%{transform:translateY(-2px)}50%{transform:translateY(3px)}}" +
+      ".next-word-btn .nw-arrow{display:inline-block;font-size:19px;line-height:1;animation:nwBounce 1.3s ease-in-out infinite;}" +
+      "@keyframes nwGlow{0%,100%{box-shadow:0 0 0 0 rgba(124,58,237,0);}50%{box-shadow:0 0 0 7px rgba(124,58,237,.12);}}" +
+      ".next-word-btn{animation:nwGlow 1.6s ease-in-out infinite;}" +
+      // White back bar at the top of the word card (when opened from a list),
+      // scrolls away with the content (not sticky).
+      "#cardBackBar{display:none;align-items:center;gap:10px;background:#fff;padding:11px 20px;margin:-18px -20px 12px;border-bottom:1px solid #ECE7F5;cursor:pointer;}" +
+      "#cardBackBar #cardBackBtn{flex:none;width:34px;height:34px;border-radius:999px;border:1px solid #E5E0F0;background:#F7F4FB;color:#5B21B6;font:800 18px/1 -apple-system,system-ui,sans-serif;cursor:pointer;display:flex;align-items:center;justify-content:center;}" +
+      "#cardBackBar .cb-label{font:700 14px/1 -apple-system,system-ui,sans-serif;color:#3F3A52;}" +
+      // In double-panel mode, hide the pull-up-to-advance control.
+      ".sheet.from-list .next-word-wrap{display:none !important;}" +
+      // Tighten the relationship between the skill pills and the Practice button:
+      // pills sit directly above the button as one grouped block.
+      ".sheet .tab-bottom{margin-top:22px;padding-top:14px;}" +
+      ".sheet .ws-row{margin:0 0 10px !important;gap:6px;}" +
+      ".sheet .tab-practice-btn{margin-top:0 !important;}";
+    document.head.appendChild(_ipStyle);
+  } catch(e){}
+
+  // iOS background-scroll lock. `body { overflow:hidden }` does NOT stop touch
+  // scrolling on iOS; locking the body to position:fixed (while preserving the
+  // scroll position) does. Active whenever a card sheet or info-panel overlay is
+  // open, so scrolling inside a panel/card never scrolls the page behind it.
+  (function(){
+    var savedY = 0, isLocked = false;
+    function overlayOpen(){
+      var c = document.body.classList;
+      // sheet-open / mode-intro-open are managed reliably; history panels are
+      // detected by an actually-visible overlay (.show), since the body class can
+      // go stale when we hide a panel to show a word card on top of it.
+      if (c.contains("sheet-open") || c.contains("mode-intro-open")) return true;
+      return !!document.querySelector(".game-overlay.show, .history-overlay.show, #sheet.show");
+    }
+    function lockBody(){
+      if (isLocked) return; isLocked = true;
+      savedY = window.scrollY || document.documentElement.scrollTop || 0;
+      var s = document.body.style;
+      s.position = "fixed"; s.top = (-savedY) + "px"; s.left = "0"; s.right = "0"; s.width = "100%";
+    }
+    function unlockBody(){
+      if (!isLocked) return; isLocked = false;
+      var s = document.body.style;
+      s.position = ""; s.top = ""; s.left = ""; s.right = ""; s.width = "";
+      window.scrollTo(0, savedY);
+    }
+    setInterval(function(){ try { overlayOpen() ? lockBody() : unlockBody(); } catch(e){} }, 180);
+  })();
+
+  // Old offline-goal code (restoreOfflineGoalSetup) references a bare global
+  // `firstLaunchWelcomeActive` that isn't defined in its scope, throwing on a
+  // timer. Provide a safe global so it stops throwing (welcome is handled by
+  // the stable login UI, so "not active" is the correct post-login answer).
+  if (typeof window.firstLaunchWelcomeActive !== "function") {
+    window.firstLaunchWelcomeActive = function(){
+      try { return localStorage.getItem("ielts_vocab_cloud_first_launch_v1") !== "1"; } catch(e){ return false; }
+    };
+  }
+  function statusText(){
+    if (lsGet(K.PENDING) === "1") return "⚠️ Sync now (unsaved changes)";
+    if (lsGet(K.LAST_SYNC)) return "✅ Synced · " + timeAgo(lsGet(K.LAST_SYNC));
+    return "Sync now";
+  }
+  function syncNowFromSettings(){
+    var btns = Array.prototype.slice.call(document.querySelectorAll("button, .btn, [role='button']"))
+      .filter(function(b){ return /sync now|synced|unsaved changes/i.test((b.textContent||"").trim()); });
+    btns.forEach(function(b){ b.dataset.v6old = b.textContent; b.textContent = "Syncing…"; b.disabled = true; });
+    return doSync("manual-settings", { redirect:true }).then(function(r){ updateSettingsUi(); return r; })
+      .catch(function(e){ return { status:"failed", error:String(e) }; })
+      .then(function(r){ btns.forEach(function(b){ b.disabled=false; }); updateSettingsUi(); return r; });
+  }
+  function updateSettingsUi(){
+    var txt = statusText();
+    Array.prototype.slice.call(document.querySelectorAll("button, .btn, [role='button']")).forEach(function(b){
+      var t = (b.textContent||"").trim();
+      if (/sync now|synced|unsaved changes|syncing/i.test(t) && !b.querySelector("input,select,textarea")) {
+        b.textContent = txt; b.onclick = syncNowFromSettings; b.disabled = false; b.style.cursor = "pointer";
+      }
+    });
+  }
+  [600, 1600, 3000].forEach(function(d){ setTimeout(updateSettingsUi, d); });
+
+  // ---- clean export (used by Export/Backup buttons) ------------------------
+  window.exportBackup = function(){
+    try {
+      var data = buildPayload("manual-export-v6");
+      var blob = new Blob([JSON.stringify(data, null, 2)], { type:"application/json;charset=utf-8" });
+      var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+      a.download = "ielts_vocab_backup-v6-" + new Date().toISOString().replace(/[:.]/g,"-").slice(0,19) + ".json";
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
+      try { if (typeof toast === "function") toast("Backup downloaded"); } catch(e){}
+      return counts(data);
+    } catch(err){ console.error(LOG, "export failed", err); throw err; }
+  };
+
+  // ---- startup: pull + merge + apply once, then enable auto-sync ----------
+  function startupSync(reason){
+    return doSync(reason || "startup").then(function(r){ console.log(LOG, "startup result:", r); BOOT_UNTIL = Date.now(); return r; });
+  }
+
+  // If we just came back from Google OAuth (?cloud=connected), the very first
+  // request can transiently fail (token refresh / Drive file lookup) which left
+  // the old code "logged in but no data". Retry a few times so data loads on the
+  // FIRST login, then strip the param so reloads don't repeat it.
+  var oauthReturn = location.search.indexOf("cloud=connected") >= 0;
+  if (oauthReturn) {
+    [600, 1800, 3500, 6000, 9000].forEach(function(d){ setTimeout(function(){ startupSync("oauth-return"); }, d); });
+    setTimeout(function(){ try { var u = new URL(location.href); u.searchParams.delete("cloud"); history.replaceState(null, "", u.toString()); } catch(e){} }, 2000);
+  } else {
+    setTimeout(function(){ startupSync("startup"); }, 2500);
+  }
+
+  window.addEventListener("pageshow", function(){ setTimeout(function(){ doSync("pageshow"); }, 1200); });
+  document.addEventListener("visibilitychange", function(){
+    if (document.visibilityState === "visible") setTimeout(function(){ doSync("visible"); }, 1200);
+    if (document.visibilityState === "hidden") {
+      try { window.persistActiveSession && window.persistActiveSession(); } catch(e){}  // save in-progress session before a possible iOS kill
+      if (lsGet(K.PENDING) === "1") doSync("hidden-flush");
+    }
+  });
+
+  // Reload safety for long practice sessions: recover any in-progress session
+  // left behind by an iOS memory-kill, and keep snapshotting the live one.
+  try { window.recoverActiveSession && window.recoverActiveSession(); } catch(e){}
+  window.addEventListener("pagehide", function(){ try { window.persistActiveSession && window.persistActiveSession(); } catch(e){} });
+  setInterval(function(){ try { if (window.game && window.persistActiveSession) window.persistActiveSession(); } catch(e){} }, 5000);
+
+  // Lock background scroll whenever the word card OR any info-panel overlay is
+  // open, so scrolling the panel can't drag the page behind it (iOS PWA). Cheap
+  // poll — bulletproof against the many open/close entry points.
+  function syncOverlayScrollLock(){
+    try {
+      var open = !!document.querySelector("#sheet.show, .game-overlay.show, .history-overlay.show, #goalDayOverlayV2.show, #progressWordOverlay.show");
+      document.body.classList.toggle("overlay-open", open);
+      document.documentElement.classList.toggle("overlay-open", open);
+    } catch(e){}
+  }
+  setInterval(syncOverlayScrollLock, 250);
+  document.addEventListener("click", function(){ setTimeout(syncOverlayScrollLock, 50); }, true);
+
+  // Bound the in-memory definition caches so a long session doesn't grow memory
+  // until iOS evicts/reloads the tab. Evicted entries are simply re-fetched.
+  function capCache(obj, keep){
+    if (!obj || typeof obj !== "object") return;
+    var keys = Object.keys(obj);
+    if (keys.length <= keep + 200) return;
+    for (var i = 0; i < keys.length - keep; i++) delete obj[keys[i]];
+  }
+  setInterval(function(){
+    try { if (typeof dictCache === "object") capCache(dictCache, 400); } catch(e){}
+    try { capCache(window.easyDictCache, 400); } catch(e){}
+  }, 15000);
+  window.addEventListener("beforeunload", function(){
+    try { window.persistActiveSession && window.persistActiveSession(); } catch(e){}
+    if (lsGet(K.PENDING) === "1") { try { navigator.sendBeacon && navigator.sendBeacon("/api/sync/merge", new Blob([JSON.stringify({ payload: buildPayload("beforeunload") })], { type:"application/json" })); } catch(e){} }
+  });
+
+  // ---- public API / compatibility shims -----------------------------------
+  window.cleanSyncV6 = {
+    build: buildPayload, apply: applyPayload, merge: mergePayloads, upgrade: upgradeToV6,
+    sync: doSync, pull: pull, push: push, counts: counts, schedule: scheduleSync,
+    lsHealth: lsHealth,
+    lastDiff: function(){ return window.__v6LastDiff || null; },
+    // Run on demand (e.g. in Safari Web Inspector) to see exactly what differs
+    // between this device and Drive, and whether localStorage is writable.
+    diagnose: function(){
+      return pull().then(function(pr){
+        var localP = buildPayload("diagnose");
+        var merged = mergePayloads(localP, pr.payload);
+        return {
+          connected: !!pr.connected,
+          ls: lsHealth(),
+          local: counts(localP),
+          remote: counts(pr.payload),
+          merged: counts(merged),
+          localVsRemote: diffSigParts(localP, pr.payload),
+          localVsMerged: diffSigParts(localP, merged)
+        };
+      });
+    }
+  };
+  // Old names some buttons/hooks may still call -> route to v6.
+  window.syncNowV5 = function(){ return doSync("manual", { redirect:true }); };
+  window.cloudSyncNow = syncNowFromSettings;
+  window.cloudsyncnow = syncNowFromSettings;
+  window.syncNowBackend = syncNowFromSettings;
+  window.cloudTriggerAutoSync = function(reason){ scheduleSync(reason || "trigger"); };
+  window.cloudAutoSync = window.cloudTriggerAutoSync;
+  window.autoCloudSync = window.cloudTriggerAutoSync;
+  window.scheduleCloudAutoSync = window.cloudTriggerAutoSync;
+  window.syncCloudAfterPractice = function(){ scheduleSync("practice-change"); };
+  window.scheduleAutoSyncV5 = function(reason){ scheduleSync(reason || "legacy-scheduleAutoSyncV5"); };
+  window.forceCloudRestoreV6 = function(){ return pull().then(function(pr){ if (pr.payload) applyPayload(pr.payload, { overwrite:true }); return counts(pr.payload); }); };
+
+  // Neutralize the old data-sync/restore functions: route them to v6 so no stray
+  // legacy caller can write to the wrong localStorage keys or push stale data.
+  // (Login UI — sign-in screen, enterIfConnectedOnce, button wiring — is left intact.)
+  window.backendMergeSync = function(){ return doSync("legacy-backendMergeSync").then(function(r){ return { connected: r.status === "synced", status: r.status }; }); };
+  window.backendStartupRestoreOrMerge = function(){ return doSync("legacy-startup-restore").then(function(r){ return { connected: r.status === "synced", status: r.status }; }); };
+  window.pushToDrive = function(){ return doSync("legacy-pushToDrive"); };
+  window.pullFromDrive = function(){ return pull().then(function(pr){ if (pr.payload) applyPayload(pr.payload); return { connected: !!pr.connected, payload: pr.payload }; }); };
+  window.syncNow = function(){ return doSync("legacy-syncNow", { redirect:true }); };
+  window.backendSyncFromSettings = syncNowFromSettings;
+  window.runExplicitPreferenceSync = function(){ scheduleSync("preference-change", 600); return Promise.resolve({ status:"scheduled-v6" }); };
+
+  // Unlock iOS audio on the first user gesture so programmatic pronunciation
+  // playback (incl. the autoplay observer) is allowed afterwards.
+  (function(){
+    var unlocked = false;
+    function unlock(){
+      if (unlocked) return; unlocked = true;
+      try {
+        var a = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=");
+        a.volume = 0; var p = a.play(); if (p && p.catch) p.catch(function(){});
+      } catch(e){}
+      document.removeEventListener("touchend", unlock, true);
+      document.removeEventListener("click", unlock, true);
+    }
+    document.addEventListener("touchend", unlock, true);
+    document.addEventListener("click", unlock, true);
+  })();
+
+  console.log(LOG, "clean sync v6 installed.");
+})();
+
+
+/* ============================================================
+   iPad hardware keyboard practice controls v1
+   - Enter submits spelling answers.
+   - Enter continues after correct-answer actions appear.
+   - Enter dismisses the compulsory wrong-answer teaching overlay.
+   ============================================================ */
+(function(){
+  if (window.__practiceHardwareKeyboardControlsV1) return;
+  window.__practiceHardwareKeyboardControlsV1 = true;
+
+  function isPracticePageActive() {
+    const page = document.querySelector(".page[data-page='practice']");
+    if (page && page.classList.contains("active")) return true;
+    const root = document.getElementById("practiceRoot");
+    return !!(root && root.getClientRects().length);
+  }
+
+  function visible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || 1) === 0) return false;
+    return !!el.getClientRects().length;
+  }
+
+  function clickVisible(selector) {
+    const btn = Array.from(document.querySelectorAll(selector)).find(visible);
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+  }
+
+  function handlePracticeEnter(ev) {
+    if (ev.key !== "Enter" || ev.metaKey || ev.ctrlKey || ev.altKey || ev.shiftKey || ev.isComposing) return;
+    const target = ev.target;
+    const tag = String(target?.tagName || "").toLowerCase();
+    if (tag === "textarea" || target?.isContentEditable) return;
+
+    const overlay = document.getElementById("easyAnswerOverlay");
+    if (overlay && overlay.classList.contains("show")) {
+      if (clickVisible("#learningOverlayContinueBtn, #easyAnswerOverlay .em-continue-btn, #easyAnswerOverlay button[onclick*='closeEasyAnswerOverlay']")) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        ev.stopImmediatePropagation();
+      }
+      return;
+    }
+
+    if (!isPracticePageActive()) return;
+
+    const spellInput = document.getElementById("spellInput");
+    const spellBtn = document.getElementById("checkSpellBtn");
+    if (spellInput && !spellInput.disabled && spellBtn && !spellBtn.disabled) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      spellBtn.click();
+      return;
+    }
+
+    if (clickVisible("#learningContinueBtn, #emContinueBtn, .em-correct-actions .em-action-btn.primary")) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+    }
+  }
+
+  document.addEventListener("keydown", handlePracticeEnter, true);
+
+  console.log("[Practice] hardware keyboard controls installed.");
+})();

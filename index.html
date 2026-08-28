@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#FAF7FF" />
+<title>VTC Medical Vocabulary</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,900&family=Nunito:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="VTC Medical Vocabulary">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+
+<link rel="stylesheet" href="/styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <div class="boot" id="boot">
+    <div class="b1">📚 Vocab</div>
+    <div class="b2">Loading your words…</div>
+  </div>
+
+  <div class="screen">
+    <!-- ===== HOME ===== -->
+    <div class="page active" data-page="home">
+      <div id="goalRoot"></div>
+    </div>
+
+    <!-- ===== WORDS ===== -->
+    <div class="page" data-page="words">
+      <div class="words-header simple-words-header" id="wordsHeader">
+        <div class="words-titlebar simple-titlebar">
+          <div class="words-title display">Words</div>
+          <div class="right simple-actions">
+            <button class="header-icon-btn" id="filterBtn" type="button" onclick="toggleFilterPanel()">⚙️</button>
+            <button class="header-icon-btn" id="searchToggleBtn" type="button" onclick="toggleSearchMode()">🔍</button>
+            <button class="header-icon-btn" id="layoutToggleBtn" type="button" onclick="toggleLayoutMode()">▦</button>
+            <button class="header-icon-btn" id="shuffleBtn" type="button" onclick="toggleShuffleMode()">🔀</button>
+          </div>
+        </div>
+        <div class="search-wrap simple-search-row" id="searchRow">
+          <input id="searchInput" class="search-input" placeholder="Search word, meaning, level, topic…" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          <button class="search-clear" id="searchClear" onclick="clearSearch()">✕</button>
+        </div>
+        <div class="active-filter-summary" id="activeFilterSummary"></div>
+      </div>
+      <div class="filter-panel-backdrop" id="filterPanelBackdrop" onclick="closeFilterPanel()"></div>
+      <div class="filter-panel" id="filterPanel" aria-hidden="true">
+        <div class="filter-panel-handle"></div>
+        <div class="filter-panel-top">
+          <div>
+            <div class="filter-panel-title display">Filters</div>
+            <div class="filter-panel-sub">Choose level, subject area, topic group, and practice status</div>
+          </div>
+          <button class="filter-close-btn" onclick="closeFilterPanel()">✕</button>
+        </div>
+        <div class="filter-panel-body" id="filterPanelBody"></div>
+        <div class="filter-panel-bottom">
+          <button class="filter-reset-btn" onclick="resetWordFilters()">Reset</button>
+          <button class="filter-apply-btn" onclick="closeFilterPanel()">Done</button>
+        </div>
+      </div>
+      <div id="wordsBody"></div>
+    </div>
+
+    <!-- ===== PRACTICE ===== -->
+    <div class="page" data-page="practice">
+      <div id="practiceRoot"></div>
+    </div>
+
+    <!-- ===== SETTINGS ===== -->
+    <div class="page" data-page="settings">
+      <div class="practice-hero">
+        <div class="practice-title display">Settings</div>
+        <div class="practice-sub">Backup, sync, and app options</div>
+      </div>
+      <div class="settings-list">
+        <div class="settings-group-label" id="learningSettingsLabel">Learning options</div>
+        <div class="settings-group" id="learningSettingsGroup">
+          <div class="settings-row learning-setting-row">
+            <div class="l">Dictionary Source<div class="desc" id="dictSourceDesc">Collegiate dictionary</div></div>
+            <div class="learning-segment" role="group" aria-label="Dictionary Source">
+              <button type="button" id="dictSourceCollegiateBtn" onclick="setDictionarySourceFromUser('collegiate')">Collegiate</button>
+              <button type="button" id="dictSourceLearnerBtn" onclick="setDictionarySourceFromUser('learner')">Learner</button>
+            </div>
+          </div>
+          <div class="settings-row learning-setting-row">
+            <div class="l">Traditional Chinese translations<div class="desc" id="zhTranslateDesc">Off</div></div>
+            <div class="learning-segment" role="group" aria-label="Traditional Chinese translations">
+              <button type="button" id="zhModeOffBtn"  onclick="setChineseTranslationModeFromUser('off')">Off</button>
+              <button type="button" id="zhModeBlurBtn" onclick="setChineseTranslationModeFromUser('blur')">Blur</button>
+              <button type="button" id="zhModeOnBtn"   onclick="setChineseTranslationModeFromUser('on')">On</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-group-label">Data</div>
+        <div class="settings-group">
+          <div class="settings-row" onclick="exportBackup()"><div class="l">Export backup<div class="desc">Save progress & dictionary cache</div></div><div class="chev">›</div></div>
+          <div class="settings-row" onclick="$('backupFile').click()"><div class="l">Import backup<div class="desc">Restore from a backup file</div></div><div class="chev">›</div></div>
+          <div class="settings-row" onclick="$('importFile').click()"><div class="l">Import vocabulary<div class="desc">Merge new words from JSON</div></div><div class="chev">›</div></div>
+          <div class="settings-row danger" onclick="resetProgress()"><div class="l">Reset progress<div class="desc">Clear stats and cache (keeps words)</div></div><div class="chev">›</div></div>
+        </div>
+
+        <div class="settings-group-label">Cloud sync</div>
+        <div class="settings-group" id="cloudSyncSettingsGroup">
+          <div class="settings-row"><div class="l">Loading…<div class="desc">Setting up Google Drive sync</div></div></div>
+        </div>
+
+        <div class="settings-group-label">About</div>
+        <div class="settings-group">
+          <div class="settings-row" onclick="checkHealth()"><div class="l">Server status<div class="desc" id="healthDesc">Tap to check</div></div><div class="chev">›</div></div>
+        </div>
+      </div>
+      <input type="file" id="importFile" accept=".json" style="display:none" />
+      <input type="file" id="backupFile" accept=".json" style="display:none" />
+    </div>
+  </div>
+
+  <!-- ===== BOTTOM SHEET ===== -->
+  <div class="backdrop" id="backdrop" onclick="closeSheet()"></div>
+  <div class="sheet" id="sheet">
+    <div class="grab"></div>
+    <div class="swipe-overlay" id="swipeOverlay">
+      <div class="swipe-label left" id="swipeLabelLeft">← Need practice</div>
+      <div class="swipe-label right" id="swipeLabelRight">Know it →</div>
+    </div>
+    <div class="sheet-flash" id="sheetFlash"></div>
+    <div class="breadcrumb hidden" id="breadcrumb">
+      <button class="crumb-back" onclick="crumbBack()">←</button>
+      <div class="crumb-chain" id="crumbChain"></div>
+    </div>
+    <div class="sheet-body" id="sheetBody">
+      <div class="hero-row">
+        <div class="hero-text">
+          <div class="hero-word" id="heroWord">—</div>
+          <div class="hero-pron" id="heroPron"></div>
+          <div class="gram-chips" id="heroChips"></div>
+          <div class="hero-inflections" id="heroInflections"></div>
+        </div>
+        <button class="hero-audio" id="audioBtn" onclick="playAudio()" disabled>🔊</button>
+      </div>
+      <div class="tab-row">
+        <button class="active" data-tab="meaning" onclick="setSheetTab('meaning')">Definitions</button>
+        <button data-tab="related" onclick="setSheetTab('related')">Related</button>
+        <button data-tab="synonyms" onclick="setSheetTab('synonyms')">Synonym</button>
+      </div>
+      <div class="tab-content" id="tabContent"></div>
+    </div>
+  </div>
+
+  <!-- ===== GAME OVERLAY ===== -->
+  <div class="game-overlay" id="gameOverlay">
+    <div class="game-topbar">
+      <button class="game-close" onclick="exitGame()">✕</button>
+      <div class="progress-dots" id="progressDots"></div>
+      <div class="game-streak" id="gameStreak">🔥0</div>
+    </div>
+    <div class="game-body" id="gameBody"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- ===== BOTTOM NAV ===== -->
+  <nav class="navbar">
+    <button class="navbtn active" data-nav="home" onclick="goto('home')"><span class="ico">🎯</span>Goal</button>
+    <button class="navbtn" data-nav="practice" onclick="goto('practice')"><span class="ico">🎮</span>Practice</button>
+    <button class="navbtn" data-nav="words" onclick="goto('words')"><span class="ico">📚</span>Words</button>
+    <button class="navbtn" data-nav="settings" onclick="goto('settings')"><span class="ico">⚙️</span>Settings</button>
+  </nav>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
