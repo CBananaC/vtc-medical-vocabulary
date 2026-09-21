@@ -36,7 +36,9 @@ function normalizeBookmarkMap(source) {
   const out = {};
   if (!source || typeof source !== "object" || Array.isArray(source)) return out;
   Object.keys(source).forEach(key => {
-    const normalized = typeof normalizeKey === "function" ? normalizeKey(key) : String(key || "").trim().toLowerCase();
+    // This runs before the later `normalizeKey` const is initialized on first load.
+    // Keep the small, equivalent normalization local so persisted bookmarks load safely.
+    const normalized = String(key || "").trim().toLowerCase().replace(/\s+/g, " ");
     const value = source[key];
     if (!normalized) return;
     out[normalized] = typeof value === "boolean"
@@ -62,12 +64,21 @@ function setWordBookmarked(wordOrKey, value) {
   if (!key) return false;
   const bookmarked = !!value;
   if (isWordBookmarked(key) === bookmarked) return bookmarked;
+  const previous = bookmarkState[key];
   bookmarkState[key] = { bookmarked, updatedAt: new Date().toISOString() };
   const serialized = JSON.stringify(bookmarkState);
-  const saved = typeof safeLocalSet === "function"
-    ? safeLocalSet(LS.BOOKMARKS, serialized)
-    : (() => { try { localStorage.setItem(LS.BOOKMARKS, serialized); return true; } catch { return false; } })();
-  if (!saved) return false;
+  let saved = false;
+  try {
+    localStorage.setItem(LS.BOOKMARKS, serialized);
+    saved = localStorage.getItem(LS.BOOKMARKS) === serialized;
+  } catch (err) {
+    console.warn("Bookmark local save failed:", err);
+  }
+  if (!saved) {
+    if (previous) bookmarkState[key] = previous;
+    else delete bookmarkState[key];
+    return isWordBookmarked(key);
+  }
   try { window.renderFilterPanel?.(); window.updateHeaderButtons?.(); window.renderWords?.(); } catch {}
   try { window.renderProgressTab?.(); } catch {}
   return bookmarked;
@@ -1387,6 +1398,10 @@ function hasActiveWordFilters() {
 function toggleFilterPanel() {
   filterPanelOpen = !filterPanelOpen;
   renderFilterPanel();
+  if (filterPanelOpen) {
+    const panelBody = $("filterPanelBody");
+    if (panelBody) panelBody.scrollTop = 0;
+  }
   $("filterPanel")?.classList.toggle("show", filterPanelOpen);
   $("filterPanelBackdrop")?.classList.toggle("show", filterPanelOpen);
   document.body.classList.toggle("filter-panel-open", filterPanelOpen);
@@ -5018,13 +5033,14 @@ setTimeout(() => {
 
   // ---------- State ----------
   const FILTER_DIMS = [
-    { key: "courses",        field: "course",                 title: "Course" },
-    { key: "levels",         field: "level",                  title: "Level" },
-    { key: "subjectAreas",   field: "topHeader",              title: "Subject area" },
-    { key: "topicGroups",    field: "suggestedCombinedTitle", title: "Topic group" },
-    { key: "sourceTypes",    field: "sourceType",             title: "Word source" },
-    { key: "skillViews",     field: "skillView",              title: "Skill view" },
-    { key: "statuses",       field: "status",                 title: "Practice status" }
+    { key: "levels",         field: "level",       title: "Level" },
+    { key: "courses",        field: "course",      title: "Course" },
+    { key: "lectures",       field: "lecture",     title: "Lecture" },
+    { key: "tutorials",      field: "tutorial",    title: "Tutorial" },
+    { key: "workshops",      field: "workshop",    title: "Workshop" },
+    { key: "topicGroups",    field: "topicGroup",  title: "Topic Group" },
+    { key: "skillViews",     field: "skillView",   title: "Skill View" },
+    { key: "statuses",       field: "status",      title: "Practice Status" }
   ];
 
   const STATUS_LABELS = {
@@ -5082,6 +5098,42 @@ setTimeout(() => {
   function cloneFilterConfig(filter) {
     const out = emptyFilter();
     for (const d of FILTER_DIMS) out[d.key] = [...((filter && filter[d.key]) || [])];
+
+    // Migrate saved wizard filters from the old Level → Subject area → Topic
+    // group model without changing the saved progress or the vocabulary data.
+    const oldCourses = Array.isArray(filter?.courses) ? filter.courses.map(String) : [];
+    const oldSubjects = Array.isArray(filter?.subjectAreas) ? filter.subjectAreas.map(String) : [];
+    const alreadyScopedCourses = oldCourses.filter(value => value.includes("::"));
+    if (alreadyScopedCourses.length) {
+      out.courses = [...new Set(alreadyScopedCourses)];
+    } else if (oldCourses.length && oldSubjects.length) {
+      out.courses = [...new Set(oldCourses.flatMap(code => oldSubjects.map(title => `${code}::${title}`)))];
+    } else if (oldCourses.length) {
+      // A legacy code-only choice continues to match every short course under it.
+      out.courses = [...new Set(oldCourses)];
+    } else if (oldSubjects.length) {
+      out.courses = [...new Set(oldSubjects)];
+    }
+
+    for (const oldTopic of (Array.isArray(filter?.topicGroups) ? filter.topicGroups : [])) {
+      const session = sessionInfoForPath({ sessionLabel: oldTopic, sourceTopic: oldTopic, topic: oldTopic });
+      if (!session) continue;
+      const key = session.type === "lecture" ? "lectures" : session.type === "tutorial" ? "tutorials" : "workshops";
+      if (!out[key].includes(session.number)) out[key].push(session.number);
+    }
+    // Session numbers are meaningful only within one course. Drop legacy
+    // global or multi-course session selections instead of recreating a mixed
+    // Lecture 1 / Workshop 1 pool without a single course context.
+    if (out.courses.length !== 1) {
+      out.lectures = [];
+      out.tutorials = [];
+      out.workshops = [];
+    }
+    // Level is intentionally a single “All” choice, and Topic Group is a
+    // visible placeholder until topic metadata is ready.
+    out.levels = [];
+    out.topicGroups = [];
+    delete out.sourceTypes;
     return out;
   }
 
@@ -5324,34 +5376,68 @@ setTimeout(() => {
 
   window.exactPracticePaths = exactPracticePaths;
 
+  function courseFilterValue(path) {
+    const code = cleanP(path?.course || path?.courseCode || path?.course_code || "");
+    const title = cleanP(path?.courseTitle || path?.course_title || path?.subject || "");
+    return code ? `${code}::${title}` : title;
+  }
+
+  function courseFilterLabel(value) {
+    const [code, ...titleParts] = String(value || "").split("::");
+    const title = titleParts.join("::");
+    return code && title ? `${code} · ${title}` : (title || code);
+  }
+
+  function sessionInfoForPath(path) {
+    const candidates = [path?.sessionLabel, path?.session_label, path?.sourceTopic, path?.source_topic, path?.topic]
+      .map(value => String(value || "").trim()).filter(Boolean);
+    for (const candidate of candidates) {
+      const match = candidate.match(/\b(lecture|tutorial|workshop)\s*(?:no\.?\s*)?(\d+)\b/i);
+      if (match) return { type: match[1].toLowerCase(), number: String(Number(match[2])) };
+    }
+    return null;
+  }
+
+  window.vtcFilterTaxonomy = Object.freeze({ courseFilterValue, courseFilterLabel, sessionInfoForPath });
+
   function pathMatchesFilter(path, filter, exceptField) {
     if (!path) return false;
     if (exceptField !== "course" && filter.courses?.length) {
-      if (!filter.courses.map(normP).includes(normP(path.course || ""))) return false;
+      const courseValues = [
+        courseFilterValue(path),
+        cleanP(path.course || path.courseCode || path.course_code || ""),
+        cleanP(path.courseTitle || path.course_title || path.subject || "")
+      ].map(normP);
+      if (!filter.courses.some(value => courseValues.includes(normP(value)))) return false;
     }
-    if (exceptField !== "level" && filter.levels?.length) {
-      if (!filter.levels.map(normP).includes(normP(path.level))) return false;
+    const session = sessionInfoForPath(path);
+    const sessionFacets = [
+      ["lecture", "lectures"],
+      ["tutorial", "tutorials"],
+      ["workshop", "workshops"]
+    ];
+    for (const [field, key] of sessionFacets) {
+      if (exceptField !== field && filter[key]?.length) {
+        if (!session || session.type !== field || !filter[key].map(normP).includes(normP(session.number))) return false;
+      }
     }
-    if (exceptField !== "topHeader" && filter.subjectAreas?.length) {
-      if (!filter.subjectAreas.map(normP).includes(normP(path.subject))) return false;
-    }
-    if (exceptField !== "suggestedCombinedTitle" && filter.topicGroups?.length) {
-      const topics = [path.topic, path.sourceTopic].filter(Boolean).map(normP);
-      if (!filter.topicGroups.map(normP).some(topic => topics.includes(topic))) return false;
-    }
+    // Level has only the “All” option; Topic Group is intentionally empty.
     return true;
+  }
+
+  function filterHasPathCriteria(filter) {
+    return !!(filter.courses?.length || filter.lectures?.length || filter.tutorials?.length || filter.workshops?.length);
+  }
+
+  function wordMatchesPathFilter(w, filter, exceptField = "") {
+    if (!filterHasPathCriteria(filter)) return true;
+    return exactPracticePaths(w).some(path => pathMatchesFilter(path, filter, exceptField));
   }
 
   function wordMatchesMultiFilter(w, filter) {
     const skillView = selectedPracticeSkillView(filter);
     if (filter.statuses?.length && !filter.statuses.some(st => wordMatchesPracticeStatus(w, st, skillView))) return false;
-    const sourceType = selectedPracticeSourceType(filter);
-    if (sourceType === "related_created" && !isRelatedCreatedWord(w)) return false;
-    if (sourceType === "builtin" && isRelatedCreatedWord(w)) return false;
-    // If no path-based filters, the word matches (status already passed).
-    const hasPathFilter = (filter.courses?.length || filter.levels?.length || filter.subjectAreas?.length || filter.topicGroups?.length);
-    if (!hasPathFilter) return true;
-    return exactPracticePaths(w).some(p => pathMatchesFilter(p, filter, ""));
+    return wordMatchesPathFilter(w, filter);
   }
 
   function resolvePool(filter) {
@@ -5360,88 +5446,68 @@ setTimeout(() => {
 
   // Counts available for a given dimension, given the OTHER dimensions
   function optionCountsFor(field, filter) {
-    const temp = {
-      courses: [...(filter.courses || [])],
-      levels: [...(filter.levels || [])],
-      subjectAreas: [...(filter.subjectAreas || [])],
-      topicGroups: [...(filter.topicGroups || [])],
-      sourceTypes: [...(filter.sourceTypes || [])],
-      skillViews: [...(filter.skillViews || [])],
-      statuses: [...(filter.statuses || [])]
+    const temp = cloneFilterConfig(filter);
+    const groupKey = {
+      course: "courses",
+      lecture: "lectures",
+      tutorial: "tutorials",
+      workshop: "workshops",
+      topicGroup: "topicGroups",
+      skillView: "skillViews",
+      status: "statuses"
+    }[field];
+    if (groupKey) temp[groupKey] = [];
+
+    const view = selectedPracticeSkillView(temp);
+    const passesBase = (word, { ignoreStatus = false, ignoreSkill = false } = {}) => {
+      if (!ignoreStatus && temp.statuses.length) {
+        const statusView = ignoreSkill ? "all" : view;
+        if (!temp.statuses.some(status => wordMatchesPracticeStatus(word, status, statusView))) return false;
+      }
+      return wordMatchesPathFilter(word, temp);
     };
-    if (field === "course") temp.courses = [];
-    if (field === "level") temp.levels = [];
-    if (field === "topHeader") temp.subjectAreas = [];
-    if (field === "suggestedCombinedTitle") temp.topicGroups = [];
-    if (field === "sourceType") temp.sourceTypes = [];
-    if (field === "skillView") temp.skillViews = [];
-    if (field === "status") temp.statuses = [];
+
+    if (field === "level") {
+      return [["__all", words.filter(word => passesBase(word)).length]];
+    }
+    if (field === "topicGroup") return [];
 
     if (field === "skillView") {
-      const base = words.filter(w => {
-        if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, "all"))) return false;
-        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
-        return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
-      });
-      return [
-        ["all", base.length],
-        ["meaning", base.length],
-        ["spelling", base.length]
-      ];
+      const count = words.filter(word => passesBase(word, { ignoreSkill: true })).length;
+      return [["all", count], ["meaning", count], ["spelling", count]];
     }
 
-    if (field === "sourceType") {
-      const base = words.filter(w => {
-        if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, selectedPracticeSkillView(temp)))) return false;
-        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
-        return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
-      });
-      return [
-        ["all", base.length],
-        ["builtin", base.filter(w => !isRelatedCreatedWord(w)).length],
-        ["related_created", base.filter(isRelatedCreatedWord).length]
-      ];
-    }
-
-    const map = new Map();
-    const skillView = selectedPracticeSkillView(temp);
-    if (field === "status") map.set("bookmarked", 0);
-    for (const w of words) {
-      const sourceType = selectedPracticeSourceType(temp);
-      if (field !== "sourceType" && sourceType === "related_created" && !isRelatedCreatedWord(w)) continue;
-      if (field !== "sourceType" && sourceType === "builtin" && isRelatedCreatedWord(w)) continue;
-      if (field !== "status" && temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, skillView))) continue;
-
-      if (field === "status") {
-        // Word must satisfy path filters before its status is counted
-        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
-        if (hasPathFilter && !exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""))) continue;
-        for (const s of ["not_practiced", "learning", "known", "mastered", "bookmarked"]) {
-          if (wordMatchesPracticeStatus(w, s, skillView)) map.set(s, (map.get(s) || 0) + 1);
-        }
-        continue;
-      }
-
-      const valsForWord = new Set();
-      for (const p of exactPracticePaths(w)) {
-        if (!pathMatchesFilter(p, temp, field)) continue;
-        if (field === "level") valsForWord.add(p.level);
-        else if (field === "course") valsForWord.add(p.course);
-        else if (field === "topHeader") valsForWord.add(p.subject);
-        else if (field === "suggestedCombinedTitle") valsForWord.add(p.topic);
-      }
-      for (const val of valsForWord) {
-        if (cleanP(val)) map.set(val, (map.get(val) || 0) + 1);
-      }
-    }
     if (field === "status") {
-      return ["not_practiced", "learning", "known", "mastered", "bookmarked"].map(k => [k, map.get(k) || 0]);
-    }
-    return [...map.entries()].sort((a, b) => {
-      if (field === "level") {
-        return (P_LEVEL_ORDER[a[0]] ?? 99) - (P_LEVEL_ORDER[b[0]] ?? 99) || a[0].localeCompare(b[0]);
+      const counts = new Map(["not_practiced", "learning", "known", "mastered", "bookmarked"].map(status => [status, 0]));
+      for (const word of words) {
+        if (!passesBase(word, { ignoreStatus: true })) continue;
+        for (const status of counts.keys()) {
+          if (wordMatchesPracticeStatus(word, status, view)) counts.set(status, counts.get(status) + 1);
+        }
       }
-      return a[0].localeCompare(b[0]);
+      return [...counts.entries()];
+    }
+
+    const counts = new Map();
+    for (const word of words) {
+      if (!passesBase(word)) continue;
+      const values = new Set();
+      for (const path of exactPracticePaths(word)) {
+        if (!pathMatchesFilter(path, temp, field)) continue;
+        if (field === "course") {
+          const value = courseFilterValue(path);
+          if (value) values.add(value);
+        } else {
+          const session = sessionInfoForPath(path);
+          if (session?.type === field) values.add(session.number);
+        }
+      }
+      for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+
+    return [...counts.entries()].sort((a, b) => {
+      if (field === "course") return courseFilterLabel(a[0]).localeCompare(courseFilterLabel(b[0]));
+      return Number(a[0]) - Number(b[0]);
     });
   }
 
@@ -5475,7 +5541,8 @@ setTimeout(() => {
       if (!sel.length) continue;
       const labels = d.field === "status" ? sel.map(s => STATUS_LABELS[s] || s)
                    : d.field === "skillView" ? sel.map(s => SKILL_VIEW_LABELS[s] || s)
-                   : d.field === "sourceType" ? sel.map(s => SOURCE_TYPE_LABELS[s] || s)
+                   : d.field === "course" ? sel.map(courseFilterLabel)
+                   : ["lecture", "tutorial", "workshop"].includes(d.field) ? sel.map(value => `${d.title} ${value}`)
                    : sel;
       parts.push(labels.join(", "));
     }
@@ -5716,30 +5783,60 @@ setTimeout(() => {
     const canProceed = pool.length > 0;
 
     let chipGroups = "";
+    let sessionPromptAdded = false;
+    const selectedCourses = wizard.filter.courses || [];
+    const oneCourseSelected = selectedCourses.length === 1;
     for (const d of FILTER_DIMS) {
+      const isSessionDimension = ["lecture", "tutorial", "workshop"].includes(d.field);
+      if (isSessionDimension && !oneCourseSelected) {
+        if (!sessionPromptAdded) {
+          const note = selectedCourses.length
+            ? "Choose one course above to see its session numbers without mixing courses."
+            : "Select one course above to see its Lecture, Tutorial, and Workshop sessions separately.";
+          chipGroups += `
+            <div class="pw-section">
+              <div class="pw-section-title">Course sessions</div>
+              <div class="pw-filter-empty-note">${note}</div>
+            </div>
+          `;
+          sessionPromptAdded = true;
+        }
+        continue;
+      }
       const counts = optionCountsFor(d.field, wizard.filter);
+      if (d.field === "topicGroup") {
+        chipGroups += `
+          <div class="pw-section">
+            <div class="pw-section-title">${escapeHtml(d.title)}</div>
+            <div class="pw-filter-empty-note">No topic groups yet.</div>
+          </div>
+        `;
+        continue;
+      }
       if (counts.length === 0) continue;
       const sel = wizard.filter[d.key] || [];
-      let chipRows = counts;
-      if (d.field === "level") {
-        const allActive = !sel.length;
-        chipRows = [["__all", resolvePool({ ...wizard.filter, levels: [] }).length], ...counts];
-      }
+      const chipRows = d.field === "level"
+        ? [["__all", counts[0]?.[1] || 0]]
+        : counts;
       const chips = chipRows.map(([val, n]) => {
         const label = d.field === "status" ? (STATUS_LABELS[val] || val)
                     : d.field === "skillView" ? (SKILL_VIEW_LABELS[val] || val)
-                    : d.field === "sourceType" ? (SOURCE_TYPE_LABELS[val] || val)
+                    : d.field === "course" ? courseFilterLabel(val)
+                    : ["lecture", "tutorial", "workshop"].includes(d.field) ? val
                     : val === "__all" ? "All"
                     : val;
         const active = sel.includes(val);
-        const isAllActive = (val === "__all" || ((d.field === "skillView" || d.field === "sourceType") && val === "all")) && !sel.length;
+        const isAllActive = (val === "__all" || (d.field === "skillView" && val === "all")) && !sel.length;
         const safeVal = String(val).replace(/'/g, "\\'");
         const bookmarkClass = d.field === "status" && val === "bookmarked" ? " bookmark-filter-chip" : "";
         return `<button class="pw-chip${bookmarkClass} ${active || isAllActive ? "active" : ""}" onclick="practiceToggleFilter('${d.key}','${escapeHtml(safeVal)}')">${escapeHtml(label)}<span class="n">${n}</span></button>`;
       }).join("");
+      const sectionTitle = isSessionDimension
+        ? `${d.title} · ${courseFilterLabel(selectedCourses[0])}`
+        : d.title;
       chipGroups += `
         <div class="pw-section">
-          <div class="pw-section-title">${escapeHtml(d.title)}</div>
+          <div class="pw-section-title">${escapeHtml(sectionTitle)}</div>
           <div class="pw-chip-row">${chips}</div>
         </div>
       `;
@@ -5870,6 +5967,11 @@ setTimeout(() => {
   window.practiceToggleFilter = function(dimKey, value) {
     if (value === "__all") {
       wizard.filter[dimKey] = [];
+      if (dimKey === "courses") {
+        wizard.filter.lectures = [];
+        wizard.filter.tutorials = [];
+        wizard.filter.workshops = [];
+      }
       if (dimKey !== "skillViews") wizard.repeatPoolKeys = null;
       renderPracticeRoot();
       return;
@@ -5888,6 +5990,11 @@ setTimeout(() => {
     const arr = wizard.filter[dimKey] || (wizard.filter[dimKey] = []);
     const i = arr.indexOf(value);
     if (i >= 0) arr.splice(i, 1); else arr.push(value);
+    if (dimKey === "courses") {
+      wizard.filter.lectures = [];
+      wizard.filter.tutorials = [];
+      wizard.filter.workshops = [];
+    }
     wizard.repeatPoolKeys = null;
     renderPracticeRoot();
   };
@@ -20554,7 +20661,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       const pctM = r.total ? (r.mastered / r.total) * 100 : 0;
       const pctK = r.total ? ((r.known || 0) / r.total) * 100 : 0;
       const pctL = r.total ? (r.learning / r.total) * 100 : 0;
-      const pctB = r.total ? ((r.bookmarked || 0) / r.total) * 100 : 0;
       const done = r.mastered + (r.known || 0);
       const notP = r.total - r.mastered - (r.known || 0) - r.learning;
       const safeName = encodeURIComponent(r.name);
@@ -20569,9 +20675,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
             <div class="g-prog-seg mastered" style="width:${pctM}%"></div>
             <div class="g-prog-seg known" style="width:${pctK}%"></div>
             <div class="g-prog-seg learning" style="width:${pctL}%"></div>
-          </div>
-          <div class="g-prog-bookmark-track" role="img" aria-label="${r.bookmarked || 0} bookmarked of ${r.total}" title="${r.bookmarked || 0} bookmarked">
-            <div class="g-prog-bookmark-fill" style="width:${pctB}%"></div>
           </div>
           <div class="g-prog-foot">${r.mastered} ${masteredLabel} · ${r.known || 0} known · ${r.learning} learning · ${notP} untouched · <span class="g-prog-bookmark-count">★ ${r.bookmarked || 0} Bookmarked</span></div>
         </div>`;
@@ -21001,16 +21104,41 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     return true;
   }
 
-  function wordHasVisiblePathV2(w) {
-    try {
-      if (typeof wordMatchesMeta === "function") {
-        if (!wordMatchesMeta(w, "level", currentLevelFilter)) return false;
-        if (!wordMatchesMeta(w, "topHeader", currentTopHeaderFilter)) return false;
-        if (!wordMatchesMeta(w, "suggestedCombinedTitle", currentBoldTitleFilter)) return false;
-        return true;
+  const taxonomy = window.vtcFilterTaxonomy || {};
+  const wordsTaxonomyFilter = {
+    course: "__all",
+    lecture: "__all",
+    tutorial: "__all",
+    workshop: "__all"
+  };
+  currentLevelFilter = "__all";
+  currentTopHeaderFilter = "__all";
+  currentBoxedBoldFilter = "__all";
+  currentBoldTitleFilter = "__all";
+  wordsSourceFilter = "all";
+
+  function wordHasVisiblePathV2(w, exceptField = "") {
+    const paths = typeof window.exactPracticePaths === "function" ? window.exactPracticePaths(w) : [];
+    if (!paths.length) return true;
+    return paths.some(path => {
+      if (exceptField !== "course" && wordsTaxonomyFilter.course !== "__all") {
+        const values = [
+          taxonomy.courseFilterValue?.(path),
+          path.course,
+          path.courseCode,
+          path.courseTitle,
+          path.subject
+        ].filter(Boolean).map(value => String(value).trim().toLowerCase());
+        if (!values.includes(String(wordsTaxonomyFilter.course).trim().toLowerCase())) return false;
       }
-    } catch {}
-    return true;
+      const session = taxonomy.sessionInfoForPath?.(path);
+      for (const field of ["lecture", "tutorial", "workshop"]) {
+        if (field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
+          if (!session || session.type !== field || session.number !== wordsTaxonomyFilter[field]) return false;
+        }
+      }
+      return true;
+    });
   }
 
   // Re-derive wordStatus per current skill selector
@@ -21025,6 +21153,24 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     try { localStorage.setItem(LS_KEYS.WORDS_SKILL, s); } catch {}
     if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
     if (typeof renderWords === "function") renderWords();
+    window.updateHeaderButtons?.();
+  };
+
+  window.setWordsTaxonomyFilter = function(field, value) {
+    if (field === "level") return; // Level currently has only the All option.
+    if (!Object.prototype.hasOwnProperty.call(wordsTaxonomyFilter, field)) return;
+    const nextValue = value === "__all" || wordsTaxonomyFilter[field] === value ? "__all" : String(value);
+    const courseChanged = field === "course" && nextValue !== wordsTaxonomyFilter.course;
+    wordsTaxonomyFilter[field] = nextValue;
+    if (courseChanged) {
+      wordsTaxonomyFilter.lecture = "__all";
+      wordsTaxonomyFilter.tutorial = "__all";
+      wordsTaxonomyFilter.workshop = "__all";
+    }
+    shuffledWordKeys = [];
+    window.renderFilterPanel?.();
+    if (typeof renderWords === "function") renderWords();
+    window.updateHeaderButtons?.();
   };
 
   window.setWordsSourceFilter = function(s) {
@@ -21047,124 +21193,143 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       shuffledWordKeys = [];
       if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
       if (typeof renderWords === "function") renderWords();
+      window.updateHeaderButtons?.();
       return;
     }
     const result = typeof _origSetWordFilter === "function" ? _origSetWordFilter(field, value) : undefined;
     return result;
   };
 
-  // Patch renderFilterPanel to add a Skill selector row at the top.
-  // We store the captured original on window so we can call through to the
-  // current legacy version even after hardReoverride re-asserts ours later.
-  window.__origRenderFilterPanelForSkill = window.renderFilterPanel;
+  function wordsCountBase(exceptField = "", ignoreStatus = false) {
+    return (typeof words !== "undefined" ? words : []).filter(word =>
+      wordHasVisiblePathV2(word, exceptField) &&
+      (ignoreStatus || currentStatusFilter === "__all" || wordMatchesStatusFilterV2(word, currentStatusFilter))
+    );
+  }
+
+  function wordsCourseOptions() {
+    const counts = new Map();
+    for (const word of wordsCountBase("course")) {
+      const values = new Set((window.exactPracticePaths?.(word) || [])
+        .filter(path => wordHasVisiblePathV2({ ...word, exactSuggestedCombinedPaths: [path] }, "course"))
+        .map(path => taxonomy.courseFilterValue?.(path)).filter(Boolean));
+      for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => (taxonomy.courseFilterLabel?.(a[0]) || a[0]).localeCompare(taxonomy.courseFilterLabel?.(b[0]) || b[0]));
+  }
+
+  function wordsSessionOptions(field) {
+    const counts = new Map();
+    for (const word of wordsCountBase(field)) {
+      const values = new Set();
+      for (const path of window.exactPracticePaths?.(word) || []) {
+        if (!wordHasVisiblePathV2({ ...word, exactSuggestedCombinedPaths: [path] }, field)) continue;
+        const session = taxonomy.sessionInfoForPath?.(path);
+        if (session?.type === field) values.add(session.number);
+      }
+      for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
+  }
+
+  function wordsFilterGroup(title, field, options, selected) {
+    const chips = options.map(([value, label, count]) => {
+      const safeValue = String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+      return `<button class="filter-chip ${selected === value ? "active" : ""}" onclick="setWordsTaxonomyFilter('${field}','${escapeHtml(safeValue)}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+    }).join("");
+    return `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">${chips}</div></div>`;
+  }
+
+  // Final Words filter tree: Level → Course → session types → empty Topic
+  // Group placeholder → Skill View → Practice Status.
   window.renderFilterPanel = function() {
-    const orig = window.__origRenderFilterPanelForSkill;
-    if (typeof orig === "function") orig();
     const body = document.getElementById("filterPanelBody");
     if (!body) return;
-    // Inject skill row once
-    let skillRow = document.getElementById("filterPanelSkillRow");
-    if (!skillRow) {
-      skillRow = document.createElement("div");
-      skillRow.id = "filterPanelSkillRow";
-      skillRow.className = "filter-group";
-      body.prepend(skillRow);
-    }
-    skillRow.innerHTML = `
-      <div class="filter-group-title">Skill view</div>
-      <div class="filter-chip-row">
+    const allCount = wordsCountBase("level").length;
+    const visibleWords = wordsCountBase("", true);
+    const statusCount = status => visibleWords.filter(word => wordMatchesStatusFilterV2(word, status)).length;
+    const sessionGroup = (type, title) => {
+      const options = wordsSessionOptions(type);
+      if (!options.length) return "";
+      const courseLabel = taxonomy.courseFilterLabel?.(wordsTaxonomyFilter.course) || wordsTaxonomyFilter.course;
+      return wordsFilterGroup(`${title} · ${courseLabel}`, type, [
+        ["__all", "All", wordsCountBase(type).length],
+        ...options.map(([number, count]) => [number, number, count])
+      ], wordsTaxonomyFilter[type]);
+    };
+    const sessionGroups = wordsTaxonomyFilter.course === "__all"
+      ? '<div class="filter-group"><div class="filter-group-title">Course sessions</div><div class="filter-empty-note">Select one course above to see its Lecture, Tutorial, and Workshop sessions separately.</div></div>'
+      : [sessionGroup("lecture", "Lecture"), sessionGroup("tutorial", "Tutorial"), sessionGroup("workshop", "Workshop")].filter(Boolean).join("");
+    body.innerHTML = [
+      wordsFilterGroup("Level", "level", [["__all", "All", allCount]], "__all"),
+      wordsFilterGroup("Course", "course", [
+        ["__all", "All", wordsCountBase("course").length],
+        ...wordsCourseOptions().map(([value, count]) => [value, taxonomy.courseFilterLabel?.(value) || value, count])
+      ], wordsTaxonomyFilter.course),
+      sessionGroups,
+      '<div class="filter-group"><div class="filter-group-title">Topic Group</div><div class="filter-empty-note">No topic groups yet.</div></div>',
+      `<div class="filter-group"><div class="filter-group-title">Skill View</div><div class="filter-chip-row">
         <button class="filter-chip ${wordsSkill === "all" ? "active" : ""}" onclick="setWordsSkill('all')">All</button>
         <button class="filter-chip ${wordsSkill === "meaning" ? "active" : ""}" onclick="setWordsSkill('meaning')">Meaning</button>
         <button class="filter-chip ${wordsSkill === "spelling" ? "active" : ""}" onclick="setWordsSkill('spelling')">Spelling</button>
-      </div>
-    `;
-    // Insert/update a Mastered chip right after the Known chip in the status group.
-    const allStatusChips = Array.from(body.querySelectorAll(".filter-chip")).filter(b =>
-      /setWordFilter\('status'/.test(b.getAttribute("onclick") || "")
-    );
-    const knownChip = allStatusChips.find(b => /setWordFilter\('status',\s*'known'/.test(b.getAttribute("onclick") || ""));
-    const masteredCount = (typeof words !== "undefined" ? words : [])
-      .filter(w => wordMatchesStatusFilterV2(w, "mastered") && wordHasVisiblePathV2(w)).length;
-    const isActive = currentStatusFilter === "mastered";
-    if (knownChip && !document.getElementById("statusChipMastered")) {
-      const masteredBtn = document.createElement("button");
-      masteredBtn.id = "statusChipMastered";
-      masteredBtn.setAttribute("onclick", "setWordFilter('status','mastered')");
-      knownChip.parentNode.insertBefore(masteredBtn, knownChip.nextSibling);
-    }
-    const masteredChip = document.getElementById("statusChipMastered");
-    if (masteredChip) {
-      masteredChip.className = "filter-chip" + (isActive ? " active" : "");
-      masteredChip.innerHTML = `Mastered <span class="n">${masteredCount}</span>`;
-    }
+      </div></div>`,
+      `<div class="filter-group"><div class="filter-group-title">Practice Status</div><div class="filter-chip-row">${[
+        ["__all", "All", visibleWords.length],
+        ["not_practiced", "Not practiced", statusCount("not_practiced")],
+        ["learning", "Learning", statusCount("learning")],
+        ["known", "Known", statusCount("known")],
+        ["mastered", "Mastered", statusCount("mastered")],
+        ["bookmarked", "★ Bookmarked", statusCount("bookmarked")]
+      ].map(([value, label, count]) => {
+        const safeValue = String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const bookmarkClass = value === "bookmarked" ? " bookmark-filter-chip" : "";
+        return `<button class="filter-chip${bookmarkClass} ${currentStatusFilter === value ? "active" : ""}" onclick="setWordFilter('status','${safeValue}')">${label} <span class="n">${count}</span></button>`;
+      }).join("")}</div></div>`
+    ].join("");
   };
-  // Stash for hard re-override.
-  window.__myRenderFilterPanel = window.renderFilterPanel;
 
-  // Final authoritative Words filter rules for per-skill state. This sits after
-  // the older filter patches so legacy quick filters cannot hide valid results.
-  const _origPerSkillRenderFilterPanel = window.renderFilterPanel;
-  window.renderFilterPanel = function() {
-    if (typeof _origPerSkillRenderFilterPanel === "function") _origPerSkillRenderFilterPanel();
-    const body = document.getElementById("filterPanelBody");
-    if (!body) return;
-    const rows = Array.from(body.querySelectorAll(".filter-group"));
-    const statusGroup = rows.find(g => /Practice status/i.test(g.querySelector(".filter-group-title")?.textContent || ""));
-    if (!statusGroup) return;
-    const skillRow = document.getElementById("filterPanelSkillRow");
-    if (skillRow && skillRow.nextElementSibling !== statusGroup) {
-      statusGroup.parentNode.insertBefore(skillRow, statusGroup);
-    }
-    let sourceRow = document.getElementById("filterPanelSourceRow");
-    if (!sourceRow) {
-      sourceRow = document.createElement("div");
-      sourceRow.id = "filterPanelSourceRow";
-      sourceRow.className = "filter-group";
-    }
-    const sourceBase = (typeof words !== "undefined" ? words : []).filter(wordHasVisiblePathV2);
-    const sourceCount = (value) => sourceBase.filter(w => {
-      if (value === "related_created") return isRelatedCreatedWord(w);
-      if (value === "builtin") return !isRelatedCreatedWord(w);
-      return true;
-    }).length;
-    sourceRow.innerHTML = `
-      <div class="filter-group-title">Word source</div>
-      <div class="filter-chip-row">
-        ${["all", "builtin", "related_created"].map(value => `
-          <button class="filter-chip ${wordsSourceFilter === value ? "active" : ""}" onclick="setWordsSourceFilter('${value}')">
-            ${escapeHtml(WORDS_SOURCE_LABELS[value])} <span class="n">${sourceCount(value)}</span>
-          </button>
-        `).join("")}
-      </div>
-    `;
-    if (skillRow && sourceRow.nextElementSibling !== skillRow) {
-      skillRow.parentNode.insertBefore(sourceRow, skillRow);
-    } else if (!skillRow && sourceRow.nextElementSibling !== statusGroup) {
-      statusGroup.parentNode.insertBefore(sourceRow, statusGroup);
-    }
-    const visibleWords = sourceBase.filter(wordMatchesSourceFilter);
-    const countFor = (status) => visibleWords.filter(w => wordMatchesStatusFilterV2(w, status)).length;
-    const knownLabel = wordsSkill === "all" ? "Known" : "Known";
-    statusGroup.querySelector(".filter-chip-row").innerHTML = [
-      ["__all", "All", visibleWords.length],
-      ["not_practiced", "Not practiced", countFor("not_practiced")],
-      ["learning", "Learning", countFor("learning")],
-      ["known", knownLabel, countFor("known")],
-      ["mastered", "Mastered", countFor("mastered")],
-      ["bookmarked", "★ Bookmarked", countFor("bookmarked")]
-    ].map(([value, label, count]) => {
-      const active = currentStatusFilter === value;
-      const bookmarkClass = value === "bookmarked" ? " bookmark-filter-chip" : "";
-      return `<button class="filter-chip${bookmarkClass} ${active ? "active" : ""}" onclick="setWordFilter('status','${value}')">${label} <span class="n">${count}</span></button>`;
-    }).join("");
+  window.hasActiveWordFilters = function() {
+    return currentStatusFilter !== "__all" || Object.values(wordsTaxonomyFilter).some(value => value !== "__all");
   };
+  try { hasActiveWordFilters = window.hasActiveWordFilters; } catch {}
+  window.resetWordFilters = function() {
+    for (const field of Object.keys(wordsTaxonomyFilter)) wordsTaxonomyFilter[field] = "__all";
+    currentLevelFilter = currentTopHeaderFilter = currentBoxedBoldFilter = currentBoldTitleFilter = "__all";
+    currentStatusFilter = "__all";
+    currentQuick = null;
+    shuffledWordKeys = [];
+    window.renderFilterPanel();
+    if (typeof renderWords === "function") renderWords();
+    window.updateHeaderButtons?.();
+  };
+
   window.__myRenderFilterPanel = window.renderFilterPanel;
   try { renderFilterPanel = window.renderFilterPanel; } catch {}
+
+  const originalUpdateHeaderButtons = window.updateHeaderButtons;
+  window.updateHeaderButtons = function() {
+    if (typeof originalUpdateHeaderButtons === "function") originalUpdateHeaderButtons();
+    const active = window.hasActiveWordFilters();
+    document.getElementById("filterBtn")?.classList.toggle("active", active || filterPanelOpen);
+    const summary = document.getElementById("activeFilterSummary");
+    if (summary) {
+      const chips = [];
+      if (wordsTaxonomyFilter.course !== "__all") chips.push(taxonomy.courseFilterLabel?.(wordsTaxonomyFilter.course) || wordsTaxonomyFilter.course);
+      for (const field of ["lecture", "tutorial", "workshop"]) {
+        if (wordsTaxonomyFilter[field] !== "__all") chips.push(`${field[0].toUpperCase()}${field.slice(1)} ${wordsTaxonomyFilter[field]}`);
+      }
+      if (currentStatusFilter !== "__all") chips.push(currentStatusFilter.replace(/_/g, " "));
+      if (shuffleActive) chips.push("shuffled");
+      if (searchTerm) chips.push(`search: ${searchTerm}`);
+      summary.classList.toggle("show", chips.length > 0);
+      summary.innerHTML = chips.slice(0, 6).map(value => `<span class="summary-chip">${escapeHtml(value)}</span>`).join("");
+    }
+  };
+  try { updateHeaderButtons = window.updateHeaderButtons; } catch {}
 
   const _origPerSkillWordPasses = window.wordPasses;
   window.wordPasses = function(w) {
     try { currentQuick = null; } catch {}
-    if (!wordMatchesSourceFilter(w)) return false;
     if (!wordMatchesStatusFilterV2(w, currentStatusFilter)) return false;
     if (!wordHasVisiblePathV2(w)) return false;
     if (searchTerm && !searchTextForWord(w).includes(searchTerm)) return false;
