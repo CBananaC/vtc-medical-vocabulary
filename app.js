@@ -4,6 +4,7 @@
 const LS = {
   VOCAB: "ielts_vocab_source_v1",
   PROGRESS: "ielts_vocab_progress_v1",
+  BOOKMARKS: "ielts_vocab_bookmarks_v1",
   DICT: "ielts_vocab_dictionary_cache_v1",
   KNOWN: "ielts_vocab_known_v1",
   VIEW: "ielts_vocab_view_v1",
@@ -25,6 +26,114 @@ const LS = {
   MODE_INTRO_DONE: "ielts_vocab_mode_intro_done_v1",
   MODE_INTRO_UPDATED_AT: "ielts_vocab_mode_intro_updated_at_v1"
 };
+
+let bookmarkState = {};
+try {
+  bookmarkState = normalizeBookmarkMap(JSON.parse(localStorage.getItem(LS.BOOKMARKS) || "{}"));
+} catch {}
+
+function normalizeBookmarkMap(source) {
+  const out = {};
+  if (!source || typeof source !== "object" || Array.isArray(source)) return out;
+  Object.keys(source).forEach(key => {
+    const normalized = typeof normalizeKey === "function" ? normalizeKey(key) : String(key || "").trim().toLowerCase();
+    const value = source[key];
+    if (!normalized) return;
+    out[normalized] = typeof value === "boolean"
+      ? { bookmarked: value, updatedAt: "" }
+      : { bookmarked: value?.bookmarked === true, updatedAt: String(value?.updatedAt || "") };
+  });
+  return out;
+}
+
+function isWordBookmarked(wordOrKey) {
+  const value = wordOrKey && typeof wordOrKey === "object"
+    ? (wordOrKey.key || wordOrKey.word || "")
+    : wordOrKey;
+  const key = typeof normalizeKey === "function" ? normalizeKey(value) : String(value || "").trim().toLowerCase();
+  return !!key && bookmarkState[key]?.bookmarked === true;
+}
+
+function setWordBookmarked(wordOrKey, value) {
+  const raw = wordOrKey && typeof wordOrKey === "object"
+    ? (wordOrKey.key || wordOrKey.word || "")
+    : wordOrKey;
+  const key = typeof normalizeKey === "function" ? normalizeKey(raw) : String(raw || "").trim().toLowerCase();
+  if (!key) return false;
+  const bookmarked = !!value;
+  if (isWordBookmarked(key) === bookmarked) return bookmarked;
+  bookmarkState[key] = { bookmarked, updatedAt: new Date().toISOString() };
+  const serialized = JSON.stringify(bookmarkState);
+  const saved = typeof safeLocalSet === "function"
+    ? safeLocalSet(LS.BOOKMARKS, serialized)
+    : (() => { try { localStorage.setItem(LS.BOOKMARKS, serialized); return true; } catch { return false; } })();
+  if (!saved) return false;
+  try { window.renderFilterPanel?.(); window.updateHeaderButtons?.(); window.renderWords?.(); } catch {}
+  try { window.renderProgressTab?.(); } catch {}
+  return bookmarked;
+}
+
+function bindWordBookmarkButton(button, wordOrKey) {
+  if (!button) return;
+  const paint = () => {
+    const bookmarked = isWordBookmarked(wordOrKey);
+    button.classList.toggle("is-bookmarked", bookmarked);
+    button.setAttribute("aria-pressed", bookmarked ? "true" : "false");
+    button.innerHTML = `<span aria-hidden="true">${bookmarked ? "★" : "☆"}</span><span>${bookmarked ? "Bookmarked" : "Bookmark"}</span>`;
+  };
+  button.onclick = () => {
+    setWordBookmarked(wordOrKey, !isWordBookmarked(wordOrKey));
+    paint();
+  };
+  paint();
+}
+
+window.isWordBookmarked = isWordBookmarked;
+window.setWordBookmarked = setWordBookmarked;
+window.bindWordBookmarkButton = bindWordBookmarkButton;
+
+const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
+
+function manifestDatasetPaths(manifest) {
+  const datasets = Array.isArray(manifest?.datasets) ? manifest.datasets : [];
+  return datasets
+    .map(dataset => {
+      const path = String(dataset?.path || "").trim();
+      if (!/^data\/[^/]+\/[^/]+\/[^/]+\.json$/i.test(path)) return null;
+      const sessionLabel = dataset?.session_type && dataset?.session_number
+        ? `${dataset.session_type} ${dataset.session_number}`
+        : dataset?.session_code || "";
+      return {
+        path: `/${path}`,
+        courseCode: dataset?.course_code || "",
+        courseTitle: dataset?.course_short_title || "",
+        sessionLabel
+      };
+    })
+    .filter(Boolean);
+}
+
+async function loadBundledVocabularyLists() {
+  const manifestResponse = await fetch(`${VOCABULARY_MANIFEST_PATH}?ts=${Date.now()}`);
+  if (!manifestResponse.ok) {
+    throw new Error(`Vocabulary manifest request failed: ${manifestResponse.status}`);
+  }
+
+  const manifest = await manifestResponse.json();
+  const datasets = manifestDatasetPaths(manifest);
+  if (!datasets.length) throw new Error("Vocabulary manifest contains no datasets");
+
+  const bundledLists = [];
+  for (const dataset of datasets) {
+    const response = await fetch(`${dataset.path}?ts=${Date.now()}`);
+    if (!response.ok) {
+      console.warn("Bundled vocabulary request failed:", dataset.path, response.status);
+      continue;
+    }
+    bundledLists.push(extractWords(await response.json(), dataset));
+  }
+  return bundledLists;
+}
 
 // --- Console noise filter (opt-out) -----------------------------------------
 // The legacy login/goal/recovery modules emit a lot of benign, repetitive
@@ -52,6 +161,194 @@ const LS = {
     return orig.apply(console, arguments);
   };
 })();
+
+/* ============================================================
+   APP UI REFRESH — cache-only, data-safe
+   Clears this app's cached frontend assets without touching
+   localStorage, IndexedDB, progress, or Google Drive data.
+   ============================================================ */
+(function(){
+  if (window.__appUiRefreshV1) return;
+  window.__appUiRefreshV1 = true;
+
+  window.refreshAppUi = async function(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const buttons = [...document.querySelectorAll(".g-refresh-btn")];
+    buttons.forEach(btn => {
+      btn.disabled = true;
+      btn.classList.add("is-refreshing");
+      btn.setAttribute("aria-busy", "true");
+    });
+
+    try {
+      if (navigator.serviceWorker?.getRegistrations) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(reg => reg.update().catch(() => null)));
+      }
+      if (window.caches?.keys) {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames
+            .filter(name => name.startsWith("ielts-vocab-pwa-"))
+            .map(name => caches.delete(name))
+        );
+      }
+    } catch (err) {
+      console.warn("UI refresh cache cleanup failed; reloading anyway:", err);
+    }
+
+    // Query-bust the document itself. This does not alter app data and also
+    // works when the page is opened directly from a local file URL.
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("ui_refresh", String(Date.now()));
+      window.location.replace(url.href);
+    } catch {
+      window.location.reload();
+    }
+  };
+})();
+
+
+/* ============================================================
+   IMMEDIATE SPELLING REPEATS v1
+   - Default-on spelling-only control with 1 / 3 / 5 immediate respells
+   - Works with ordinary spelling and Spell till know
+   - Spell till know still schedules one later random confirmation
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__spellingRepeatChoicesV1) return;
+  window.__spellingRepeatChoicesV1 = true;
+
+  function answerMatches(w, value) {
+    if (typeof spellingAnswerMatches === "function") return spellingAnswerMatches(w, value);
+    const normalize = typeof normalizeSpelling === "function"
+      ? normalizeSpelling
+      : v => String(v || "").trim().toLowerCase().replace(/\s+/g, " ");
+    return normalize(value) === normalize(w?.word || "");
+  }
+
+  function correctAnswerFor(w) {
+    return typeof window.spellingFullFormFor === "function"
+      ? window.spellingFullFormFor(w)
+      : String(w?.word || "");
+  }
+
+  function renderSameSpellingQuestion(w) {
+    if (typeof window.renderSpellV2 === "function") {
+      window.renderSpellV2(w);
+    }
+  }
+
+  function beginImmediateSpellingRepeats(word, count) {
+    const g = window.game;
+    if (!g || g.mode !== "spelling" || !word?.key) return;
+    const repeats = Math.max(1, Math.min(5, Number(count) || 1));
+    const current = (Array.isArray(g.pool) ? g.pool : []).find(w => w.key === word.key) || word;
+    g.pendingSpellingRepeats = repeats;
+    g.spellingRepeatWordKey = current.key;
+    if (typeof window.closeEasyAnswerOverlay === "function") window.closeEasyAnswerOverlay();
+    renderSameSpellingQuestion(current);
+  }
+
+  window.beginImmediateSpellingRepeats = beginImmediateSpellingRepeats;
+
+  function renderCompletedSpellingRepeat(w) {
+    const g = window.game;
+    const renderer = g?.spellTillRemember
+      ? window.renderSpellTillRememberCorrectActions
+      : window.renderLearningCorrectActions;
+    if (typeof renderer === "function") renderer(w);
+  }
+
+  function handleImmediateSpellingRepeat(w) {
+    const g = window.game;
+    const inp = document.getElementById("spellInput");
+    if (!g || !w || !inp || inp.disabled) return true;
+
+    const ok = answerMatches(w, inp.value);
+    const submitted = inp.value;
+    if (typeof window.handleAnswer === "function") window.handleAnswer(w, ok);
+
+    inp.classList.add(ok ? "correct" : "wrong");
+    inp.disabled = true;
+    document.getElementById("checkSpellBtn")?.remove();
+    document.getElementById("spellHintBtn")?.remove();
+    if (typeof window.renderGameTopbar === "function") window.renderGameTopbar();
+
+    if (!ok) {
+      if (typeof window.openLearningAnswerOverlay === "function") {
+        window.openLearningAnswerOverlay({
+          word: w,
+          repeatWord: w,
+          isWrong: true,
+          spellingComparison: true,
+          wrongAnswer: submitted,
+          correctAnswer: correctAnswerFor(w),
+          onSkip: () => skipCurrentPracticeWord()
+        });
+      }
+      return true;
+    }
+
+    g.pendingSpellingRepeats = Math.max(0, Number(g.pendingSpellingRepeats || 0) - 1);
+    if (g.pendingSpellingRepeats > 0) {
+      if (activePracticeGame()?.audioMuted !== true && typeof practicePlayPronunciation === "function") {
+        practicePlayPronunciation(w.key);
+      }
+      renderSameSpellingQuestion(w);
+      return true;
+    }
+
+    g.spellingRepeatWordKey = null;
+    if (g.spellTillRemember && g.currentSpellOccurrenceHadWrong
+      && typeof window.scheduleSpellTillRememberReview === "function") {
+      window.scheduleSpellTillRememberReview(g, w);
+    }
+    renderCompletedSpellingRepeat(w);
+    return true;
+  }
+
+  window.handleImmediateSpellingRepeat = handleImmediateSpellingRepeat;
+
+  function installAnswerWrapper() {
+    const current = window.answerSpellV2;
+    if (typeof current !== "function") return false;
+    if (current.__spellingRepeatChoicesWrapped) return true;
+
+    const wrapped = function(w) {
+      const g = window.game;
+      if (g && g.mode === "spelling" && g.repeatWrongSpelling
+        && Number(g.pendingSpellingRepeats || 0) > 0
+        && g.spellingRepeatWordKey === w?.key) {
+        return handleImmediateSpellingRepeat(w);
+      }
+      return current.apply(this, arguments);
+    };
+
+    wrapped.__spellingRepeatChoicesWrapped = true;
+    if (current.__learningStep2AnswerWrapped) wrapped.__learningStep2AnswerWrapped = true;
+    if (current.__easyWrapped) wrapped.__easyWrapped = true;
+    if (current.__spellTillRememberWrapped) wrapped.__spellTillRememberWrapped = true;
+    window.answerSpellV2 = wrapped;
+    return true;
+  }
+
+  if (!installAnswerWrapper()) {
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (installAnswerWrapper() || tries > 40) clearInterval(timer);
+    }, 200);
+  }
+
+  console.log("[Practice] Immediate spelling repeat choices installed (1 / 3 / 5).");
+})();
+
+
+
 
 let words = [];
 let progress = {};
@@ -86,11 +383,19 @@ var currentWord = null;
 let sheetChain = [];
 let sheetTab = "meaning";
 
-let game = null; // {mode, queue, idx, correct, streak, pool, summary}
+let game = null; // legacy game shape; active practice sessions use window.game
 
 const $ = (id) => document.getElementById(id);
 const normalizeKey = (w) => String(w || "").trim().toLowerCase().replace(/\s+/g, " ");
 const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[m]));
+function vtcPronunciationHtml(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const match = raw.match(/^\s*(\/[^/]+\/)\s*[—–-]\s*(.+?)\s*$/);
+  const ipa = match ? match[1] : raw;
+  const phonetic = match ? match[2] : "";
+  return `<div class="vtc-pronunciation"><div class="vtc-pron-ipa">${escapeHtml(ipa)}</div>${phonetic ? `<div class="vtc-pron-phonetic">${escapeHtml(phonetic)}</div>` : ""}</div>`;
+}
 const pct = (c, a) => a ? Math.round((c / a) * 100) : null;
 const defaultProgress = () => ({ matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } });
 
@@ -174,6 +479,21 @@ function extractWords(source) {
     const term = item?.term || item?.word || item?.headword || item?.key || "";
     const key = normalizeKey(term);
     if (!key) return null;
+    const vtcData = item?.vtc || (
+      item?.english_definition || item?.traditional_chinese_definition
+        ? {
+            term: term.trim(),
+            pronunciation: item.pronunciation || "",
+            english_definition: item.english_definition || "",
+            traditional_chinese_definition: item.traditional_chinese_definition || "",
+            context: item.context || "",
+            academic_area: item.academic_area || "",
+            visual: item.visual || item.whoami || null,
+            source_term: item.source_term || "",
+            source_note: item.source_note || ""
+          }
+        : null
+    );
 
     const level = cleanVocabLabel(meta.level || item.level || "");
     const topHeader = cleanVocabLabel(meta.topHeader || meta.top_header || item.top_header || item.topHeader || "");
@@ -229,7 +549,14 @@ function extractWords(source) {
         sourceEntryType: item.sourceEntryType,
         sourceFromKey: normalizeKey(item.sourceFromKey || item.insertAfterKey || ""),
         sourceFromWord: item.sourceFromWord || "",
-        insertAfterKey: normalizeKey(item.insertAfterKey || item.sourceFromKey || "")
+        insertAfterKey: normalizeKey(item.insertAfterKey || item.sourceFromKey || ""),
+        vtc: vtcData || null,
+        visual: item.visual || item.whoami || vtcData?.visual || null,
+        courseCode: item.courseCode || item.course_code || "",
+        courseTitle: item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title || "",
+        lecture: item.sessionLabel || item.session_label || item.lecture || item.group || "",
+        sourceTitle: item.sourceTitle || "",
+        sourceStatus: item.sourceStatus || ""
       });
     }
 
@@ -239,6 +566,17 @@ function extractWords(source) {
     if (item.sourceFromKey || item.insertAfterKey) rec.sourceFromKey = normalizeKey(item.sourceFromKey || item.insertAfterKey || "");
     if (item.sourceFromWord) rec.sourceFromWord = item.sourceFromWord;
     if (item.insertAfterKey || item.sourceFromKey) rec.insertAfterKey = normalizeKey(item.insertAfterKey || item.sourceFromKey || "");
+    if (vtcData) rec.vtc = vtcData;
+    if (item.visual || item.whoami || vtcData?.visual) rec.visual = item.visual || item.whoami || vtcData.visual;
+    if (item.courseCode || item.course_code) rec.courseCode = item.courseCode || item.course_code;
+    if (item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title) {
+      rec.courseTitle = item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title;
+    }
+    if (item.sessionLabel || item.session_label || item.lecture || item.group) {
+      rec.lecture = item.sessionLabel || item.session_label || item.lecture || item.group;
+    }
+    if (item.sourceTitle) rec.sourceTitle = item.sourceTitle;
+    if (item.sourceStatus) rec.sourceStatus = item.sourceStatus;
     if (level && !rec.levels.includes(level)) rec.levels.push(level);
     if (topHeader && !rec.topHeaders.includes(topHeader)) rec.topHeaders.push(topHeader);
     if (boxedBoldTitle && !rec.boxedBoldTitles.includes(boxedBoldTitle)) rec.boxedBoldTitles.push(boxedBoldTitle);
@@ -312,6 +650,43 @@ function extractWords(source) {
     for (const item of source.items) addItem(item, { level: item.level || "" });
   }
 
+  // Schema 4: source-preserving VTC course vocabulary:
+  // { title, provenance, entries: [{ term, pronunciation, ... }] }
+  if (Array.isArray(source?.entries)) {
+    const courseCode = source.course_code || source.courseCode || "HHS4185";
+    const courseTitle = source.course_short_title || source.courseShortTitle || source.course_title || source.courseTitle || "Common Rehabilitation Conditions";
+    const lecture = source.session_label || source.sessionLabel || source.lecture || "Lecture 1";
+    const groupTitle = `${courseTitle} / ${lecture}`;
+    for (const entry of source.entries) {
+      const vtc = {
+        term: entry.term || "",
+        pronunciation: entry.pronunciation || "",
+        english_definition: entry.english_definition || "",
+        traditional_chinese_definition: entry.traditional_chinese_definition || "",
+        context: entry.context || "",
+        academic_area: entry.academic_area || ""
+      };
+      addItem({
+        ...entry,
+        vtc,
+        courseCode,
+        courseTitle,
+        lecture,
+        sourceTitle: source.title || groupTitle,
+        sourceStatus: source.provenance?.source_status || ""
+      }, {
+        level: "VTC",
+        topHeader: courseCode,
+        boxedBoldTitle: courseTitle,
+        boldTitle: lecture,
+        suggestedCombinedTitle: groupTitle,
+        sectionTitle: lecture,
+        imageLabel: groupTitle,
+        currentRootKey: normalizeKey(entry.term || "")
+      });
+    }
+  }
+
   const list = [...map.values()].sort((a, b) => a.word.localeCompare(b.word));
   const familyMap = new Map();
   for (const w of list) {
@@ -349,6 +724,26 @@ function mergeWordLists(existing, latest) {
     }
 
     const old = map.get(w.key);
+    const oldVisual = old.visual;
+
+    const oldCategories = Array.isArray(old.categories) ? old.categories : [];
+    const oldMetadata = {
+      grammarLabels: old.grammarLabels,
+      rawTexts: old.rawTexts,
+      sourceExamples: old.sourceExamples,
+      familyIds: old.familyIds,
+      relatedKeys: old.relatedKeys,
+      levels: old.levels,
+      topHeaders: old.topHeaders,
+      boxedBoldTitles: old.boxedBoldTitles,
+      boldTitles: old.boldTitles,
+      suggestedCombinedTitles: old.suggestedCombinedTitles,
+      // A normalized term can occur in several course/session datasets.
+      // Preserve every exact source path during the global runtime merge;
+      // otherwise the later dataset silently reassigns the word to its own
+      // course and the Words filters show it under the wrong source.
+      exactSuggestedCombinedPaths: old.exactSuggestedCombinedPaths
+    };
 
     // Keep progress/dictionary-related runtime fields from old word.
     const preserved = {
@@ -362,6 +757,19 @@ function mergeWordLists(existing, latest) {
 
     // Replace source metadata from latest vocab.json so old CONTINUATION filters cannot survive.
     Object.assign(old, w);
+    if (oldVisual && !w.visual) old.visual = oldVisual;
+
+    const unionValues = (...values) => [...new Set(values.flatMap(value =>
+      Array.isArray(value) ? value : (value ? [value] : [])
+    ))];
+    for (const key of Object.keys(oldMetadata)) {
+      old[key] = unionValues(oldMetadata[key], w[key]);
+    }
+    old.categories = [...oldCategories, ...(Array.isArray(w.categories) ? w.categories : [])]
+      .filter((category, index, all) => {
+        const signature = JSON.stringify(category || {});
+        return all.findIndex(item => JSON.stringify(item || {}) === signature) === index;
+      });
 
     for (const [k, v] of Object.entries(preserved)) {
       if (v !== undefined && old[k] === undefined) old[k] = v;
@@ -391,14 +799,10 @@ function ensureProgressRecords() {
 async function bootstrap() {
   loadState();
   try {
-    const res = await fetch("vocab.json?ts=" + Date.now());
-    if (res.ok) {
-      const json = await res.json();
-      const latest = extractWords(json);
-      words = mergeWordLists([], latest);
-    }
+    const bundledLists = await loadBundledVocabularyLists();
+    words = mergeWordLists([], bundledLists.flat());
   } catch (e) {
-    console.warn("Could not load vocab.json:", e);
+    console.warn("Could not load bundled vocabulary:", e);
   }
 
   try {
@@ -1139,12 +1543,12 @@ function practicePosLabel(w, entry) {
 
 function spellPromptLabelHtml(w, entry) {
   const pos = practicePosLabel(w, entry);
-  return `Spell the word${pos ? ` · ${escapeHtml(pos)}` : ""}`;
+  return `Spell the full form${pos ? ` · ${escapeHtml(pos)}` : ""}`;
 }
 
 function spellingQuestionLabelHtml(w, q, entry) {
   const pos = String(q?.partOfSpeech || "").trim();
-  return `Spell the word${pos ? ` · ${escapeHtml(pos)}` : (practicePosLabel(w, entry) ? ` · ${escapeHtml(practicePosLabel(w, entry))}` : "")}`;
+  return `Spell the full form${pos ? ` · ${escapeHtml(pos)}` : (practicePosLabel(w, entry) ? ` · ${escapeHtml(practicePosLabel(w, entry))}` : "")}`;
 }
 
 function dotFillCss(p) { return p == null ? 0 : Math.max(0, Math.min(100, p)); }
@@ -1176,13 +1580,12 @@ function wordCardListHtml(w, color) {
   const kn = known[w.key];
   const rv = needsReview[w.key];
   const entry = dictCache[w.key];
-  const def = entry?.definitions?.[0] || w.sourceExamples?.[0]?.slice(0, 80) || "Tap to fetch definition";
-  const pron = entry?.pronunciation ? `/${entry.pronunciation}/` : "";
-  const hasAudio = !!entry?.audioUrl;
+  const def = w.vtc?.english_definition || entry?.definitions?.[0] || w.sourceExamples?.[0]?.slice(0, 80) || "Tap to fetch definition";
+  const pron = w.vtc?.pronunciation || (entry?.pronunciation ? `/${entry.pronunciation}/` : "");
   return `<div class="word-row ${kn ? "known" : ""} ${rv ? "needs-review" : ""}" data-key="${escapeHtml(w.key)}" style="--cat-color:${color}">
     <div class="left">
       <div class="w">${escapeHtml(w.word)}</div>
-      ${pron ? `<div class="pron">${escapeHtml(pron)}</div>` : ""}
+      ${pron ? (w.vtc ? vtcPronunciationHtml(pron) : `<div class="pron">${escapeHtml(pron)}</div>`) : ""}
       <div class="meta">${gramChipsHtml(w, 2)}</div>
       <div class="def">${escapeHtml(def)}</div>
     </div>
@@ -1349,12 +1752,14 @@ function showWord(key) {
     .replace(/\/+/g, "/")
     .replace(/^\/|\/$/g, "")
     .trim();
-  const heroIpa = entry?.pronunciation || "";
+  const heroIpa = w.vtc?.pronunciation || entry?.pronunciation || "";
   const heroHw = formatHeroHw(entry?.hw || entry?.headword || "");
-  $("heroPron").innerHTML = `
-    ${heroIpa ? `<div class="learner-ipa-line">/${escapeHtml(heroIpa)}/</div>` : ""}
-    ${heroHw ? `<div class="learner-hw-line">${escapeHtml(heroHw)}</div>` : ""}
-  `;
+  $("heroPron").innerHTML = w.vtc
+    ? vtcPronunciationHtml(heroIpa)
+    : `
+      ${heroIpa ? `<div class="learner-ipa-line">/${escapeHtml(heroIpa)}/</div>` : ""}
+      ${heroHw ? `<div class="learner-hw-line">${escapeHtml(heroHw)}</div>` : ""}
+    `;
 
   const labels = entry
     ? ((entry.functionalLabels && entry.functionalLabels.length) ? entry.functionalLabels : [entry.functionalLabel].filter(Boolean))
@@ -1363,7 +1768,7 @@ function showWord(key) {
 
   // stats are rendered at bottom of each tab (tabBottomHtml), not in hero
 
-  $("audioBtn").disabled = !entry?.audioUrl;
+  $("audioBtn").disabled = !(entry?.audioUrl || w.vtc);
 
   // Inflections in hero
   const heroInf = $("heroInflections");
@@ -1415,7 +1820,7 @@ function showWord(key) {
   }
 
   // Auto-fetch if not cached
-  if (!entry) {
+  if (!entry && !w.vtc) {
     fetchDefinition(w).then(() => {
       if (currentWord && currentWord.key === w.key) showWord(w.key);
     }).catch(err => {
@@ -1514,6 +1919,25 @@ function tabBottomHtml(w) {
   </div>`;
 }
 
+function renderVtcSourceHtml(w) {
+  const v = w?.vtc || {};
+  const field = (label, value, className = "") => value
+    ? `<div class="vtc-field ${className}">
+        <div class="vtc-field-label">${escapeHtml(label)}</div>
+        <div class="vtc-field-value">${escapeHtml(value)}</div>
+      </div>`
+    : "";
+  const status = w.sourceStatus || "generated_not_verified";
+  return `<div class="vtc-source-card">
+    <div class="vtc-group-line">${escapeHtml(w.courseCode || "VTC")} · ${escapeHtml(w.courseTitle || "Course vocabulary")} · ${escapeHtml(w.lecture || "Lecture 1")}</div>
+    ${field("English definition", v.english_definition, "vtc-english")}
+    ${field("繁體中文定義", v.traditional_chinese_definition, "vtc-chinese")}
+    ${field("Context", v.context, "vtc-context")}
+    ${field("Academic area", v.academic_area, "vtc-area")}
+    <div class="vtc-provenance">Source: ${escapeHtml(w.sourceTitle || "VTC course vocabulary")} · status: ${escapeHtml(status)}</div>
+  </div>`;
+}
+
 function renderSheetTab() {
   hardCleanAllRuntimeVocabulary();
   if (!currentWord) return;
@@ -1522,6 +1946,17 @@ function renderSheetTab() {
   const c = $("tabContent");
   c.innerHTML = "";
   c.style.animation = "none"; void c.offsetHeight; c.style.animation = "";
+
+  if (w.vtc && !entry) {
+    if (sheetTab === "meaning") {
+      c.innerHTML = renderVtcSourceHtml(w) + tabBottomHtml(w);
+    } else if (sheetTab === "related") {
+      c.innerHTML = `<div class="vtc-empty-tab"><div class="t">Course group</div><div class="d">${escapeHtml(w.courseTitle || "VTC vocabulary")} · ${escapeHtml(w.lecture || "Lecture 1")}</div></div>` + tabBottomHtml(w);
+    } else {
+      c.innerHTML = `<div class="vtc-empty-tab"><div class="t">No synonym data in this source</div><div class="d">This lecture record contains the listed definitions, context, and academic area.</div></div>` + tabBottomHtml(w);
+    }
+    return;
+  }
 
   if (sheetTab === "meaning") {
     if (!entry) {
@@ -1913,6 +2348,106 @@ function toggleKnown() {
    AUDIO & FETCH
    ============================================================ */
 let currentAudio = null;
+const vtcAudioCache = {};
+
+function createInlineAudio(url) {
+  const audio = document.createElement("audio");
+  audio.src = url;
+  audio.preload = "auto";
+  audio.playsInline = true;
+  audio.setAttribute("playsinline", "");
+  return audio;
+}
+
+function activePracticeGame() {
+  return window.game || game;
+}
+
+function stopPracticeAudio() {
+  try {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+    }
+  } catch (e) {}
+  try {
+    if (window.currentAudio && window.currentAudio !== currentAudio) {
+      window.currentAudio.pause();
+      window.currentAudio.currentTime = 0;
+    }
+  } catch (e) {}
+  try {
+    if (typeof speechSynthesis !== "undefined") speechSynthesis.cancel();
+  } catch (e) {}
+}
+
+function togglePracticeAudio() {
+  const g = activePracticeGame();
+  if (!g) return;
+  g.audioMuted = !g.audioMuted;
+  if (g.audioMuted) stopPracticeAudio();
+  if (typeof window.renderGameTopbar === "function") window.renderGameTopbar();
+  else if (typeof renderGame === "function") renderGame();
+}
+window.togglePracticeAudio = togglePracticeAudio;
+
+function skipCurrentPracticeWord() {
+  const g = activePracticeGame();
+  if (!g || !Array.isArray(g.queue)) return;
+  const current = g.queue[g.idx];
+  if (!current) return;
+
+  const key = current.key;
+  if (!(g.skipped instanceof Set)) g.skipped = new Set(g.skipped || []);
+  g.skipped.add(key);
+  if (g.toMaster instanceof Set) g.toMaster.delete(key);
+
+  // Remove this word and any scheduled repeat from the remaining part of this
+  // section, without changing permanent progress records.
+  g.queue = g.queue.filter((item, index) => index < g.idx || item.key !== key);
+  g.currentSpellQuestionIndex = null;
+  g.pendingSpellingRepeats = 0;
+  g.spellingRepeatWordKey = null;
+  stopPracticeAudio();
+
+  if (typeof window.closeEasyAnswerOverlay === "function") window.closeEasyAnswerOverlay();
+  if (typeof window.renderGameV2 === "function") window.renderGameV2();
+  else if (typeof window.nextQuestionV2 === "function") window.nextQuestionV2();
+  else if (typeof nextQuestion === "function") nextQuestion();
+}
+window.skipCurrentPracticeWord = skipCurrentPracticeWord;
+
+async function fetchVtcAudio(w) {
+  if (!w?.vtc) return null;
+  if (vtcAudioCache[w.key]) return vtcAudioCache[w.key];
+
+  const res = await fetch(`/api/audio?text=${encodeURIComponent(w.word)}`);
+  if (!res.ok) {
+    let msg = "HTTP " + res.status;
+    try { msg = (await res.json()).detail || msg; } catch {}
+    throw new Error(msg);
+  }
+  const data = await res.json();
+  if (!data.audioDataUri) throw new Error("Google Cloud TTS returned no audio");
+
+  const entry = {
+    source: "google-cloud-tts",
+    pronunciation: w.vtc.pronunciation || "",
+    audioUrl: data.audioDataUri,
+    audioMimeType: data.mimeType || "audio/mpeg",
+    definitions: w.vtc.english_definition ? [w.vtc.english_definition] : [],
+    shortDefinitions: w.vtc.english_definition ? [w.vtc.english_definition] : []
+  };
+  vtcAudioCache[w.key] = entry;
+  dictCache[w.key] = { ...(dictCache[w.key] || {}), ...entry };
+  return entry;
+}
+
+function primePracticeAudio(w) {
+  if (!w?.vtc || dictCache[w.key]?.audioUrl || vtcAudioCache[w.key]) return;
+  fetchVtcAudio(w).catch(err => console.warn("Practice audio prefetch failed:", err));
+}
+
 function playAudio() {
   if (!currentWord) return;
   playAudioFor(currentWord.key, $("audioBtn"));
@@ -1922,6 +2457,18 @@ async function playAudioFor(key, sourceBtn) {
   if (!w) return;
   let entry = dictCache[key];
   const btn = sourceBtn || (currentWord && currentWord.key === key ? $("audioBtn") : null);
+  if (w.vtc && !entry?.audioUrl) {
+    try {
+      if (btn) btn.classList.add("playing");
+      toast("Generating Google pronunciation…");
+      entry = await fetchVtcAudio(w);
+    } catch (err) {
+      console.warn("Google pronunciation fetch failed:", err);
+      if (btn) btn.classList.remove("playing");
+      toast("Could not generate pronunciation");
+      return;
+    }
+  }
   if (!entry) {
     try {
       if (btn) btn.classList.add("playing");
@@ -1942,7 +2489,7 @@ async function playAudioFor(key, sourceBtn) {
     return;
   }
   if (currentAudio) { try { currentAudio.pause(); } catch (e) { } }
-  currentAudio = new Audio(entry.audioUrl);
+  currentAudio = createInlineAudio(entry.audioUrl);
   const activeBtn = btn || $("audioBtn");
   if (activeBtn) activeBtn.classList.add("playing");
   currentAudio.addEventListener("ended", () => activeBtn && activeBtn.classList.remove("playing"));
@@ -2090,6 +2637,13 @@ function practicePlayPronunciationAndThen(key, sourceBtn, done) {
     if (typeof done === "function") done();
   }
 
+  // Auto-play follows the practice mute pill. Explicit Play sound buttons call
+  // playAudioFor directly and remain available when the section is muted.
+  if (activePracticeGame()?.audioMuted) {
+    finish();
+    return;
+  }
+
   if (!key) {
     finish();
     return;
@@ -2109,7 +2663,7 @@ function practicePlayPronunciationAndThen(key, sourceBtn, done) {
       "";
 
     if (audioUrl) {
-      const audio = new Audio(audioUrl);
+      const audio = createInlineAudio(audioUrl);
       audio.onended = finish;
       audio.onerror = finish;
       audio.play().catch(() => finish());
@@ -2120,17 +2674,6 @@ function practicePlayPronunciationAndThen(key, sourceBtn, done) {
       playAudioFor(key, sourceBtn || null);
       const wordLength = w?.word ? String(w.word).length : 8;
       setTimeout(finish, Math.min(1900, Math.max(850, wordLength * 130)));
-      return;
-    }
-
-    if (w && typeof speechSynthesis !== "undefined") {
-      const utterance = new SpeechSynthesisUtterance(w.word);
-      utterance.lang = "en-US";
-      utterance.onend = finish;
-      utterance.onerror = finish;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(utterance);
-      setTimeout(finish, Math.min(2300, Math.max(950, String(w.word).length * 150)));
       return;
     }
 
@@ -2274,6 +2817,7 @@ function buildSpellingQuestionFromEntry(w, entry) {
   }
 
   const definition =
+    w?.vtc?.english_definition ||
     entry?.definitions?.[0] ||
     entry?.shortDefinitions?.[0] ||
     entry?.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
@@ -2287,8 +2831,10 @@ function buildSpellingQuestionFromEntry(w, entry) {
     "";
 
   return {
-    prompt: definition ? `${definition}\n\nType the base word.` : `${word.length} letters. Type the base word.`,
-    source: definition ? "definition" : "",
+    prompt: definition
+      ? `${definition}\n\nType the full form.`
+      : `${word.length} letters. Type the full form.`,
+    source: w?.vtc ? "vtc-source" : (definition ? "definition" : ""),
     partOfSpeech: definition ? definitionPos : ""
   };
 }
@@ -2296,12 +2842,55 @@ function buildSpellingQuestionFromEntry(w, entry) {
 function practiceDefinitionForWord(w) {
   const entry = dictCache[w.key] || {};
   return (
+    w?.vtc?.english_definition ||
     entry.definitions?.[0] ||
     entry.shortDefinitions?.[0] ||
     entry.mainEntries?.[0]?.meanings?.[0]?.definitionSegments?.[0]?.definition ||
     w.def ||
     "No definition is available yet. Open this word card once to fetch its dictionary data."
   );
+}
+
+// Keep spelling prompts definition-led. Related course context belongs in the
+// optional Hint panel so the question does not disclose the answer through a
+// source/context line.
+function practiceHintForWord(w) {
+  const vtc = w?.vtc || {};
+  if (vtc.context) return vtc.context;
+
+  const entry = dictCache[w?.key] || {};
+  const related = [
+    ...(Array.isArray(entry.examples) ? entry.examples : []),
+    ...(Array.isArray(entry.example_sentences) ? entry.example_sentences : []),
+    ...(Array.isArray(w?.sourceExamples) ? w.sourceExamples : [])
+  ].map(value => typeof value === "string" ? value.trim() : (value?.text || value?.sentence || ""))
+   .filter(Boolean);
+  if (related[0]) return related[0];
+
+  const area = String(w?.academicArea || w?.academic_area || "").trim();
+  return area ? `Related topic: ${area}` : "Use the definition above as your spelling clue.";
+}
+
+// Keep the most useful recall scaffold at the start of every spelling hint:
+// the number of words in the full-form target and the first character of each.
+// Use the app's accepted full-form resolver so abbreviation prompts follow the
+// same full-form rule as answer checking.
+function spellingHintForWord(w) {
+  let target = String(w?.word || "").trim();
+  try {
+    if (typeof window.spellingFullFormFor === "function") {
+      target = String(window.spellingFullFormFor(w) || target).trim();
+    }
+  } catch {}
+
+  const tokens = target.match(/[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)*/g) || [];
+  const count = tokens.length;
+  const initials = tokens.map(token => Array.from(token)[0]?.toUpperCase() || "").join(" ");
+  const prefix = count
+    ? `${count} ${count === 1 ? "word" : "words"} · Initials: ${initials}`
+    : "";
+  const context = practiceHintForWord(w);
+  return [prefix, context].filter(Boolean).join("\n\n");
 }
 
 
@@ -2437,14 +3026,14 @@ async function renderSpell(w) {
     <div class="game-prompt-label">${spellPromptLabelHtml(w, null)}</div>
     <div class="game-prompt small">Loading example sentence…</div>
     <div class="game-spell">
-      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" disabled />
+      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" disabled />
       <button class="game-btn primary" id="checkSpellBtn" disabled>Check</button>
     </div>
   `;
 
   let entry = dictCache[w.key] || null;
 
-  if (!entry && typeof fetchDefinition === "function") {
+  if (!entry && !w.vtc && typeof fetchDefinition === "function") {
     try {
       entry = await fetchDefinition(w);
       if (entry) dictCache[w.key] = entry;
@@ -2454,16 +3043,16 @@ async function renderSpell(w) {
   }
 
   const q = buildSpellingQuestionFromEntry(w, entry);
-  const hint = practiceDefinitionForWord(w);
+  const hint = spellingHintForWord(w);
 
   $("gameBody").innerHTML = `
     <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
     <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
-    <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;">
+    <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;white-space:pre-line;">
       ${escapeHtml(hint)}
     </div>
     <div class="game-spell">
-      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+      <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
       <div style="display:flex;gap:10px;">
         <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
         <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
@@ -2597,17 +3186,17 @@ function buildSpellingQuestionFromEntry(w, entry) {
     }
   }
 
-  const fallback = entry?.definitions?.[0] || entry?.shortDefinitions?.[0] || "";
+  const fallback = w?.vtc?.english_definition || entry?.definitions?.[0] || entry?.shortDefinitions?.[0] || "";
   if (fallback) {
     return {
-      prompt: `${fallback}\n\nAnswer with the base word.`,
-      source: "definition",
+      prompt: `${fallback}\n\nAnswer with the full form.`,
+      source: w?.vtc ? "vtc-source" : "definition",
       partOfSpeech: entry?.functionalLabel || entry?.partOfSpeech || ""
     };
   }
 
   return {
-    prompt: `${word.length} letters. Type the base word.`,
+    prompt: `${word.length} letters. Type the full form.`,
     source: "",
     partOfSpeech: ""
   };
@@ -2616,10 +3205,19 @@ function buildSpellingQuestionFromEntry(w, entry) {
 
 function normalizeSpelling(s) { return normalizeKey(s).replace(/[’']/g, "'"); }
 
+function spellingAnswerMatches(w, answer) {
+  const actual = normalizeSpelling(answer);
+  if (!actual) return false;
+  const expected = typeof window.spellingAcceptedFullForms === "function"
+    ? window.spellingAcceptedFullForms(w)
+    : [w.word, ...String(w.word || "").split(/\s*\/\s*/).map(v => v.trim())];
+  return expected.some(value => normalizeSpelling(value) === actual);
+}
+
 function answerSpell(w) {
   const inp = $("spellInput");
   const ans = inp.value;
-  const ok = normalizeSpelling(ans) === normalizeSpelling(w.word);
+  const ok = spellingAnswerMatches(w, ans);
 
   const r = progress[w.key].spelling;
   r.attempts++;
@@ -2803,6 +3401,8 @@ function normalizeBackupSession(s) {
     poolSize: Number(s.poolSize || 0),
     sessionLength: Number(s.sessionLength || s.total || 0),
     studyUntilMastered: !!s.studyUntilMastered,
+    spellTillRemember: !!s.spellTillRemember,
+    repeatWrongSpelling: s.mode === "spelling" && s.repeatWrongSpelling !== false,
     totalAnswered: Number(s.totalAnswered || s.total || 0),
     correctAnswered: Number(s.correctAnswered || s.correct || 0),
     uniqueWordsCorrect: Number(s.uniqueWordsCorrect || masteredWords.length || 0),
@@ -4418,6 +5018,7 @@ setTimeout(() => {
 
   // ---------- State ----------
   const FILTER_DIMS = [
+    { key: "courses",        field: "course",                 title: "Course" },
     { key: "levels",         field: "level",                  title: "Level" },
     { key: "subjectAreas",   field: "topHeader",              title: "Subject area" },
     { key: "topicGroups",    field: "suggestedCombinedTitle", title: "Topic group" },
@@ -4430,7 +5031,8 @@ setTimeout(() => {
     not_practiced: "Not practiced",
     learning: "Learning",
     known: "Known",
-    mastered: "Mastered"
+    mastered: "Mastered",
+    bookmarked: "★ Bookmarked"
   };
 
   const SKILL_VIEW_LABELS = {
@@ -4448,12 +5050,24 @@ setTimeout(() => {
   const MODES = [
     { id: "wordToMeaning", ico: "💕", name: "Word → Meaning", desc: "Match the word to its definition", cls: "m1" },
     { id: "meaningToWord", ico: "🔁", name: "Meaning → Word", desc: "Pick the word that fits", cls: "m2" },
-    { id: "spelling",      ico: "✏️", name: "Spelling",       desc: "Type the word from a hint",        cls: "m4" }
+    { id: "spelling",      ico: "✏️", name: "Spelling",       desc: "Type the word from a hint",        cls: "m4" },
+    { id: "whoami",        ico: "🦴", name: "Who am I?",       desc: "Recognise the structure and spell its name", cls: "m5" }
   ];
 
   const HISTORY_CAP = 100;
   const DEFAULT_LENGTH = 10;
   const LAST_LOADED_POOL_KEY = "ielts_vocab_practice_last_loaded_pool_v1";
+  const REPEAT_WRONG_SPELLING_DEFAULT_VERSION = 1;
+
+  // Before this preference was made On by default, saved configs and sessions
+  // stored `false` even when the learner had never chosen a setting. Treat
+  // those legacy records as unset; new explicit Off choices carry the version
+  // marker below and remain Off.
+  function repeatWrongSpellingFromSaved(value, version) {
+    return value === false && Number(version) === REPEAT_WRONG_SPELLING_DEFAULT_VERSION
+      ? false
+      : true;
+  }
 
   // Wizard transient state
   let wizard = {
@@ -4461,7 +5075,9 @@ setTimeout(() => {
     filter: emptyFilter(),
     mode: null,
     length: DEFAULT_LENGTH,
-    studyUntilMastered: true
+    studyUntilMastered: false,
+    spellTillRemember: true,
+    repeatWrongSpelling: true
   };
 
   function cloneFilterConfig(filter) {
@@ -4470,15 +5086,35 @@ setTimeout(() => {
     return out;
   }
 
-  function practicePoolConfig(filter, length, mode, studyUntilMastered) {
+  function practicePoolConfig(filter, length, mode, studyUntilMastered, spellTillRemember, repeatWrongSpelling) {
     return {
       filter: cloneFilterConfig(filter || emptyFilter()),
       description: describeFilter(filter || emptyFilter()),
       length: Number(length || DEFAULT_LENGTH),
       mode: mode || null,
-      studyUntilMastered: !!studyUntilMastered
+      studyUntilMastered: mode === "spelling" ? false : !!studyUntilMastered,
+      spellTillRemember: !!spellTillRemember,
+      repeatWrongSpelling: mode === "spelling" && repeatWrongSpelling !== false
     };
   }
+
+  function whoAmIAssetsForWord(w) {
+    const visual = w?.visual || w?.vtc?.visual || {};
+    return (Array.isArray(visual.assets) ? visual.assets : [])
+      .filter(asset => asset && typeof asset.src === "string" && asset.src.trim())
+      .map(asset => ({ ...asset, src: asset.src.trim(), reveal_src: String(asset.reveal_src || asset.src).trim() }));
+  }
+
+  function isWhoAmIWord(w) {
+    const visual = w?.visual || w?.vtc?.visual || {};
+    return visual.review_status !== "rejected" && whoAmIAssetsForWord(w).length > 0;
+  }
+
+  function practicePoolForMode(pool, mode) {
+    return mode === "whoami" ? pool.filter(isWhoAmIWord) : pool;
+  }
+
+  window.whoAmIAssetsForWord = whoAmIAssetsForWord;
 
   function emptyFilter() {
     const f = {};
@@ -4541,6 +5177,7 @@ setTimeout(() => {
 
   function wordMatchesPracticeStatus(w, status, view) {
     if (!status || status === "__all") return true;
+    if (status === "bookmarked") return isWordBookmarked(w);
     if (view === "meaning" || view === "spelling") {
       const axisStatus = practiceStatusForView(w, view);
       const overall = overallPracticeStatus(w);
@@ -4616,14 +5253,45 @@ setTimeout(() => {
 
   function exactPracticePaths(w) {
     const paths = [];
+
+    // VTC progress belongs to the exact source dataset, not to the single
+    // course/lecture fields left on a globally deduplicated word. Include the
+    // course code in the topic identity so (for example) Anatomy L1 and
+    // Common Rehab L1 can never collapse into one "Lecture 1" row.
+    const exactVtcPaths = [];
     if (Array.isArray(w.exactSuggestedCombinedPaths)) {
       for (const p of w.exactSuggestedCombinedPaths) {
+        if (normP(p?.level) === "vtc" && cleanP(p?.subject) && cleanP(p?.topic)) {
+          exactVtcPaths.push({
+            course: cleanP(p.courseCode || p.course_code || p.subject),
+            level: "VTC",
+            subject: cleanP(p.subject),
+            topic: cleanP(p.topic),
+            sourceTopic: cleanP(p.sourceTopic || p.source_topic || p.topic),
+            courseTitle: cleanP(p.courseTitle || p.course_title || ""),
+            sessionLabel: cleanP(p.sessionLabel || p.session_label || "")
+          });
+          continue;
+        }
         const level = canonLevelP(p.level);
         const subject = canonSubjectP(p.subject);
         const topic = cleanP(p.topic);
         if (level && subject && topic) paths.push({ level, subject, topic });
       }
     }
+
+    if (exactVtcPaths.length) {
+      const out = [];
+      const seen = new Set();
+      for (const p of [...exactVtcPaths, ...paths]) {
+        const k = pathKeyP(p);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(p);
+      }
+      return out;
+    }
+
     for (const c of (w.categories || [])) {
       const level = canonLevelP(c.level);
       const subject = canonSubjectP(c.topHeader || c.top_header);
@@ -4636,6 +5304,14 @@ setTimeout(() => {
       const subject = canonSubjectP(p[1]);
       const topic = cleanP(p[2]);
       if (level && subject && topic) paths.push({ level, subject, topic });
+    }
+    if (w.courseCode || w.courseTitle || w.vtc) {
+      paths.push({
+        course: cleanP(w.courseCode || "VTC"),
+        level: cleanP(w.vtcLevel || "VTC"),
+        subject: cleanP(w.courseTitle || "VTC vocabulary"),
+        topic: cleanP(w.lecture || "Lecture 1")
+      });
     }
     const out = [];
     const seen = new Set();
@@ -4652,6 +5328,9 @@ setTimeout(() => {
 
   function pathMatchesFilter(path, filter, exceptField) {
     if (!path) return false;
+    if (exceptField !== "course" && filter.courses?.length) {
+      if (!filter.courses.map(normP).includes(normP(path.course || ""))) return false;
+    }
     if (exceptField !== "level" && filter.levels?.length) {
       if (!filter.levels.map(normP).includes(normP(path.level))) return false;
     }
@@ -4659,7 +5338,8 @@ setTimeout(() => {
       if (!filter.subjectAreas.map(normP).includes(normP(path.subject))) return false;
     }
     if (exceptField !== "suggestedCombinedTitle" && filter.topicGroups?.length) {
-      if (!filter.topicGroups.map(normP).includes(normP(path.topic))) return false;
+      const topics = [path.topic, path.sourceTopic].filter(Boolean).map(normP);
+      if (!filter.topicGroups.map(normP).some(topic => topics.includes(topic))) return false;
     }
     return true;
   }
@@ -4671,7 +5351,7 @@ setTimeout(() => {
     if (sourceType === "related_created" && !isRelatedCreatedWord(w)) return false;
     if (sourceType === "builtin" && isRelatedCreatedWord(w)) return false;
     // If no path-based filters, the word matches (status already passed).
-    const hasPathFilter = (filter.levels?.length || filter.subjectAreas?.length || filter.topicGroups?.length);
+    const hasPathFilter = (filter.courses?.length || filter.levels?.length || filter.subjectAreas?.length || filter.topicGroups?.length);
     if (!hasPathFilter) return true;
     return exactPracticePaths(w).some(p => pathMatchesFilter(p, filter, ""));
   }
@@ -4683,6 +5363,7 @@ setTimeout(() => {
   // Counts available for a given dimension, given the OTHER dimensions
   function optionCountsFor(field, filter) {
     const temp = {
+      courses: [...(filter.courses || [])],
       levels: [...(filter.levels || [])],
       subjectAreas: [...(filter.subjectAreas || [])],
       topicGroups: [...(filter.topicGroups || [])],
@@ -4690,6 +5371,7 @@ setTimeout(() => {
       skillViews: [...(filter.skillViews || [])],
       statuses: [...(filter.statuses || [])]
     };
+    if (field === "course") temp.courses = [];
     if (field === "level") temp.levels = [];
     if (field === "topHeader") temp.subjectAreas = [];
     if (field === "suggestedCombinedTitle") temp.topicGroups = [];
@@ -4700,7 +5382,7 @@ setTimeout(() => {
     if (field === "skillView") {
       const base = words.filter(w => {
         if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, "all"))) return false;
-        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
         return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
       });
       return [
@@ -4713,7 +5395,7 @@ setTimeout(() => {
     if (field === "sourceType") {
       const base = words.filter(w => {
         if (temp.statuses.length && !temp.statuses.some(st => wordMatchesPracticeStatus(w, st, selectedPracticeSkillView(temp)))) return false;
-        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
         return !hasPathFilter || exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""));
       });
       return [
@@ -4725,6 +5407,7 @@ setTimeout(() => {
 
     const map = new Map();
     const skillView = selectedPracticeSkillView(temp);
+    if (field === "status") map.set("bookmarked", 0);
     for (const w of words) {
       const sourceType = selectedPracticeSourceType(temp);
       if (field !== "sourceType" && sourceType === "related_created" && !isRelatedCreatedWord(w)) continue;
@@ -4733,9 +5416,9 @@ setTimeout(() => {
 
       if (field === "status") {
         // Word must satisfy path filters before its status is counted
-        const hasPathFilter = (temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
+        const hasPathFilter = (temp.courses.length || temp.levels.length || temp.subjectAreas.length || temp.topicGroups.length);
         if (hasPathFilter && !exactPracticePaths(w).some(p => pathMatchesFilter(p, temp, ""))) continue;
-        for (const s of ["not_practiced", "learning", "known", "mastered"]) {
+        for (const s of ["not_practiced", "learning", "known", "mastered", "bookmarked"]) {
           if (wordMatchesPracticeStatus(w, s, skillView)) map.set(s, (map.get(s) || 0) + 1);
         }
         continue;
@@ -4745,6 +5428,7 @@ setTimeout(() => {
       for (const p of exactPracticePaths(w)) {
         if (!pathMatchesFilter(p, temp, field)) continue;
         if (field === "level") valsForWord.add(p.level);
+        else if (field === "course") valsForWord.add(p.course);
         else if (field === "topHeader") valsForWord.add(p.subject);
         else if (field === "suggestedCombinedTitle") valsForWord.add(p.topic);
       }
@@ -4888,7 +5572,7 @@ setTimeout(() => {
           <div class="l0-prev">
             <div class="l0-prev-label">Previous Practice</div>
             <div class="l0-prev-title">${modeMeta.ico} ${escapeHtml(modeMeta.name)} · ${length} words ${scoreHtml}</div>
-            <div class="l0-prev-meta">${escapeHtml(cfg.description || describeFilter(cfg.filter || emptyFilter()))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}</div>
+            <div class="l0-prev-meta">${escapeHtml(cfg.description || describeFilter(cfg.filter || emptyFilter()))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}${cfg.spellTillRemember ? " · Spell till know" : ""}</div>
             <div class="l0-prev-actions">
               ${viewBtn}
               ${repeatPrevBtn}
@@ -5001,11 +5685,13 @@ setTimeout(() => {
     if (review.length === 0) { toast("No review words"); return; }
     const lastCfg = loadLastCfg();
     const mode = lastCfg?.mode || "wordToMeaning";
-    const sum = lastCfg ? !!lastCfg.studyUntilMastered : true;
+    const sum = mode === "spelling" ? false : (lastCfg ? !!lastCfg.studyUntilMastered : true);
     practiceCloseHistoryPanel();
     window.startPracticeSession({
       mode, pool: review, length: review.length,
       studyUntilMastered: sum,
+      spellTillRemember: !!(lastCfg && lastCfg.spellTillRemember),
+      repeatWrongSpelling: mode === "spelling" && repeatWrongSpellingFromSaved(lastCfg?.repeatWrongSpelling, lastCfg?.repeatWrongSpellingDefaultVersion),
       poolDescription: `Review · ${review.length} wrong words`
     });
   };
@@ -5015,11 +5701,13 @@ setTimeout(() => {
     if (mastered.length === 0) { toast("No mastered words"); return; }
     const lastCfg = loadLastCfg();
     const mode = lastCfg?.mode || "wordToMeaning";
-    const sum = lastCfg ? !!lastCfg.studyUntilMastered : false;
+    const sum = mode === "spelling" ? false : (lastCfg ? !!lastCfg.studyUntilMastered : false);
     practiceCloseHistoryPanel();
     window.startPracticeSession({
       mode, pool: mastered, length: mastered.length,
       studyUntilMastered: sum,
+      spellTillRemember: !!(lastCfg && lastCfg.spellTillRemember),
+      repeatWrongSpelling: mode === "spelling" && repeatWrongSpellingFromSaved(lastCfg?.repeatWrongSpelling, lastCfg?.repeatWrongSpellingDefaultVersion),
       poolDescription: `Mastered · ${mastered.length} words`
     });
   };
@@ -5048,7 +5736,8 @@ setTimeout(() => {
         const active = sel.includes(val);
         const isAllActive = (val === "__all" || ((d.field === "skillView" || d.field === "sourceType") && val === "all")) && !sel.length;
         const safeVal = String(val).replace(/'/g, "\\'");
-        return `<button class="pw-chip ${active || isAllActive ? "active" : ""}" onclick="practiceToggleFilter('${d.key}','${escapeHtml(safeVal)}')">${escapeHtml(label)}<span class="n">${n}</span></button>`;
+        const bookmarkClass = d.field === "status" && val === "bookmarked" ? " bookmark-filter-chip" : "";
+        return `<button class="pw-chip${bookmarkClass} ${active || isAllActive ? "active" : ""}" onclick="practiceToggleFilter('${d.key}','${escapeHtml(safeVal)}')">${escapeHtml(label)}<span class="n">${n}</span></button>`;
       }).join("");
       chipGroups += `
         <div class="pw-section">
@@ -5091,7 +5780,13 @@ setTimeout(() => {
     const poolKeys = pool.map(w => w.key);
 
     const modeCards = MODES.map(m => {
-      const acc = poolModeAccuracy(poolKeys, m.id);
+      const modePool = practicePoolForMode(pool, m.id);
+      const modePoolKeys = modePool.map(w => w.key);
+      const modeMaxLen = wizard.repeatPoolKeys
+        ? Math.max(1, modePool.length || exactRepeatWords.length)
+        : Math.max(1, modePool.length);
+      const modeLength = Math.min(wizard.length, modeMaxLen);
+      const acc = poolModeAccuracy(modePoolKeys, m.id);
       const stat = acc
         ? `Pool accuracy: ${acc.pct}% · ${acc.attempts} attempts`
         : "Not yet practiced for this pool";
@@ -5099,18 +5794,36 @@ setTimeout(() => {
 
       const optionsBlock = isSelected ? `
         <div class="l2-options" onclick="event.stopPropagation()">
-          <div class="l2-opt-label">Session length · <span id="pwSliderVal">${wizard.length}</span> words</div>
-          <input type="range" class="pw-slider" min="1" max="${maxLen}" value="${wizard.length}"
+          <div class="l2-opt-label">Session length · <span id="pwSliderVal">${modeLength}</span> ${m.id === "whoami" ? "visual cards" : "words"}</div>
+          <input type="range" class="pw-slider" min="1" max="${modeMaxLen}" value="${modeLength}"
             oninput="practiceSliderChange(this.value)" />
-          <div class="l2-slider-ends"><span>1</span><span>${maxLen}</span></div>
-          <div class="l2-toggle-row">
-            <div class="l2-toggle-body">
-              <div class="l2-toggle-name">🔁 Study Until Mastered</div>
-              <div class="l2-toggle-desc">Wrong answers come back until you get them all right.</div>
+          <div class="l2-slider-ends"><span>1</span><span>${modeMaxLen}</span></div>
+          ${m.id !== "spelling" ? `
+            <div class="l2-toggle-row">
+              <div class="l2-toggle-body">
+                <div class="l2-toggle-name">🔁 Study Until Mastered</div>
+                <div class="l2-toggle-desc">Wrong answers come back until you get them all right.</div>
+              </div>
+              <button class="l2-pill-toggle ${wizard.studyUntilMastered ? "on" : ""}" onclick="practiceToggleSUM()" aria-label="Study Until Mastered: ${wizard.studyUntilMastered ? "on" : "off"}" aria-pressed="${wizard.studyUntilMastered}">${wizard.studyUntilMastered ? "On" : "Off"}</button>
             </div>
-            <button class="pw-switch ${wizard.studyUntilMastered ? "on" : ""}" onclick="practiceToggleSUM()" aria-label="Study Until Mastered"></button>
-          </div>
-          <button class="l2-start-btn" onclick="practiceLaunch()">▶ Start practice</button>
+          ` : ""}
+          ${m.id === "spelling" ? `
+            <div class="l2-toggle-row">
+              <div class="l2-toggle-body">
+                <div class="l2-toggle-name">✏️ Spell till know</div>
+                <div class="l2-toggle-desc">Correct the word now, then answer it again at a later random point.</div>
+              </div>
+              <button class="l2-pill-toggle ${wizard.spellTillRemember ? "on" : ""}" onclick="practiceToggleSpellTillRemember()" aria-label="Spell till know: ${wizard.spellTillRemember ? "on" : "off"}" aria-pressed="${wizard.spellTillRemember}">${wizard.spellTillRemember ? "On" : "Off"}</button>
+            </div>
+            <div class="l2-toggle-row">
+              <div class="l2-toggle-body">
+                <div class="l2-toggle-name">🔁 Repeat wrong spelling</div>
+                <div class="l2-toggle-desc">After a wrong answer, choose 1, 3, or 5 immediate respells.</div>
+              </div>
+              <button class="l2-pill-toggle ${wizard.repeatWrongSpelling ? "on" : ""}" onclick="practiceToggleRepeatWrongSpelling()" aria-label="Repeat wrong spelling: ${wizard.repeatWrongSpelling ? "on" : "off"}" aria-pressed="${wizard.repeatWrongSpelling}">${wizard.repeatWrongSpelling ? "On" : "Off"}</button>
+            </div>
+          ` : ""}
+          <button class="l2-start-btn" ${m.id === "whoami" && modePool.length === 0 ? "disabled" : ""} onclick="practiceLaunch()">▶ Start practice</button>
         </div>
       ` : "";
 
@@ -5216,10 +5929,17 @@ setTimeout(() => {
 
   window.practiceToggleSUM = function() {
     wizard.studyUntilMastered = !wizard.studyUntilMastered;
-    // Only update the switch button in place to avoid re-rendering the slider
-    const sw = document.querySelector(".l2-toggle-row .pw-switch");
-    if (sw) sw.classList.toggle("on", wizard.studyUntilMastered);
-    else renderPracticeRoot();
+    renderPracticeRoot();
+  };
+
+  window.practiceToggleSpellTillRemember = function() {
+    wizard.spellTillRemember = !wizard.spellTillRemember;
+    renderPracticeRoot();
+  };
+
+  window.practiceToggleRepeatWrongSpelling = function() {
+    wizard.repeatWrongSpelling = !wizard.repeatWrongSpelling;
+    renderPracticeRoot();
   };
 
   window.practiceQuickStart = function() {
@@ -5228,13 +5948,15 @@ setTimeout(() => {
     wizard.filter = cfg.filter || emptyFilter();
     wizard.mode = cfg.mode;
     wizard.length = cfg.length || DEFAULT_LENGTH;
-    wizard.studyUntilMastered = !!cfg.studyUntilMastered;
+    wizard.studyUntilMastered = cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered;
+    wizard.spellTillRemember = cfg.spellTillRemember !== false;
+    wizard.repeatWrongSpelling = cfg.mode === "spelling" && repeatWrongSpellingFromSaved(cfg.repeatWrongSpelling, cfg.repeatWrongSpellingDefaultVersion);
     wizard.repeatPoolKeys = null;
     practiceLaunch();
   };
 
   window.practiceStartFresh = function() {
-    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: true, repeatPoolKeys: null };
+    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: false, spellTillRemember: true, repeatWrongSpelling: true, repeatPoolKeys: null };
     renderPracticeRoot();
   };
 
@@ -5248,7 +5970,9 @@ setTimeout(() => {
       filter,
       mode: opts.mode || null,
       length: Math.max(1, Math.min(opts.length || keys.length || DEFAULT_LENGTH, keys.length)),
-      studyUntilMastered: !!opts.studyUntilMastered,
+      studyUntilMastered: opts.mode === "spelling" ? false : !!opts.studyUntilMastered,
+      spellTillRemember: opts.spellTillRemember !== false,
+      repeatWrongSpelling: opts.mode === "spelling" && opts.repeatWrongSpelling !== false,
       repeatPoolKeys: [...new Set(keys)]
     };
     renderPracticeRoot();
@@ -5256,12 +5980,17 @@ setTimeout(() => {
 
   // ---------- Launch ----------
   window.practiceLaunch = function() {
-    const pool = resolvePool(wizard.filter);
+    const basePool = resolvePool(wizard.filter);
+    const pool = practicePoolForMode(basePool, wizard.mode);
     const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
-      ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
+      ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(w => w && (wizard.mode !== "whoami" || isWhoAmIWord(w)))
       : [];
     if (pool.length === 0 && exactRepeatWords.length === 0) { toast("No words match these filters"); return; }
     if (!wizard.mode) { toast("Pick a practice type"); return; }
+    if (wizard.mode === "whoami" && pool.length === 0) {
+      toast("No visual cards are ready for this filter");
+      return;
+    }
     const maxLen = Math.max(pool.length, exactRepeatWords.length);
     const length = Math.min(Math.max(1, wizard.length), maxLen);
 
@@ -5269,7 +5998,10 @@ setTimeout(() => {
       filter: wizard.filter,
       mode: wizard.mode,
       length,
-      studyUntilMastered: wizard.studyUntilMastered
+      studyUntilMastered: wizard.mode === "spelling" ? false : !!wizard.studyUntilMastered,
+      spellTillRemember: !!wizard.spellTillRemember,
+      repeatWrongSpelling: wizard.mode === "spelling" && wizard.repeatWrongSpelling !== false,
+      repeatWrongSpellingDefaultVersion: REPEAT_WRONG_SPELLING_DEFAULT_VERSION
     };
     saveLastCfg(cfg);
 
@@ -5289,8 +6021,10 @@ setTimeout(() => {
       pool: pool.length ? pool : exactRepeatWords,
       length,
       studyUntilMastered: cfg.studyUntilMastered,
-      poolDescription: describeFilter(wizard.filter),
-      poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered),
+      spellTillRemember: !!cfg.spellTillRemember,
+      repeatWrongSpelling: cfg.repeatWrongSpelling,
+      poolDescription: `${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
+      poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling),
       initialWords
     });
   };
@@ -5299,12 +6033,15 @@ setTimeout(() => {
   // SESSION — replaces legacy startGame / renderGame / ...
   // ============================================================
   function startPracticeSession(opts) {
-    const { mode, pool, length, studyUntilMastered, poolDescription } = opts;
+    const { mode, pool, length, studyUntilMastered, spellTillRemember, repeatWrongSpelling, poolDescription } = opts;
     const initial = Array.isArray(opts.initialWords) && opts.initialWords.length
       ? opts.initialWords.slice(0, length)
       : sample(pool, length);
     const actualLength = initial.length || Math.min(length, pool.length);
-    const poolConfig = opts.poolConfig || practicePoolConfig(wizard.filter || emptyFilter(), length, mode, studyUntilMastered);
+    const effectiveStudyUntilMastered = mode === "spelling" ? false : !!studyUntilMastered;
+    const effectiveRepeatWrongSpelling = mode === "spelling"
+      && (repeatWrongSpelling ?? opts.poolConfig?.repeatWrongSpelling ?? true);
+    const poolConfig = opts.poolConfig || practicePoolConfig(wizard.filter || emptyFilter(), length, mode, effectiveStudyUntilMastered, spellTillRemember, effectiveRepeatWrongSpelling);
 
     window.game = {
       mode,
@@ -5314,7 +6051,9 @@ setTimeout(() => {
       correct: 0,
       streak: 0,
       bestStreak: 0,
-      studyUntilMastered: !!studyUntilMastered,
+      studyUntilMastered: effectiveStudyUntilMastered,
+      spellTillRemember: !!spellTillRemember,
+      repeatWrongSpelling: effectiveRepeatWrongSpelling,
       initialLength: actualLength,
       toMaster: new Set(initial.map(w => w.key)),    // unique keys not yet correct
       mastered: new Set(),                            // unique keys answered correctly at least once
@@ -5324,6 +6063,13 @@ setTimeout(() => {
       poolDescription: poolDescription || "",
       poolConfig,
       sessionLength: actualLength,
+      currentSpellQuestionIndex: null,
+      currentSpellOccurrenceHadWrong: false,
+      pendingSpellingRepeats: 0,
+      spellingRepeatWordKey: null,
+      whoamiLastAssetByKey: {},
+      audioMuted: false,
+      skipped: new Set(),
       startedAt: new Date().toISOString(),
       sessionId: "s_" + Date.now()
     };
@@ -5368,6 +6114,13 @@ setTimeout(() => {
     }
 
     const w = g.queue[g.idx];
+    // Fetch the Google TTS MP3 while the learner is reading the question so
+    // the eventual answer-time play is a cached inline-media playback.
+    primePracticeAudio(w);
+    if (g.mode === "spelling" && g.spellTillRemember && g.currentSpellQuestionIndex !== g.idx) {
+      g.currentSpellQuestionIndex = g.idx;
+      g.currentSpellOccurrenceHadWrong = false;
+    }
 
     // Use window-exposed renderers so later Easy Mode patches can wrap them.
     if (g.mode === "wordToMeaning" || g.mode === "meaningToWord") {
@@ -5376,6 +6129,9 @@ setTimeout(() => {
     } else if (g.mode === "spelling") {
       if (typeof window.renderSpellV2 === "function") window.renderSpellV2(w);
       else renderSpellV2(w);
+    } else if (g.mode === "whoami") {
+      if (typeof window.renderWhoAmIV2 === "function") window.renderWhoAmIV2(w);
+      else renderWhoAmIV2(w);
     }
   }
 
@@ -5391,6 +6147,15 @@ setTimeout(() => {
     dots.innerHTML = `<div class="game-progress-bar"><div style="width:${pct}%"></div></div>`;
 
     $("gameStreak").textContent = "🔥" + g.streak;
+
+    const soundToggle = document.getElementById("gameSoundToggle");
+    if (soundToggle) {
+      const muted = g.audioMuted === true;
+      soundToggle.textContent = muted ? "🔇" : "🔊";
+      soundToggle.setAttribute("aria-pressed", muted ? "true" : "false");
+      soundToggle.setAttribute("aria-label", muted ? "Audio muted; tap to unmute" : "Audio on; tap to mute");
+      soundToggle.title = muted ? "Audio muted · use Play sound buttons when needed" : "Audio on · tap to mute";
+    }
 
     // Recycle counter below topbar
     let meta = document.getElementById("gameProgressMeta");
@@ -5414,11 +6179,14 @@ setTimeout(() => {
     // - Promotion (per-skill): first-attempt-correct in THAT skill OR 3 consecutive correct in THAT skill.
     // - Demotion (per-skill): a wrong answer demotes only the tested skill back to Learning.
     // - Mastered = Meaning Known AND Spelling Known.
-    const skill = (mode === "spelling") ? "spelling" : "meaning";
+    const skill = mode === "spelling" ? "spelling" : (mode === "whoami" ? "whoami" : "meaning");
     const isMeaningMode = (skill === "meaning");
+    const isWhoAmIMode = (skill === "whoami");
 
     // Detect first-ever attempt in THIS skill BEFORE we mutate counters.
-    const priorSkillAttempts = isMeaningMode
+    const priorSkillAttempts = isWhoAmIMode
+      ? ((progress[key]?.whoami?.attempts) || 0)
+      : isMeaningMode
       ? ((progress[key]?.wordToMeaning?.attempts) || 0) +
         ((progress[key]?.meaningToWord?.attempts) || 0) +
         ((progress[key]?.matching?.attempts) || 0)
@@ -5431,7 +6199,7 @@ setTimeout(() => {
     const attemptTs = new Date().toISOString();
     bucket.lastAttemptAt = attemptTs;
     if (ok) bucket.lastCorrectAt = bucket.lastAttemptAt;
-    if (typeof window.touchSkillAxisState === "function") {
+    if (!isWhoAmIMode && typeof window.touchSkillAxisState === "function") {
       window.touchSkillAxisState(key, skill, attemptTs);
     }
 
@@ -5444,28 +6212,29 @@ setTimeout(() => {
 
     // Ensure root structure + per-skill streak counters
     if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
-    const streakField = isMeaningMode ? "_consecMeaning" : "_consecSpelling";
+    const streakField = isMeaningMode ? "_consecMeaning" : (isWhoAmIMode ? "_consecWhoAmI" : "_consecSpelling");
     if (typeof progress[key][streakField] !== "number") progress[key][streakField] = 0;
 
     const km = (window.knownMeaning ||= {});
     const ks = (window.knownSpelling ||= {});
 
-    const wasMastered = !!(km[key] && ks[key]);
+    const wasMastered = isWhoAmIMode ? !!progress[key]._whoamiKnown : !!(km[key] && ks[key]);
 
     if (ok) {
       progress[key][streakField]++;
-      const alreadyKnown = isMeaningMode ? !!km[key] : !!ks[key];
+      const alreadyKnown = isMeaningMode ? !!km[key] : (isWhoAmIMode ? !!progress[key]._whoamiKnown : !!ks[key]);
       const shouldPromote = !alreadyKnown && (isFirstAttemptInSkill || progress[key][streakField] >= 3);
       if (shouldPromote) {
         if (isMeaningMode) km[key] = true;
-        else                ks[key] = true;
+        else if (!isWhoAmIMode) ks[key] = true;
+        else progress[key]._whoamiKnown = true;
         // Mirror to legacy global "known" flag (Mastered means both Known).
-        const nowMastered = km[key] && ks[key];
+        const nowMastered = !isWhoAmIMode && km[key] && ks[key];
         if (nowMastered) {
           known[key] = true;
           if (typeof saveKnown === "function") saveKnown();
         }
-        if (typeof saveSkillState === "function") saveSkillState();
+        if (!isWhoAmIMode && typeof saveSkillState === "function") saveSkillState();
         // Notify per-skill listener (multi-goal, calendar, etc.)
         if (typeof window.onSkillPromotion === "function") {
           try { window.onSkillPromotion(key, skill); } catch (e) { console.warn("onSkillPromotion failed:", e); }
@@ -5475,7 +6244,7 @@ setTimeout(() => {
         }
         if (typeof toast === "function") {
           const w = words.find(x => x.key === key);
-          const label = nowMastered ? "🏆 Mastered" : (isMeaningMode ? "✓ Meaning Known" : "✓ Spelling Known");
+          const label = nowMastered ? "🏆 Mastered" : (isMeaningMode ? "✓ Meaning Known" : (isWhoAmIMode ? "✓ Visual Known" : "✓ Spelling Known"));
           toast(`${label}: ${w?.word || key}`);
         }
       }
@@ -5484,15 +6253,16 @@ setTimeout(() => {
       progress[key][streakField] = 0;
       let demoted = false;
       if (isMeaningMode && km[key]) { delete km[key]; demoted = true; }
-      if (!isMeaningMode && ks[key]) { delete ks[key]; demoted = true; }
+      if (!isMeaningMode && !isWhoAmIMode && ks[key]) { delete ks[key]; demoted = true; }
+      if (isWhoAmIMode && progress[key]._whoamiKnown) { delete progress[key]._whoamiKnown; demoted = true; }
       // If word was Mastered, the legacy "known" flag must drop too.
       if (demoted && wasMastered) {
         if (known[key]) { delete known[key]; if (typeof saveKnown === "function") saveKnown(); }
       }
-      if (demoted && typeof saveSkillState === "function") saveSkillState();
+      if (demoted && !isWhoAmIMode && typeof saveSkillState === "function") saveSkillState();
       if (demoted && typeof toast === "function") {
         const w = words.find(x => x.key === key);
-        toast(`↩︎ ${isMeaningMode ? "Meaning" : "Spelling"} back to Learning: ${w?.word || key}`);
+        toast(`↩︎ ${isMeaningMode ? "Meaning" : (isWhoAmIMode ? "Visual" : "Spelling")} back to Learning: ${w?.word || key}`);
       }
     }
 
@@ -5504,6 +6274,17 @@ setTimeout(() => {
     const current = Math.max(0, Number(g.idx || 0));
     const minGap = Math.min(4, Math.max(2, Math.floor((g.initialLength || 0) / 4)));
     const minIndex = Math.min(g.queue.length, current + minGap + 1);
+    const maxIndex = Math.max(minIndex, g.queue.length);
+    const insertAt = minIndex + Math.floor(Math.random() * (maxIndex - minIndex + 1));
+    g.queue.splice(Math.min(insertAt, g.queue.length), 0, w);
+  }
+
+  function scheduleSpellTillRememberReview(g, w) {
+    if (!g || !w) return;
+    const current = Math.max(0, Number(g.idx || 0));
+    // Leave at least one other question between the correction and the
+    // additional review whenever the remaining section is long enough.
+    const minIndex = Math.min(g.queue.length, current + 2);
     const maxIndex = Math.max(minIndex, g.queue.length);
     const insertAt = minIndex + Math.floor(Math.random() * (maxIndex - minIndex + 1));
     g.queue.splice(Math.min(insertAt, g.queue.length), 0, w);
@@ -5523,21 +6304,40 @@ setTimeout(() => {
       if (!ok) g.wrongFirstTry.add(w.key);
     }
 
+    const spellTillRemember = g.mode === "spelling" && g.spellTillRemember;
+    const immediateSpellRepeat = spellTillRemember
+      && Number(g.pendingSpellingRepeats || 0) > 0
+      && g.spellingRepeatWordKey === w.key;
+
     if (ok) {
       g.correct++;
       g.streak++;
       g.bestStreak = Math.max(g.bestStreak, g.streak);
-      g.mastered.add(w.key);
-      g.toMaster.delete(w.key);
+      // A correct answer after a mistake is the compulsory correction, not
+      // the delayed memory check. The word is only counted as mastered after
+      // a clean later review attempt.
+      if (!spellTillRemember || !g.currentSpellOccurrenceHadWrong) {
+        g.mastered.add(w.key);
+        g.toMaster.delete(w.key);
+      }
+      if (spellTillRemember && g.currentSpellOccurrenceHadWrong && !immediateSpellRepeat) {
+        scheduleSpellTillRememberReview(g, w);
+      }
     } else {
       g.streak = 0;
-      if (g.studyUntilMastered) {
+      if (spellTillRemember) {
+        // The spelling answer wrapper keeps this same queue position open
+        // until the learner corrects it, then schedules a later review.
+        g.currentSpellOccurrenceHadWrong = true;
+      } else if (g.studyUntilMastered) {
         requeueWrongForMastery(g, w);
       }
     }
 
     recordAttempt(w.key, g.mode, ok);
   }
+
+  window.scheduleSpellTillRememberReview = scheduleSpellTillRememberReview;
 
   // ---------- MC (Word→Meaning / Meaning→Word) ----------
   function renderMCV2(w) {
@@ -5605,6 +6405,128 @@ setTimeout(() => {
     }
   }
 
+  // ---------- Who Am I? visual recognition ----------
+  function chooseWhoAmIAsset(w) {
+    const g = window.game;
+    const assets = whoAmIAssetsForWord(w);
+    if (!assets.length) return null;
+    g.whoamiLastAssetByKey ||= {};
+    const lastId = g.whoamiLastAssetByKey[w.key];
+    const choices = assets.length > 1 ? assets.filter(asset => asset.id !== lastId) : assets;
+    const asset = choices[Math.floor(Math.random() * choices.length)] || assets[0];
+    g.whoamiLastAssetByKey[w.key] = asset.id;
+    return asset;
+  }
+
+  function renderWhoAmIV2(w) {
+    const asset = chooseWhoAmIAsset(w);
+    if (!asset) {
+      $("gameBody").innerHTML = `
+        <div class="whoami-empty">
+          <div class="whoami-empty-icon">🖼️</div>
+          <div class="whoami-empty-title">No approved visual yet</div>
+          <div class="whoami-empty-copy">This term is waiting for an image review.</div>
+          <button class="game-btn primary" style="margin-top:18px" onclick="nextQuestionV2()">Continue</button>
+        </div>`;
+      return;
+    }
+
+    const hint = typeof practiceHintForWord === "function"
+      ? practiceHintForWord(w)
+      : (w.vtc?.context || "Use the highlighted anatomy area as your visual clue.");
+    const reviewPending = (w.visual || w.vtc?.visual)?.review_status === "pending_manual_review";
+
+    $("gameBody").innerHTML = `
+      <div class="game-prompt-label">WHO AM I?</div>
+      <div class="whoami-instruction">Identify the structure and spell its full name.</div>
+      <figure class="whoami-figure">
+        <img class="whoami-image" src="${escapeHtml(asset.src)}" alt="Anatomy study image; focus area pending manual review" />
+        <figcaption>${reviewPending ? "Candidate visual · pending manual review" : "Visual anatomy clue"}</figcaption>
+      </figure>
+      <div class="whoami-answer-label">Type the full vocabulary name</div>
+      <div class="game-spell whoami-spell">
+        <input class="spell-input whoami-input" id="whoamiInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type the name…" />
+        <div class="whoami-actions">
+          <button class="game-btn secondary" id="whoamiHintBtn" type="button">Hint</button>
+          <button class="game-btn primary" id="whoamiCheckBtn" type="button">Check</button>
+        </div>
+        <div class="whoami-hint" id="whoamiHintBox" hidden>${escapeHtml(hint)}</div>
+      </div>
+    `;
+
+    const input = $("whoamiInput");
+    input?.focus();
+    $("whoamiHintBtn").onclick = () => {
+      const box = $("whoamiHintBox");
+      if (box) box.hidden = !box.hidden;
+    };
+    $("whoamiCheckBtn").onclick = () => window.answerWhoAmIV2(w);
+    input?.addEventListener("keydown", event => {
+      if (event.key === "Enter") window.answerWhoAmIV2(w);
+    });
+  }
+
+  function renderWhoAmIActions(body, w, ok) {
+    const actions = document.createElement("div");
+    actions.className = "whoami-result-actions";
+
+    const info = document.createElement("button");
+    info.className = "game-btn secondary";
+    info.textContent = "📖 More info";
+    info.onclick = () => {
+      if (typeof window.showWord === "function") window.showWord(w.key);
+      else if (typeof window.openSheet === "function") window.openSheet(w.key);
+    };
+
+    const audio = document.createElement("button");
+    audio.className = "game-btn secondary";
+    audio.textContent = "🔊 Audio";
+    audio.onclick = () => {
+      if (typeof practicePlayPronunciation === "function") practicePlayPronunciation(w.key, audio);
+    };
+
+    const next = document.createElement("button");
+    next.className = "game-btn primary";
+    next.textContent = "Continue ›";
+    next.onclick = nextQuestionV2;
+
+    actions.append(info, audio, next);
+    body.appendChild(actions);
+  }
+
+  function answerWhoAmIV2(w) {
+    const input = $("whoamiInput");
+    if (!input) return;
+    const answer = input.value;
+    const ok = typeof spellingAnswerMatches === "function"
+      ? spellingAnswerMatches(w, answer)
+      : normalizeKey(answer) === normalizeKey(w.word);
+    handleAnswer(w, ok);
+    input.disabled = true;
+    $("whoamiCheckBtn")?.remove();
+    $("whoamiHintBtn")?.remove();
+
+    const asset = window.game?.whoamiLastAssetByKey?.[w.key]
+      ? whoAmIAssetsForWord(w).find(item => item.id === window.game.whoamiLastAssetByKey[w.key])
+      : whoAmIAssetsForWord(w)[0];
+    const revealSrc = asset?.reveal_src || asset?.src || "";
+    const correct = typeof window.spellingFullFormFor === "function"
+      ? window.spellingFullFormFor(w)
+      : w.word;
+    const body = $("gameBody");
+    const result = document.createElement("section");
+    result.className = `whoami-result ${ok ? "is-correct" : "is-wrong"}`;
+    result.innerHTML = `
+      ${revealSrc ? `<img class="whoami-result-image" src="${escapeHtml(revealSrc)}" alt="Revealed anatomy study image" />` : ""}
+      <div class="whoami-result-status">${ok ? "✓ Correct!" : "✗ The correct answer was"}</div>
+      ${ok ? `<div class="whoami-result-answer">${escapeHtml(correct)}</div>` : (typeof window.renderSpellingComparisonHtml === "function" ? window.renderSpellingComparisonHtml(answer, correct) : `<div class="whoami-result-answer">${escapeHtml(correct)}</div>`)}
+      <div class="whoami-result-definition">${escapeHtml(practiceDefinitionForWord(w) || "")}</div>
+      <div class="whoami-result-hint">${escapeHtml(practiceHintForWord(w) || "")}</div>
+    `;
+    body.appendChild(result);
+    renderWhoAmIActions(body, w, ok);
+  }
+
   // ---------- Spelling ----------
   async function renderSpellV2(w) {
     $("gameBody").innerHTML = `
@@ -5613,7 +6535,7 @@ setTimeout(() => {
     `;
 
     let entry = dictCache[w.key] || null;
-    if (!entry && typeof fetchDefinition === "function") {
+    if (!entry && !w.vtc && typeof fetchDefinition === "function") {
       try {
         entry = await fetchDefinition(w);
         if (entry) dictCache[w.key] = entry;
@@ -5623,16 +6545,16 @@ setTimeout(() => {
     }
 
     const q = buildSpellingQuestionFromEntry(w, entry);
-    const hint = practiceDefinitionForWord(w);
+    const hint = spellingHintForWord(w);
 
     $("gameBody").innerHTML = `
       <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
       <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
-      <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;">
+      <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;white-space:pre-line;">
         ${escapeHtml(hint)}
       </div>
       <div class="game-spell">
-        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
         <div style="display:flex;gap:10px;">
           <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
           <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
@@ -5650,7 +6572,7 @@ setTimeout(() => {
     const inp = $("spellInput");
     if (!inp) return;
     const ans = inp.value;
-    const ok = normalizeSpelling(ans) === normalizeSpelling(w.word);
+    const ok = spellingAnswerMatches(w, ans);
 
     handleAnswer(w, ok);
 
@@ -5697,8 +6619,11 @@ setTimeout(() => {
   window.nextQuestionV2 = nextQuestionV2;
   window.answerMCV2 = answerMCV2;
   window.answerSpellV2 = answerSpellV2;
+  window.answerWhoAmIV2 = answerWhoAmIV2;
   window.renderMCV2 = renderMCV2;
   window.renderSpellV2 = renderSpellV2;
+  window.renderWhoAmIV2 = renderWhoAmIV2;
+  window.renderGameV2 = renderGameV2;
   window.handleAnswer = handleAnswer;
   window.renderGameTopbar = renderGameTopbar;
 
@@ -5720,12 +6645,17 @@ setTimeout(() => {
       sessionLength: g.sessionLength,
       loadedWordKeys: Object.keys(g.perWord || {}),
       studyUntilMastered: g.studyUntilMastered,
+      spellTillRemember: g.spellTillRemember,
+      repeatWrongSpelling: g.repeatWrongSpelling,
+      repeatWrongSpellingDefaultVersion: REPEAT_WRONG_SPELLING_DEFAULT_VERSION,
       totalAnswered: g.totalAnswered,
       correctAnswered: g.correct,
       uniqueWordsCorrect: g.mastered.size,
       bestStreak: g.bestStreak,
       correctKeys,
-      masteredWords: [...g.mastered].filter(k => known && known[k]),
+      masteredWords: g.mode === "whoami"
+        ? [...g.mastered]
+        : [...g.mastered].filter(k => known && known[k]),
       learningWords: Object.keys(g.perWord || {}).filter(k => !(known && known[k])),
       wrongKeys,
       completed: !!completed
@@ -5869,7 +6799,7 @@ setTimeout(() => {
     const mode = g.mode;
     const sum = g.studyUntilMastered;
     const desc = (g.poolDescription || "") + " · retry wrong";
-    window.startPracticeSession({ mode, pool, length: pool.length, studyUntilMastered: sum, poolDescription: desc });
+    window.startPracticeSession({ mode, pool, length: pool.length, studyUntilMastered: sum, spellTillRemember: g.spellTillRemember, repeatWrongSpelling: g.repeatWrongSpelling, poolDescription: desc });
   };
 
   window.practicePlayAgain = function() {
@@ -5881,6 +6811,8 @@ setTimeout(() => {
       pool: g.pool,
       length: g.sessionLength,
       studyUntilMastered: g.studyUntilMastered,
+      spellTillRemember: g.spellTillRemember,
+      repeatWrongSpelling: g.repeatWrongSpelling,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig,
       initialWords
@@ -5999,14 +6931,34 @@ setTimeout(() => {
   }
 
   function sessionPoolConfig(s) {
-    if (s && s.poolConfig && typeof s.poolConfig === "object") return s.poolConfig;
+    if (s && s.poolConfig && typeof s.poolConfig === "object") {
+      const cfg = { ...s.poolConfig };
+      if ((s.mode || cfg.mode) === "spelling") {
+        if (!Object.prototype.hasOwnProperty.call(cfg, "spellTillRemember")) {
+          cfg.spellTillRemember = true;
+        }
+        cfg.repeatWrongSpelling = repeatWrongSpellingFromSaved(
+          cfg.repeatWrongSpelling ?? s.repeatWrongSpelling,
+          cfg.repeatWrongSpellingDefaultVersion ?? s.repeatWrongSpellingDefaultVersion
+        );
+      }
+      return cfg;
+    }
     const lastCfg = loadLastCfg();
+    const mode = s?.mode || lastCfg?.mode || "wordToMeaning";
     return {
       filter: (s && s.filter) || lastCfg?.filter || emptyFilter(),
       description: s?.poolDescription || describeFilter((s && s.filter) || lastCfg?.filter || emptyFilter()),
       length: Number(s?.sessionLength || lastCfg?.length || DEFAULT_LENGTH),
-      mode: s?.mode || lastCfg?.mode || "wordToMeaning",
-      studyUntilMastered: !!(s?.studyUntilMastered ?? lastCfg?.studyUntilMastered)
+      mode,
+      studyUntilMastered: mode === "spelling" ? false : !!(s?.studyUntilMastered ?? lastCfg?.studyUntilMastered),
+      spellTillRemember: s?.spellTillRemember ?? lastCfg?.spellTillRemember ?? (mode === "spelling"),
+      repeatWrongSpelling: mode === "spelling" && repeatWrongSpellingFromSaved(
+        s?.repeatWrongSpelling ?? lastCfg?.repeatWrongSpelling,
+        s?.repeatWrongSpelling !== undefined
+          ? s?.repeatWrongSpellingDefaultVersion
+          : lastCfg?.repeatWrongSpellingDefaultVersion
+      )
     };
   }
 
@@ -6019,7 +6971,9 @@ setTimeout(() => {
       filter: cloneFilterConfig(cfg.filter || emptyFilter()),
       mode: cfg.mode || last.mode || "wordToMeaning",
       length: Number(cfg.length || last.sessionLength || DEFAULT_LENGTH),
-      studyUntilMastered: !!cfg.studyUntilMastered,
+      studyUntilMastered: cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered,
+      spellTillRemember: cfg.spellTillRemember !== false,
+      repeatWrongSpelling: cfg.mode === "spelling" && cfg.repeatWrongSpelling !== false,
       description: cfg.description || last.poolDescription || describeFilter(cfg.filter || emptyFilter())
     };
   }
@@ -6038,7 +6992,8 @@ setTimeout(() => {
     const parts = [];
     if (cfg.description) parts.push(cfg.description);
     parts.push(`${Number(cfg.length || s.sessionLength || DEFAULT_LENGTH)} words`);
-    if (s.studyUntilMastered || cfg.studyUntilMastered) parts.push("Until mastered");
+    if (s.mode !== "spelling" && (s.studyUntilMastered || cfg.studyUntilMastered)) parts.push("Until mastered");
+    if (s.spellTillRemember || cfg.spellTillRemember) parts.push("Spell till know");
     return parts.join(" · ");
   }
 
@@ -6238,7 +7193,9 @@ setTimeout(() => {
       mode: s.mode,
       pool,
       length: pool.length,
-      studyUntilMastered: true,
+      studyUntilMastered: s.mode === "spelling" ? false : true,
+      spellTillRemember: s.mode === "spelling" ? s.spellTillRemember !== false : !!s.spellTillRemember,
+      repeatWrongSpelling: s.mode === "spelling" && repeatWrongSpellingFromSaved(s.repeatWrongSpelling, s.repeatWrongSpellingDefaultVersion),
       poolDescription: `Retry · ${recencyLabel(s.endedAt)} wrong words`
     });
   };
@@ -6250,7 +7207,9 @@ setTimeout(() => {
       filter: cloneFilterConfig(cfg.filter || emptyFilter()),
       mode: cfg.mode || s.mode || "wordToMeaning",
       length: Number(cfg.length || s.sessionLength || DEFAULT_LENGTH),
-      studyUntilMastered: !!cfg.studyUntilMastered,
+      studyUntilMastered: (cfg.mode || s.mode) === "spelling" ? false : !!cfg.studyUntilMastered,
+      spellTillRemember: cfg.spellTillRemember !== false,
+      repeatWrongSpelling: (cfg.mode || s.mode) === "spelling" && cfg.repeatWrongSpelling !== false,
       repeatPoolKeys: null
     };
 
@@ -7027,7 +7986,16 @@ setTimeout(() => {
       w.word, w.key,
       ...(w.grammarLabels || []),
       ...(w.rawTexts || []),
-      ...(w.sourceExamples || [])
+      ...(w.sourceExamples || []),
+      w.vtc?.pronunciation,
+      w.vtc?.english_definition,
+      w.vtc?.traditional_chinese_definition,
+      w.vtc?.context,
+      w.vtc?.academic_area,
+      w.courseCode,
+      w.courseTitle,
+      w.lecture,
+      w.sourceTitle
     ];
 
     for (const p of vocabPaths3p(w)) {
@@ -7094,12 +8062,13 @@ setTimeout(() => {
 
   function canonicalLevelExact(v) {
     const s = cleanExact(v);
-    return LEVELS_EXACT.find(x => normExact(x) === normExact(s)) || "";
+    return LEVELS_EXACT.find(x => normExact(x) === normExact(s)) ||
+      (normExact(s) === "vtc" ? "VTC" : "");
   }
 
   function canonicalSubjectExact(v) {
     const s = cleanExact(v);
-    return SUBJECTS_EXACT.find(x => normExact(x) === normExact(s)) || "";
+    return SUBJECTS_EXACT.find(x => normExact(x) === normExact(s)) || s;
   }
 
   function exactPathFromItem(item, fallbackLevel) {
@@ -7170,7 +8139,8 @@ setTimeout(() => {
       exceptField !== "boldTitle" &&
       exceptField !== "boxedBoldTitle" &&
       currentBoldTitleFilter !== "__all" &&
-      normExact(p.topic) !== normExact(currentBoldTitleFilter)
+      normExact(p.topic) !== normExact(currentBoldTitleFilter) &&
+      normExact(p.sourceTopic) !== normExact(currentBoldTitleFilter)
     ) return false;
 
     return true;
@@ -7181,16 +8151,89 @@ setTimeout(() => {
   }
 
   // Replace parser so exact path survives aggregation by term.
-  window.extractWords = function(source) {
+  window.extractWords = function(source, datasetMeta = {}) {
     const map = new Map();
+
+    const sourceCourseCode = datasetMeta?.courseCode || source?.course_code || source?.courseCode || "";
+    const sourceCourseTitle = datasetMeta?.courseTitle || source?.course_short_title || source?.courseShortTitle ||
+      source?.course_title || source?.courseTitle || "";
+    const sourceSessionLabel = datasetMeta?.sessionLabel || source?.session_label || source?.sessionLabel ||
+      ((source?.session_type && source?.session_number)
+        ? `${source.session_type} ${source.session_number}`
+        : source?.lecture || "");
+
+    function qualifiedVtcPath(path, item) {
+      if (!path || normExact(path.level) !== "vtc") return path;
+
+      const courseCode = cleanExact(item?.courseCode || item?.course_code || sourceCourseCode || path.subject);
+      const courseTitle = cleanExact(item?.courseShortTitle || item?.course_short_title ||
+        item?.courseTitle || item?.course_title || sourceCourseTitle);
+      const sessionLabel = cleanExact(item?.sessionLabel || item?.session_label || sourceSessionLabel ||
+        item?.lecture || item?.group || "");
+      const sourceTopic = cleanExact(path.topic);
+      if (!courseCode || !sourceTopic) return path;
+
+      const titlePrefix = courseTitle && normExact(sourceTopic).startsWith(`${normExact(courseTitle)} /`);
+      const topic = titlePrefix
+        ? `${courseCode} · ${sourceTopic}`
+        : [courseCode, courseTitle, sourceTopic].filter(Boolean).join(" · ");
+
+      return {
+        ...path,
+        courseCode,
+        courseTitle,
+        sessionLabel,
+        sourceTopic,
+        topic
+      };
+    }
 
     function addItemExact(item, fallbackLevel) {
       const term = item?.term || item?.word || "";
       const key = normalizeKey(term);
       if (!key) return;
+      const vtcData = item?.vtc || (
+        item?.english_definition || item?.traditional_chinese_definition
+          ? {
+              term: term.trim(),
+              pronunciation: item.pronunciation || "",
+              english_definition: item.english_definition || "",
+              traditional_chinese_definition: item.traditional_chinese_definition || "",
+              context: item.context || "",
+              academic_area: item.academic_area || "",
+              visual: item.visual || item.whoami || null,
+              source_term: item.source_term || "",
+              source_note: item.source_note || ""
+            }
+          : null
+      );
 
-      const p = exactPathFromItem(item, fallbackLevel);
+      let p = exactPathFromItem(item, fallbackLevel);
+      const itemCourseCode = item?.courseCode || item?.course_code || sourceCourseCode;
+      const itemCourseTitle = item?.courseShortTitle || item?.course_short_title ||
+        item?.courseTitle || item?.course_title || sourceCourseTitle;
+      const itemSessionLabel = item?.sessionLabel || item?.session_label ||
+        sourceSessionLabel || item?.lecture || item?.group || "";
+
+      // Some manifest-backed VTC datasets keep course/session metadata only
+      // at the JSON root. Use that explicit metadata when an item has no path
+      // of its own; do not guess a course or session from its filename.
+      if (!p && itemCourseCode && itemSessionLabel) {
+        const coursePart = cleanExact(itemCourseTitle);
+        const sessionPart = cleanExact(itemSessionLabel);
+        p = {
+          level: "VTC",
+          subject: cleanExact(itemCourseCode),
+          topic: coursePart ? `${coursePart} / ${sessionPart}` : sessionPart
+        };
+      }
       if (!p) return;
+      p = qualifiedVtcPath(p, {
+        ...item,
+        courseCode: itemCourseCode,
+        courseTitle: itemCourseTitle,
+        sessionLabel: itemSessionLabel
+      });
 
       if (!map.has(key)) {
         map.set(key, {
@@ -7208,11 +8251,29 @@ setTimeout(() => {
           boldTitles: [],
           suggestedCombinedTitles: [],
           exactSuggestedCombinedPaths: [],
-          isDerivativeOrRelatedForm: !!item.is_derivative_or_related_form
+          isDerivativeOrRelatedForm: !!item.is_derivative_or_related_form,
+          vtc: vtcData || null,
+          visual: item.visual || item.whoami || vtcData?.visual || null,
+          courseCode: item.courseCode || item.course_code || "",
+          courseTitle: item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title || "",
+          lecture: item.sessionLabel || item.session_label || item.lecture || item.group || "",
+          sourceTitle: item.sourceTitle || "",
+          sourceStatus: item.sourceStatus || ""
         });
       }
 
       const rec = map.get(key);
+      if (vtcData) rec.vtc = vtcData;
+      if (item.visual || item.whoami || vtcData?.visual) rec.visual = item.visual || item.whoami || vtcData.visual;
+      if (item.courseCode || item.course_code) rec.courseCode = item.courseCode || item.course_code;
+      if (item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title) {
+        rec.courseTitle = item.courseShortTitle || item.course_short_title || item.courseTitle || item.course_title;
+      }
+      if (item.sessionLabel || item.session_label || item.lecture || item.group) {
+        rec.lecture = item.sessionLabel || item.session_label || item.lecture || item.group;
+      }
+      if (item.sourceTitle) rec.sourceTitle = item.sourceTitle;
+      if (item.sourceStatus) rec.sourceStatus = item.sourceStatus;
 
       if (!rec.levels.includes(p.level)) rec.levels.push(p.level);
       if (!rec.topHeaders.includes(p.subject)) rec.topHeaders.push(p.subject);
@@ -7262,6 +8323,38 @@ setTimeout(() => {
       }
     }
 
+    // Source-preserving VTC course vocabulary:
+    // { title, provenance, entries: [{ term, pronunciation, ... }] }
+    if (Array.isArray(source?.entries)) {
+      const courseCode = datasetMeta?.courseCode || source.course_code || source.courseCode || "HHS4185";
+      const courseTitle = source.course_short_title || source.courseShortTitle || datasetMeta?.courseTitle ||
+        source.course_title || source.courseTitle || "Common Rehabilitation Conditions";
+      const lecture = source.session_label || source.sessionLabel || source.lecture || datasetMeta?.sessionLabel || "Lecture 1";
+      const groupTitle = `${courseTitle} / ${lecture}`;
+      for (const entry of source.entries) {
+        addItemExact({
+          ...entry,
+          vtc: {
+            term: entry.term || "",
+            pronunciation: entry.pronunciation || "",
+            english_definition: entry.english_definition || "",
+            traditional_chinese_definition: entry.traditional_chinese_definition || "",
+            context: entry.context || "",
+            academic_area: entry.academic_area || ""
+          },
+          courseCode,
+          courseTitle,
+          lecture,
+          sourceTitle: source.title || groupTitle,
+          sourceStatus: source.provenance?.source_status || "",
+          level: "VTC",
+          top_header: courseCode,
+          suggested_combined_title: groupTitle,
+          suggested_combined_title_path: ["VTC", courseCode, groupTitle]
+        }, "VTC");
+      }
+    }
+
     const list = [...map.values()].sort((a, b) => a.word.localeCompare(b.word));
 
     // Related-family support is intentionally conservative here.
@@ -7299,7 +8392,7 @@ setTimeout(() => {
         field === "suggestedCombinedTitle" ||
         field === "boldTitle" ||
         field === "boxedBoldTitle"
-      ) return normExact(p.topic) === normExact(selected);
+      ) return normExact(p.topic) === normExact(selected) || normExact(p.sourceTopic) === normExact(selected);
 
       return false;
     });
@@ -7475,12 +8568,11 @@ setTimeout(() => {
   };
 
   // Force reload packaged vocab through the new exact parser.
-  window.__reloadExactSuggestedCombinedVocabulary = async function() {
-    try {
-      const res = await fetch("vocab.json?ts=" + Date.now());
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const json = await res.json();
-      words = extractWords(json);
+window.__reloadExactSuggestedCombinedVocabulary = async function() {
+  try {
+      const bundledLists = await loadBundledVocabularyLists();
+      if (!bundledLists.length) throw new Error("No bundled vocabulary source loaded");
+      words = mergeWordLists([], bundledLists.flat());
       ensureProgressRecords();
       saveAll();
       renderFilterPanel();
@@ -7511,6 +8603,10 @@ setTimeout(() => {
   const BACKGROUND_POOL_LIMIT = 120;
 
   function hasUsefulDefinition(w) {
+    // VTC lecture records include their own definitions and should never be
+    // sent to the optional external dictionary endpoint during prefetch.
+    if (w?.vtc?.english_definition) return true;
+
     const entry = dictCache[w.key];
     if (!entry) return false;
 
@@ -7978,12 +9074,7 @@ setTimeout(() => {
     const collegiateAudio = (window.dictCache && window.dictCache[word.key] && window.dictCache[word.key].audio) || "";
     const audioUrl = (easyEntry && easyEntry.audio) || collegiateAudio || "";
     audioBtn.disabled = !audioUrl;
-    audioBtn.onclick = () => { if (audioUrl) { try { new Audio(audioUrl).play(); } catch (e) {} } };
-
-    // Auto-play once
-    if (audioUrl) {
-      try { new Audio(audioUrl).play(); } catch (e) { /* may be blocked */ }
-    }
+    audioBtn.onclick = () => { if (audioUrl) { try { createInlineAudio(audioUrl).play(); } catch (e) {} } };
 
     // Render content
     const pron = (easyEntry && easyEntry.pronunciation) || (window.dictCache && window.dictCache[word.key] && window.dictCache[word.key].pronunciation) || "";
@@ -8091,23 +9182,29 @@ setTimeout(() => {
     row.className = "em-correct-actions";
     row.innerHTML = `
       <button class="em-action-btn secondary" id="emMoreInfoBtn">📖 More info</button>
+      <button class="em-action-btn em-skip-action" id="emSkipBtn">Skip this word</button>
       <button class="em-action-btn primary" id="emContinueBtn">Continue ›</button>
+      <button class="em-bookmark-btn" id="emBookmarkBtn" type="button"></button>
     `;
     body.appendChild(row);
 
+    if (typeof window.bindWordBookmarkButton === "function") {
+      window.bindWordBookmarkButton(document.getElementById("emBookmarkBtn"), w);
+    }
+
+    document.getElementById("emSkipBtn").onclick = () => skipCurrentPracticeWord();
     document.getElementById("emMoreInfoBtn").onclick = () => {
       window.openEasyAnswerOverlay({
         word: w,
         isWrong: false,
-        onContinue: () => nextQuestionV2()
+        onContinue: () => nextQuestionV2(),
+        onSkip: () => skipCurrentPracticeWord()
       });
     };
     document.getElementById("emContinueBtn").onclick = () => nextQuestionV2();
 
-    // Auto-play pronunciation in background (already happens via existing flow,
-    // but we trigger explicitly here since we bypass the original branch).
-    if (typeof practicePlayPronunciationAndThen === "function") {
-      practicePlayPronunciationAndThen(w.key, null, () => {});
+    if (activePracticeGame()?.audioMuted !== true) {
+      practicePlayPronunciation(w.key);
     }
   }
 
@@ -8547,7 +9644,7 @@ setTimeout(() => {
     const goal = loadGoal();
     // No goal yet → block with the goal-setup modal
     if (!goal || !goal.wordsPerDay) {
-      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div><button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button></div></div>`;
       openGoalSetup(5);
       return;
     }
@@ -8569,6 +9666,7 @@ setTimeout(() => {
       <div class="g-page">
         <div class="g-hero">
           <div class="g-title">Goal</div>
+          <button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button>
         </div>
 
         <div class="g-today-card">
@@ -8928,7 +10026,7 @@ setTimeout(() => {
       // Quota errors or others — still fire any side-effects we want
       throw e;
     }
-    if (window.__cloudApplyingRemotePayloadV4) {
+    if (window.__cloudApplyingRemotePayloadV4 || window.__v6Applying) {
       return;
     }
     if (SYNC_KEYS.indexOf(key) !== -1) {
@@ -9476,6 +10574,10 @@ setTimeout(() => {
     accessTokenExpiry = 0;
     signedIn = false;
     driveFileId = "";
+    try {
+      window.__backendCloudSyncConnectedV1 = false;
+      window.__backendCloudSyncEmailV1 = "";
+    } catch {}
     try { localStorage.removeItem(LS.CLOUD_USER_EMAIL); } catch {}
     userEmail = "";
     renderSettingsRow();
@@ -9499,7 +10601,15 @@ setTimeout(() => {
     const group = document.getElementById("cloudSyncSettingsGroup");
     if (!group) return;
     const lastSync = getLastSyncAt();
-    if (signedIn || userEmail) {
+    // Backend OAuth state is owned by the refresh-token sync client, which is
+    // installed in a separate IIFE. Keep a small bridge on window so the
+    // original renderer can reflect a successful backend callback too; the
+    // lexical signedIn/userEmail values above belong only to this IIFE.
+    const backendConnected = window.__backendCloudSyncConnectedV1 === true;
+    const backendEmail = String(window.__backendCloudSyncEmailV1 || "").trim();
+    const effectiveSignedIn = signedIn || userEmail || backendConnected;
+    const effectiveEmail = userEmail || backendEmail;
+    if (effectiveSignedIn) {
       const pending = hasPendingSync();
       group.innerHTML = `
         <div class="settings-row" onclick="cloudSyncNow()">
@@ -9511,7 +10621,7 @@ setTimeout(() => {
         </div>
         <div class="settings-row" onclick="cloudSignOut()">
           <div class="l">
-            Signed in${userEmail ? ` as ${escapeHtml(userEmail)}` : ""}
+            Signed in${effectiveEmail ? ` as ${escapeHtml(effectiveEmail)}` : ""}
             <div class="desc">Tap to sign out</div>
           </div>
           <div class="chev">›</div>
@@ -9529,6 +10639,18 @@ setTimeout(() => {
       `;
     }
   }
+
+  // Backend login patches can update this renderer without reaching the
+  // private lexical state used by the legacy popup client.
+  window.__setBackendCloudSyncUiStateV1 = function(state) {
+    const st = state && typeof state === "object" ? state : {};
+    window.__backendCloudSyncConnectedV1 = st.connected === true;
+    window.__backendCloudSyncEmailV1 = String(st.email || "").trim();
+    if (window.__backendCloudSyncConnectedV1) {
+      try { _origSetItem(LS.CLOUD_USER_EMAIL, window.__backendCloudSyncEmailV1 || "backend-connected"); } catch {}
+    }
+    renderSettingsRow();
+  };
 
   // ---------- Public API ----------
   window.cloudSignIn = signIn;
@@ -9758,7 +10880,8 @@ setTimeout(() => {
 
     const first = firstEasyDefinition(entry);
     const fallbackHint = fallbackDefinitionForWord(w);
-    const hintEn = first.en || fallbackHint || "";
+    const relatedHint = spellingHintForWord(w);
+    const hintEn = relatedHint || first.en || fallbackHint || "";
     const hintZh = first.zh || "";
 
     let q = null;
@@ -9772,18 +10895,19 @@ setTimeout(() => {
     } catch {}
 
     if (!prompt) {
-      prompt = hintEn ? `${hintEn}\n\nType the base word.` : `${String(w.word || "").length} letters. Type the base word.`;
+      prompt = hintEn ? `${hintEn}\n\nType the full form.` : `${String(w.word || "").length} letters. Type the full form.`;
     }
 
     body.innerHTML = `
       <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q || { partOfSpeech: first.partOfSpeech || "" }, first)}</div>
       <div class="game-prompt small">${escapeHtml(prompt)}</div>
       <div id="spellHintBox" class="em-spell-hint-box" style="display:none;">
+        <div class="em-practice-context-label">Related context</div>
         <div class="em-practice-en">${escapeHtml(hintEn)}</div>
         ${hintZh ? `<div class="em-practice-zh">${escapeHtml(hintZh)}</div>` : ""}
       </div>
       <div class="game-spell">
-        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type base word…" />
+        <input class="spell-input" id="spellInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
         <div style="display:flex;gap:10px;">
           <button class="game-btn secondary" id="spellHintBtn" type="button">Hint</button>
           <button class="game-btn primary" id="checkSpellBtn" type="button">Check</button>
@@ -9903,6 +11027,13 @@ setTimeout(() => {
       if (typeof done === "function") done();
     }
 
+    // Do not auto-play inside a muted practice section. Explicit Play sound
+    // controls call playAudioFor directly and remain available.
+    if (activePracticeGame()?.audioMuted) {
+      finish();
+      return;
+    }
+
     if (!key) {
       finish();
       return;
@@ -9926,7 +11057,7 @@ setTimeout(() => {
           try { window.currentAudio.pause(); } catch {}
         }
 
-        const audio = new Audio(audioUrl);
+        const audio = createInlineAudio(audioUrl);
         window.currentAudio = audio;
 
         if (sourceBtn && sourceBtn.classList) sourceBtn.classList.add("playing");
@@ -9938,16 +11069,10 @@ setTimeout(() => {
         return;
       }
 
-      if (w && typeof speechSynthesis !== "undefined") {
-        const utterance = new SpeechSynthesisUtterance(w.word);
-        utterance.lang = "en-US";
-        utterance.onend = finish;
-        utterance.onerror = finish;
-        speechSynthesis.cancel();
-        speechSynthesis.speak(utterance);
-
-        // Safety only: if speechSynthesis gets stuck, do not trap the user forever.
-        setTimeout(finish, Math.max(1800, Math.min(4500, String(w.word || "").length * 260)));
+      if (typeof playAudioFor === "function") {
+        playAudioFor(key, sourceBtn || null);
+        const wordLength = w?.word ? String(w.word).length : 8;
+        setTimeout(finish, Math.min(2200, Math.max(900, wordLength * 150)));
         return;
       }
 
@@ -10120,7 +11245,9 @@ setTimeout(() => {
       poolDescription: s.poolDescription || "",
       poolSize: Number(s.poolSize || 0),
       sessionLength: Number(s.sessionLength || s.total || 0),
-      studyUntilMastered: !!s.studyUntilMastered,
+      studyUntilMastered: s.mode === "spelling" ? false : !!s.studyUntilMastered,
+      spellTillRemember: s.mode === "spelling" ? s.spellTillRemember !== false : !!s.spellTillRemember,
+      repeatWrongSpelling: s.mode === "spelling" && s.repeatWrongSpelling !== false,
       totalAnswered: Number(s.totalAnswered || 0),
       correctAnswered: Number(s.correctAnswered || s.correct || 0),
       uniqueWordsCorrect: Number(s.uniqueWordsCorrect || 0),
@@ -10805,7 +11932,9 @@ setTimeout(() => {
       poolDescription: s.poolDescription || "",
       poolSize: Number(s.poolSize || 0),
       sessionLength: Number(s.sessionLength || s.total || 0),
-      studyUntilMastered: !!s.studyUntilMastered,
+      studyUntilMastered: s.mode === "spelling" ? false : !!s.studyUntilMastered,
+      spellTillRemember: s.mode === "spelling" ? s.spellTillRemember !== false : !!s.spellTillRemember,
+      repeatWrongSpelling: s.mode === "spelling" && s.repeatWrongSpelling !== false,
       uniqueWordsCorrect: Number(s.uniqueWordsCorrect || 0),
       bestStreak: Number(s.bestStreak || 0),
       completed: s.completed !== false
@@ -11701,6 +12830,7 @@ setTimeout(() => {
       <div class="g-page">
         <div class="g-hero">
           <div class="g-title">Goal</div>
+          <button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button>
           <div class="g-sub" style="margin-top:8px;color:var(--muted);font-weight:700;">
             Restoring your goal from Drive…
           </div>
@@ -11998,7 +13128,7 @@ setTimeout(() => {
 
     const root = document.getElementById("goalRoot");
     if (root && !root.innerHTML.trim()) {
-      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div><button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button></div></div>`;
     }
 
     console.log("[Goal] offline goal setup forced visible");
@@ -12125,9 +13255,13 @@ setTimeout(() => {
       }
 
       statusCache = await window.backendSyncStatus();
+      try {
+        window.__setBackendCloudSyncUiStateV1?.(statusCache);
+      } catch {}
       return statusCache || { connected: false };
     } catch {
       statusCache = { connected: false };
+      try { window.__setBackendCloudSyncUiStateV1?.(statusCache); } catch {}
       return statusCache;
     }
   }
@@ -12229,8 +13363,7 @@ setTimeout(() => {
     const st = await backendStatusCached();
     if (!st.connected) return false;
 
-    try { signedIn = true; } catch {}
-    try { userEmail = st.email || "backend-connected"; } catch {}
+    try { window.__setBackendCloudSyncUiStateV1?.(st); } catch {}
     try { localStorage.setItem(LS.CLOUD_USER_EMAIL, st.email || "backend-connected"); } catch {}
 
     showMainAppOnce(reason);
@@ -12476,7 +13609,11 @@ setTimeout(() => {
       if (typeof window.backendMergeSync === "function") {
         const res = await window.backendMergeSync({ auto: false });
         try {
-          if (typeof renderSettingsRow === "function") renderSettingsRow();
+          if (typeof window.refreshOriginalSettingsCloudSync === "function") {
+            await window.refreshOriginalSettingsCloudSync("manual-sync-complete");
+          } else if (typeof renderSettingsRow === "function") {
+            renderSettingsRow();
+          }
         } catch {}
         try {
           if (typeof toast === "function") toast("✓ Synced");
@@ -12669,6 +13806,8 @@ setTimeout(() => {
   async function refreshOriginalSettingsCloudSync(reason = "") {
     const st = await getBackendStatus();
 
+    try { window.__setBackendCloudSyncUiStateV1?.(st); } catch {}
+
     if (!st.connected) {
       // In no-login mode, let original renderSettingsRow() show Sign in with Google.
       try {
@@ -12692,15 +13831,6 @@ setTimeout(() => {
       console.log("[Cloud Sync] original Settings refresh: not connected", reason);
       return false;
     }
-
-    // This is the key: update the state that original renderSettingsRow() already uses.
-    try {
-      signedIn = true;
-    } catch {}
-
-    try {
-      userEmail = st.email || "Google account";
-    } catch {}
 
     try {
       localStorage.setItem(LS.CLOUD_USER_EMAIL, st.email || "Google account");
@@ -13062,6 +14192,20 @@ setTimeout(() => {
   // ---------- Dictionary fetching ----------
   async function fetchLearnerEntry(w) {
     if (!w) return null;
+    if (w.vtc) {
+      return {
+        word: w.word,
+        pronunciation: w.vtc.pronunciation || "",
+        audioUrl: "",
+        definitions: [{
+          text: w.vtc.english_definition || "",
+          chinese: w.vtc.traditional_chinese_definition || "",
+          partOfSpeech: "",
+          examples: w.vtc.context ? [w.vtc.context] : []
+        }],
+        source: "vtc-source"
+      };
+    }
 
     if (!window.easyDictCache) window.easyDictCache = {};
 
@@ -13089,6 +14233,10 @@ setTimeout(() => {
 
   async function fetchCollegiateEntry(w) {
     if (!w) return null;
+
+    // VTC lecture records are self-contained. They must not fall through to
+    // the Collegiate API, which is optional and may not be configured.
+    if (w.vtc) return fetchLearnerEntry(w);
 
     const key = wordKey(w);
     if (key && typeof dictCache !== "undefined" && dictCache[key]) return dictCache[key];
@@ -13195,6 +14343,22 @@ setTimeout(() => {
     const source = currentSource();
     const wantZh = zhOn();
 
+    // A VTC source entry already carries its English definition, Traditional
+    // Chinese definition, and lecture context. Use it for every dictionary
+    // mode so meaning tests and answer-information popups stay usable even
+    // when an external dictionary key is not configured.
+    if (w?.vtc) {
+      const vtc = await fetchLearnerEntry(w);
+      return {
+        source: "vtc-source",
+        entry: vtc,
+        learnerEntry: vtc,
+        defs: collectLearnerDefinitions(vtc, wantZh),
+        pronunciation: vtc?.pronunciation || w.vtc.pronunciation || "",
+        audioUrl: ""
+      };
+    }
+
     if (source === "learner") {
       const learner = await fetchLearnerEntry(w);
       return {
@@ -13290,8 +14454,12 @@ setTimeout(() => {
   window.openLearningAnswerOverlay = async function(opts) {
     opts = opts || {};
     const word = opts.word;
+    const repeatWord = opts.repeatWord || word;
     const isWrong = !!opts.isWrong;
     const onContinue = opts.onContinue;
+    const onSkip = opts.onSkip || (activePracticeGame() ? (() => {
+      if (typeof window.skipCurrentPracticeWord === "function") window.skipCurrentPracticeWord();
+    }) : null);
     if (!word) return;
 
     const el = ensureLearningOverlay();
@@ -13300,6 +14468,10 @@ setTimeout(() => {
     const content = document.getElementById("emContent");
     const audioBtn = document.getElementById("emAudioBtn");
     const closeBtn = document.querySelector("#easyAnswerOverlay .em-close");
+    const practice = activePracticeGame();
+    const showRepeatChoices = isWrong
+      && practice?.mode === "spelling"
+      && practice.repeatWrongSpelling === true;
 
     header.classList.toggle("wrong", isWrong);
     header.classList.toggle("correct", !isWrong);
@@ -13311,7 +14483,9 @@ setTimeout(() => {
       closeBtn.setAttribute("aria-hidden", isWrong ? "true" : "false");
     }
 
-    const sourceLabel = currentSource() === "learner" ? "Learner" : "Collegiate";
+    const sourceLabel = word.vtc
+      ? "VTC course source"
+      : (currentSource() === "learner" ? "Learner" : "Collegiate");
     headerText.innerHTML = isWrong
       ? `✗ The correct answer was<br><b>${h(word.word)}</b><br><span style="font-size:11px;font-weight:800;opacity:.75">${sourceLabel}${zhOn() ? " · 中文" : ""}</span>`
       : `✓ More info<br><b>${h(word.word)}</b><br><span style="font-size:11px;font-weight:800;opacity:.75">${sourceLabel}${zhOn() ? " · 中文" : ""}</span>`;
@@ -13330,37 +14504,65 @@ setTimeout(() => {
     }
 
     const audioUrl = data?.audioUrl || "";
-    audioBtn.disabled = !audioUrl;
+    audioBtn.disabled = !(audioUrl || word.vtc);
     audioBtn.onclick = () => {
       if (audioUrl) {
-        try { new Audio(audioUrl).play(); } catch {}
+        try { createInlineAudio(audioUrl).play(); } catch {}
       } else if (typeof playAudioFor === "function") {
         playAudioFor(word.key, audioBtn);
       }
     };
 
-    // Auto-play immediately after wrong answer.
-    if (isWrong) {
-      if (audioUrl) {
-        try { new Audio(audioUrl).play(); } catch {}
-      } else if (typeof playAudioFor === "function") {
-        try { playAudioFor(word.key, audioBtn); } catch {}
-      }
-    }
-
-    const pron = data?.pronunciation || "";
+    const pron = data?.pronunciation || word.vtc?.pronunciation || "";
     const pronHtml = pron ? `<div class="em-pron">/${h(pron)}/</div>` : "";
+    const primaryActions = showRepeatChoices
+      ? `<div class="em-repeat-choice-row" role="group" aria-label="Choose immediate respells">
+          <button class="em-continue-btn em-repeat-choice-btn" data-repeat-count="1" type="button">1</button>
+          <button class="em-continue-btn em-repeat-choice-btn" data-repeat-count="3" type="button">3</button>
+          <button class="em-continue-btn em-repeat-choice-btn" data-repeat-count="5" type="button">5</button>
+        </div>`
+      : `<button class="em-continue-btn" id="learningOverlayContinueBtn" type="button">Continue ›</button>`;
+
     content.innerHTML = `
       ${pronHtml}
       <div class="em-def-list">${renderLearningDefinitionsHtml(data)}</div>
-      <button class="em-continue-btn" id="learningOverlayContinueBtn">Continue ›</button>
+      <div class="em-overlay-actions">
+        ${primaryActions}
+        <button class="em-bookmark-btn" id="learningOverlayBookmarkBtn" type="button"></button>
+        ${onSkip ? `<button class="em-skip-btn" id="learningOverlaySkipBtn" type="button">Skip this word</button>` : ""}
+      </div>
     `;
+
+    if (typeof window.bindWordBookmarkButton === "function") {
+      window.bindWordBookmarkButton(document.getElementById("learningOverlayBookmarkBtn"), word);
+    }
+
+    if (isWrong && activePracticeGame()?.audioMuted !== true) {
+      try { practicePlayPronunciation(word.key, audioBtn); } catch (err) { console.warn("Answer audio failed:", err); }
+    }
+
+    content.querySelectorAll(".em-repeat-choice-btn").forEach(btn => {
+      btn.onclick = () => {
+        const count = Number(btn.dataset.repeatCount || 0);
+        window.closeEasyAnswerOverlay();
+        if (count > 0 && typeof window.beginImmediateSpellingRepeats === "function") {
+          window.beginImmediateSpellingRepeats(repeatWord, count);
+        }
+      };
+    });
 
     const contBtn = document.getElementById("learningOverlayContinueBtn");
     if (contBtn) {
       contBtn.onclick = () => {
         window.closeEasyAnswerOverlay();
         if (typeof onContinue === "function") onContinue();
+      };
+    }
+    const skipBtn = document.getElementById("learningOverlaySkipBtn");
+    if (skipBtn && typeof onSkip === "function") {
+      skipBtn.onclick = () => {
+        window.closeEasyAnswerOverlay();
+        onSkip();
       };
     }
   };
@@ -13382,12 +14584,21 @@ setTimeout(() => {
     row.className = "em-correct-actions";
     row.innerHTML = `
       <button class="em-action-btn secondary" id="learningMoreInfoBtn">📖 More Info</button>
+      <button class="em-action-btn em-skip-action" id="learningSkipBtn">Skip this word</button>
       <button class="em-action-btn primary" id="learningContinueBtn">Continue ›</button>
+      <button class="em-bookmark-btn" id="learningBookmarkBtn" type="button"></button>
     `;
     body.appendChild(row);
 
+    if (typeof window.bindWordBookmarkButton === "function") {
+      window.bindWordBookmarkButton(document.getElementById("learningBookmarkBtn"), w);
+    }
+
     const more = document.getElementById("learningMoreInfoBtn");
+    const skip = document.getElementById("learningSkipBtn");
     const cont = document.getElementById("learningContinueBtn");
+
+    if (skip) skip.onclick = () => skipCurrentPracticeWord();
 
     if (more) {
       more.onclick = () => {
@@ -13397,7 +14608,8 @@ setTimeout(() => {
           window.openLearningAnswerOverlay({
             word: w,
             isWrong: false,
-            onContinue: () => {}
+            onContinue: () => {},
+            onSkip: () => skipCurrentPracticeWord()
           });
         }
       };
@@ -13408,13 +14620,13 @@ setTimeout(() => {
       else if (typeof nextQuestion === "function") nextQuestion();
     };
 
-    // Correct answer can still play pronunciation once, but it does not block.
-    if (typeof practicePlayPronunciationAndThen === "function") {
-      practicePlayPronunciationAndThen(w.key, null, () => {});
-    } else if (typeof playAudioFor === "function") {
-      try { playAudioFor(w.key, null); } catch {}
+    if (activePracticeGame()?.audioMuted !== true) {
+      practicePlayPronunciation(w.key);
     }
+
   }
+
+  window.renderLearningCorrectActions = renderLearningCorrectActions;
 
   // ---------- Practice render: use selected dictionary source in MC content ----------
   function installRenderMCWrapper() {
@@ -13531,7 +14743,8 @@ setTimeout(() => {
             onContinue: () => {
               if (typeof nextQuestionV2 === "function") nextQuestionV2();
               else if (typeof nextQuestion === "function") nextQuestion();
-            }
+            },
+            onSkip: () => skipCurrentPracticeWord()
           });
         }
       };
@@ -13569,21 +14782,18 @@ setTimeout(() => {
           }
           renderLearningCorrectActions(w);
         } else {
-          const body = document.getElementById("gameBody");
-          if (body && !body.querySelector(".learning-wrong-result")) {
-            const result = document.createElement("div");
-            result.className = "learning-wrong-result";
-            result.style.cssText = "margin-top:12px;text-align:center;color:#9F1239;font-weight:800";
-            result.innerHTML = `Correct: <b>${h(w.word)}</b>`;
-            body.appendChild(result);
-          }
           window.openLearningAnswerOverlay({
             word: w,
             isWrong: true,
+            repeatWord: w,
+            spellingComparison: true,
+            wrongAnswer: ans,
+            correctAnswer: typeof window.spellingFullFormFor === "function" ? window.spellingFullFormFor(w) : w.word,
             onContinue: () => {
               if (typeof nextQuestionV2 === "function") nextQuestionV2();
               else if (typeof nextQuestion === "function") nextQuestion();
-            }
+            },
+            onSkip: () => skipCurrentPracticeWord()
           });
         }
       };
@@ -13731,6 +14941,10 @@ setTimeout(() => {
   }
 
   function learnerSheetHtml(w, entry) {
+    if (w?.vtc && typeof renderVtcSourceHtml === "function") {
+      return renderVtcSourceHtml(w) +
+        (typeof tabBottomHtml === "function" ? tabBottomHtml(w) : "");
+    }
     const defs = learnerDefinitions(entry);
     const pron = entry?.pronunciation || "";
     const pronHtml = pron ? `<div class="em-pron">/${h(pron)}/</div>` : "";
@@ -13847,11 +15061,11 @@ setTimeout(() => {
 
         const audioBtn = document.getElementById("audioBtn");
         if (audioBtn) {
-          audioBtn.disabled = !(entry?.audio || entry?.audioUrl);
+          audioBtn.disabled = !(w.vtc || entry?.audio || entry?.audioUrl);
           audioBtn.onclick = () => {
             const audioUrl = entry?.audio || entry?.audioUrl || "";
             if (audioUrl) {
-              try { new Audio(audioUrl).play(); } catch {}
+              try { createInlineAudio(audioUrl).play(); } catch {}
             } else if (typeof playAudioFor === "function") {
               playAudioFor(w.key, audioBtn);
             }
@@ -13859,7 +15073,7 @@ setTimeout(() => {
         }
 
         const heroPron = document.getElementById("heroPron");
-        if (heroPron) heroPron.textContent = entry?.pronunciation ? `/${entry.pronunciation}/` : "";
+        if (heroPron) heroPron.textContent = w.vtc?.pronunciation || (entry?.pronunciation ? `/${entry.pronunciation}/` : "");
 
         const heroChips = document.getElementById("heroChips");
         if (heroChips) {
@@ -16233,6 +17447,20 @@ setTimeout(() => {
 
   async function fetchLearnerPanel(w) {
     if (!w) return buildPanel(null, { word: "" });
+    if (w.vtc) {
+      return {
+        word: w.word,
+        hero: {
+          hw: w.word,
+          ipa: w.vtc.pronunciation || "",
+          audioUrl: "",
+          inflections: [],
+          grammar: []
+        },
+        entries: [],
+        vtc: true
+      };
+    }
 
     if (!window.easyDictCache) window.easyDictCache = {};
 
@@ -16300,12 +17528,16 @@ setTimeout(() => {
     if (heroWord) heroWord.textContent = w.word || panel.word || "—";
 
     if (heroPron) {
+      if (w?.vtc) {
+        heroPron.innerHTML = vtcPronunciationHtml(w.vtc.pronunciation || "");
+      } else {
       const hw = formatLearnerHw(panel.hero?.hw);
       const ipa = panel.hero?.ipa || "";
       heroPron.innerHTML = `
         ${ipa ? `<div class="learner-ipa-line">/${h(ipa)}/</div>` : ""}
         ${hw ? `<div class="learner-hw-line">${h(hw)}</div>` : ""}
       `;
+      }
     }
 
     const pos = unique((panel.entries || []).map(e => e.partOfSpeech).filter(Boolean));
@@ -16316,12 +17548,15 @@ setTimeout(() => {
     if (heroInf) heroInf.innerHTML = heroInfoHtml(panel);
 
     if (audioBtn) {
-      audioBtn.disabled = !panel.hero?.audioUrl;
+      audioBtn.disabled = !(w?.vtc || panel.hero?.audioUrl);
       audioBtn.dataset.learnerAudioUrl = panel.hero?.audioUrl || "";
     }
   }
 
   function renderPanel(panel, w) {
+    if (w?.vtc && typeof renderVtcSourceHtml === "function") {
+      return renderVtcSourceHtml(w) + tabBottomHtml(w);
+    }
     const entries = panel.entries || [];
 
     if (!entries.length) {
@@ -16378,11 +17613,15 @@ setTimeout(() => {
     const wrapped = function() {
       if (learnerModeOn()) {
         const btn = document.getElementById("audioBtn");
+        if (currentWord?.vtc && typeof playAudioFor === "function") {
+          playAudioFor(currentWord.key, btn);
+          return;
+        }
         const url = btn?.dataset?.learnerAudioUrl || "";
         if (url) {
           try {
             if (typeof currentAudio !== "undefined" && currentAudio) currentAudio.pause();
-            currentAudio = new Audio(url);
+            currentAudio = createInlineAudio(url);
             btn.classList.add("playing");
             currentAudio.addEventListener("ended", () => btn.classList.remove("playing"));
             currentAudio.addEventListener("error", () => btn.classList.remove("playing"));
@@ -16422,11 +17661,11 @@ setTimeout(() => {
       const c = document.getElementById("tabContent");
 
       if (heroWord) heroWord.textContent = w.word;
-      if (heroPron) heroPron.textContent = "";
+      if (heroPron) heroPron.textContent = w.vtc?.pronunciation || "";
       if (heroChips) heroChips.innerHTML = "";
       if (heroInf) heroInf.innerHTML = "";
       if (audioBtn) {
-        audioBtn.disabled = true;
+        audioBtn.disabled = !w.vtc;
         audioBtn.dataset.learnerAudioUrl = "";
       }
 
@@ -16592,10 +17831,14 @@ setTimeout(() => {
 
     const heroPron = document.getElementById("heroPron");
     if (heroPron) {
-      const parts = [];
-      if (hw) parts.push(hw);
-      if (ipa) parts.push(`/${ipa}/`);
-      heroPron.textContent = parts.join("  ");
+      if (currentWord?.vtc) {
+        heroPron.innerHTML = vtcPronunciationHtml(currentWord.vtc.pronunciation || "");
+      } else {
+        const parts = [];
+        if (hw) parts.push(hw);
+        if (ipa) parts.push(`/${ipa}/`);
+        heroPron.textContent = parts.join("  ");
+      }
     }
   }
 
@@ -16752,10 +17995,12 @@ setTimeout(() => {
 
     const heroPron = document.getElementById("heroPron");
     if (heroPron) {
-      heroPron.innerHTML = `
-        ${ipa ? `<div class="learner-ipa-line">/${h(ipa)}/</div>` : ""}
-        ${hw ? `<div class="learner-hw-line">${h(hw)}</div>` : ""}
-      `;
+      heroPron.innerHTML = currentWord?.vtc
+        ? vtcPronunciationHtml(currentWord.vtc.pronunciation || "")
+        : `
+          ${ipa ? `<div class="learner-ipa-line">/${h(ipa)}/</div>` : ""}
+          ${hw ? `<div class="learner-hw-line">${h(hw)}</div>` : ""}
+        `;
     }
 
     const heroChips = document.getElementById("heroChips");
@@ -19134,15 +20379,16 @@ setTimeout(() => {
   }
 
   function aggregateAll(view) {
-    let mastered = 0, known = 0, learning = 0, total = 0;
+    let mastered = 0, known = 0, learning = 0, bookmarked = 0, total = 0;
     for (const w of words) {
       const st = skillStatusFor(w, view);
       total++;
+      if (isWordBookmarked(w)) bookmarked++;
       if (st === "mastered") mastered++;
       else if (st === "known") known++;
       else if (st === "learning") learning++;
     }
-    return [{ name: view === "all" ? "All words" : (view === "meaning" ? "Meaning" : "Spelling"), mastered, known, learning, total }];
+    return [{ name: view === "all" ? "All words" : (view === "meaning" ? "Meaning" : "Spelling"), mastered, known, learning, bookmarked, total }];
   }
 
   function calendarHtmlV2() {
@@ -19251,9 +20497,10 @@ setTimeout(() => {
       const st = skillStatusFor(w, view);
       for (const v of values) {
         if (!v) continue;
-        if (!buckets.has(v)) buckets.set(v, { mastered: 0, known: 0, learning: 0, total: 0 });
+        if (!buckets.has(v)) buckets.set(v, { mastered: 0, known: 0, learning: 0, bookmarked: 0, total: 0 });
         const b = buckets.get(v);
         b.total++;
+        if (isWordBookmarked(w)) b.bookmarked++;
         if (st === "mastered") b.mastered++;
         else if (st === "known") b.known++;
         else if (st === "learning") b.learning++;
@@ -19311,6 +20558,7 @@ setTimeout(() => {
       const pctM = r.total ? (r.mastered / r.total) * 100 : 0;
       const pctK = r.total ? ((r.known || 0) / r.total) * 100 : 0;
       const pctL = r.total ? (r.learning / r.total) * 100 : 0;
+      const pctB = r.total ? ((r.bookmarked || 0) / r.total) * 100 : 0;
       const done = r.mastered + (r.known || 0);
       const notP = r.total - r.mastered - (r.known || 0) - r.learning;
       const safeName = encodeURIComponent(r.name);
@@ -19326,7 +20574,10 @@ setTimeout(() => {
             <div class="g-prog-seg known" style="width:${pctK}%"></div>
             <div class="g-prog-seg learning" style="width:${pctL}%"></div>
           </div>
-          <div class="g-prog-foot">${r.mastered} ${masteredLabel} · ${r.known || 0} known · ${r.learning} learning · ${notP} untouched</div>
+          <div class="g-prog-bookmark-track" role="img" aria-label="${r.bookmarked || 0} bookmarked of ${r.total}" title="${r.bookmarked || 0} bookmarked">
+            <div class="g-prog-bookmark-fill" style="width:${pctB}%"></div>
+          </div>
+          <div class="g-prog-foot">${r.mastered} ${masteredLabel} · ${r.known || 0} known · ${r.learning} learning · ${notP} untouched · <span class="g-prog-bookmark-count">★ ${r.bookmarked || 0} Bookmarked</span></div>
         </div>`;
     }).join("");
   }
@@ -19342,6 +20593,7 @@ setTimeout(() => {
     const spellingKnown = within(pgSpellingKnownOnly());
     const spellingLearning = within(pgSpellingLearning());
     const untouched = within(pgUntouchedKeys());
+    const bookmarked = within(words.filter(isWordBookmarked).map(w => w.key));
     const filter = chartGroupFilter(group, name);
     const total = groupSet.size;
     const labelPrefix = group === "level" ? "Level"
@@ -19425,6 +20677,16 @@ setTimeout(() => {
         practiceMode: null,
         practiceFilter: filter,
       },
+      bookmarked: {
+        pageKey: "bookmarked",
+        tabLabel: `★ Bookmarked · ${bookmarked.length}`,
+        accordionLabel: "★ Bookmarked",
+        practiceLabel: `▶ Practice these ${bookmarked.length} bookmarked`,
+        keys: bookmarked,
+        practicePool: bookmarked,
+        practiceMode: null,
+        practiceFilter: filter,
+      },
     };
     pgRenderPanel();
   };
@@ -19488,7 +20750,7 @@ setTimeout(() => {
     cleanupLegacyGoalModal();
     const goal = window.loadGoalV2();
     if (!goal || !Array.isArray(goal.items) || !goal.items.length) {
-      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div></div></div>`;
+      root.innerHTML = `<div class="g-page"><div class="g-hero"><div class="g-title">Goal</div><button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button></div></div>`;
       markPerSkillGoalReady();
       if (firstLaunchWelcomeActive()) return;
       window.openGoalSetup(1);
@@ -19508,7 +20770,7 @@ setTimeout(() => {
 
     root.innerHTML = `
       <div class="g-page">
-        <div class="g-hero"><div class="g-title">Goal</div></div>
+        <div class="g-hero"><div class="g-title">Goal</div><button class="g-refresh-btn" type="button" onclick="refreshAppUi(event)" aria-label="Refresh app UI" title="Refresh app UI">↻</button></div>
         <div class="g-today-card" role="button" tabindex="0" onclick="openGoalDayDetailV2('${today}')">
           <div class="g-today-left">
             <div class="g-today-label">Today</div>
@@ -19728,6 +20990,7 @@ setTimeout(() => {
 
   function wordMatchesStatusFilterV2(w, status) {
     if (!status || status === "__all") return true;
+    if (status === "bookmarked") return isWordBookmarked(w);
     if (wordsSkill === "all") return overallSkillStatus(w) === status;
     const axisStatus = selectedSkillStatus(w);
     const overall = overallSkillStatus(w);
@@ -19891,10 +21154,12 @@ setTimeout(() => {
       ["not_practiced", "Not practiced", countFor("not_practiced")],
       ["learning", "Learning", countFor("learning")],
       ["known", knownLabel, countFor("known")],
-      ["mastered", "Mastered", countFor("mastered")]
+      ["mastered", "Mastered", countFor("mastered")],
+      ["bookmarked", "★ Bookmarked", countFor("bookmarked")]
     ].map(([value, label, count]) => {
       const active = currentStatusFilter === value;
-      return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordFilter('status','${value}')">${label} <span class="n">${count}</span></button>`;
+      const bookmarkClass = value === "bookmarked" ? " bookmark-filter-chip" : "";
+      return `<button class="filter-chip${bookmarkClass} ${active ? "active" : ""}" onclick="setWordFilter('status','${value}')">${label} <span class="n">${count}</span></button>`;
     }).join("");
   };
   window.__myRenderFilterPanel = window.renderFilterPanel;
@@ -19985,6 +21250,9 @@ setTimeout(() => {
     const pool = s.poolDescription || "All words";
     const poolSize = s.poolSize || total;
     const wrong = Array.isArray(s.wrongKeys) ? s.wrongKeys.length : 0;
+    const spellingOption = s.spellTillRemember
+      ? " · Spell till know"
+      : "";
     const sId = String(s.id || "").replace(/'/g, "\\'");
     const exactPossible = phIsExactPossible(s.id);
     const repeatLabel = exactPossible ? "↻" : "↻";
@@ -20000,7 +21268,7 @@ setTimeout(() => {
           </div>
           <div class="ph-score">${correct} / ${total}</div>
         </div>
-        <div class="ph-pool">${escapeHtml(pool)} · ${poolSize} loaded</div>
+        <div class="ph-pool">${escapeHtml(pool)}${spellingOption} · ${poolSize} loaded</div>
         <div class="ph-date">${escapeHtml(date)}</div>
         <div class="ph-actions">
           <button class="ph-btn" onclick="event.stopPropagation();practiceOpenSessionDetail('${sId}')">👁 View</button>
@@ -23225,6 +24493,11 @@ setTimeout(() => {
           lastSyncedSig = payloadSig(finalP);
           lastSuccessAt = Date.now();
           try { lsSet(K.LAST_SYNC, nowIso()); localStorage.removeItem(K.PENDING); } catch(e){}
+          try {
+            if (typeof window.refreshOriginalSettingsCloudSync === "function") {
+              window.refreshOriginalSettingsCloudSync("clean-sync-complete");
+            }
+          } catch(e){}
           updateSettingsUi();
           // Only flash on a REAL change: download -> "Merged", upload-only -> "Auto-synced".
           if (downloaded) flashSyncLabel("Merged");
@@ -23715,4 +24988,388 @@ setTimeout(() => {
   document.addEventListener("keydown", handlePracticeEnter, true);
 
   console.log("[Practice] hardware keyboard controls installed.");
+})();
+
+
+/* ============================================================
+   SPELL TILL REMEMBER v1
+   - Optional spelling-session mode selected inside the Spelling card
+   - Wrong spelling opens the compulsory answer/teaching panel and keeps the
+     same question active until the learner submits the correct spelling
+   - A corrected word receives one randomized later review; a wrong review
+     repeats the same correction-and-review cycle
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__spellTillRememberV1) return;
+  window.__spellTillRememberV1 = true;
+
+  function normalizedAnswer(value) {
+    if (typeof normalizeSpelling === "function") return normalizeSpelling(value);
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function addCorrectActions(w) {
+    const body = document.getElementById("gameBody");
+    if (!body || body.querySelector(".str-correct-actions")) return;
+
+    const result = document.createElement("div");
+    result.className = "str-correct-result";
+    result.style.cssText = "margin-top:12px;text-align:center;color:#3F6212;font-weight:800";
+    result.textContent = "✓ Correct!";
+    body.appendChild(result);
+
+    const row = document.createElement("div");
+    row.className = "em-correct-actions str-correct-actions";
+    row.innerHTML = `
+      <button class="em-action-btn secondary" id="strMoreInfoBtn">📖 More Info</button>
+      <button class="em-action-btn em-skip-action" id="strSkipBtn">Skip this word</button>
+      <button class="em-action-btn primary" id="strContinueBtn">Continue ›</button>
+      <button class="em-bookmark-btn" id="strBookmarkBtn" type="button"></button>
+    `;
+    body.appendChild(row);
+
+    if (typeof window.bindWordBookmarkButton === "function") {
+      window.bindWordBookmarkButton(document.getElementById("strBookmarkBtn"), w);
+    }
+
+    const more = document.getElementById("strMoreInfoBtn");
+    const skip = document.getElementById("strSkipBtn");
+    const cont = document.getElementById("strContinueBtn");
+    if (skip) skip.onclick = () => skipCurrentPracticeWord();
+    if (more) {
+      more.onclick = () => {
+        if (typeof window.openLearningAnswerOverlay === "function") {
+          const correctAnswer = typeof window.spellingFullFormFor === "function"
+            ? window.spellingFullFormFor(w)
+            : w.word;
+          window.openLearningAnswerOverlay({ word: w, isWrong: false, correctAnswer, onContinue: () => {}, onSkip: () => skipCurrentPracticeWord() });
+        }
+      };
+    }
+    if (cont) cont.onclick = () => {
+      if (typeof window.nextQuestionV2 === "function") window.nextQuestionV2();
+    };
+
+    if (activePracticeGame()?.audioMuted !== true) {
+      practicePlayPronunciation(w.key);
+    }
+
+  }
+
+  window.renderSpellTillRememberCorrectActions = addCorrectActions;
+
+  function answerSpellTillRemember(w) {
+    const g = window.game;
+    const inp = document.getElementById("spellInput");
+    if (!g || !w || !inp || inp.disabled) return;
+
+    if (g.repeatWrongSpelling && Number(g.pendingSpellingRepeats || 0) > 0
+      && g.spellingRepeatWordKey === w.key
+      && typeof window.handleImmediateSpellingRepeat === "function") {
+      return window.handleImmediateSpellingRepeat(w);
+    }
+
+    const ok = typeof spellingAnswerMatches === "function"
+      ? spellingAnswerMatches(w, inp.value)
+      : normalizedAnswer(inp.value) === normalizedAnswer(w.word);
+    const correctAnswer = typeof window.spellingFullFormFor === "function"
+      ? window.spellingFullFormFor(w)
+      : w.word;
+    if (typeof window.handleAnswer === "function") window.handleAnswer(w, ok);
+
+    inp.classList.add(ok ? "correct" : "wrong");
+    inp.disabled = true;
+    document.getElementById("checkSpellBtn")?.remove();
+    document.getElementById("spellHintBtn")?.remove();
+    if (typeof window.renderGameTopbar === "function") window.renderGameTopbar();
+
+    if (!ok) {
+      // The teaching overlay is intentionally compulsory. Its Continue
+      // action re-renders this same queue position, so the learner cannot
+      // advance until this word is correct.
+      if (typeof window.openLearningAnswerOverlay === "function") {
+        window.openLearningAnswerOverlay({
+          word: w,
+          isWrong: true,
+          spellingComparison: true,
+          wrongAnswer: inp.value,
+          correctAnswer,
+          onContinue: () => {
+            if (window.game !== g || !g.spellTillRemember) return;
+            if (typeof window.renderSpellV2 === "function") window.renderSpellV2(w);
+          },
+          onSkip: () => skipCurrentPracticeWord()
+        });
+      }
+      return;
+    }
+
+    addCorrectActions(w);
+  }
+
+  function install() {
+    const current = window.answerSpellV2;
+    if (typeof current !== "function") return false;
+    if (current.__spellTillRememberWrapped) return true;
+
+    const wrapped = function(w) {
+      const g = window.game;
+      if (!g || g.mode !== "spelling" || !g.spellTillRemember) {
+        return current.apply(this, arguments);
+      }
+      return answerSpellTillRemember(w);
+    };
+
+    // Preserve the guards used by the existing answer wrappers, so their
+    // retry timers do not replace this spelling-mode handler.
+    wrapped.__spellTillRememberWrapped = true;
+    if (current.__learningStep2AnswerWrapped) wrapped.__learningStep2AnswerWrapped = true;
+    if (current.__easyWrapped) wrapped.__easyWrapped = true;
+    window.answerSpellV2 = wrapped;
+    return true;
+  }
+
+  if (!install()) {
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if (install() || tries > 40) clearInterval(timer);
+    }, 200);
+  }
+
+  console.log("[Practice] Spell till know mode installed (default on; user-toggleable).");
+})();
+
+
+
+/* ============================================================
+   SPELLING FEEDBACK v1
+   - Expands known abbreviations for spelling prompts and accepted answers
+   - Accepts any slash-separated full-form alternative
+   - Shows aligned wrong/missed-character feedback in the answer panel
+   ============================================================ */
+(function(){
+  "use strict";
+  if (window.__spellingFeedbackV1) return;
+  window.__spellingFeedbackV1 = true;
+
+  const FULL_FORM_OVERRIDES = {
+    "nsaid": "Non-steroidal anti-inflammatory drug",
+    "dmard": "Disease-modifying anti-rheumatic drug",
+    "thr": "Total hip replacement",
+    "bmd": "Bone mineral density",
+    "bp": "Blood pressure",
+    "rom": "Range of motion",
+    "oa": "Osteoarthritis",
+    "ra": "Rheumatoid arthritis",
+    "as": "Ankylosing spondylitis",
+    "si joint": "Sacroiliac joint",
+    "esr": "Erythrocyte sedimentation rate",
+    "crp": "C-reactive protein",
+    "rf": "Rheumatoid factor",
+    "nwb": "Non-weight bearing",
+    "pwb": "Partial weight bearing",
+    "tdw": "Touch-down weight bearing",
+    "tdwb": "Touch-down weight bearing",
+    "fwb": "Full weight bearing",
+    "icf": "International Classification of Functioning, Disability and Health",
+    "adl": "Activities of daily living",
+    "afo": "Ankle-foot orthosis",
+    "sob": "Shortness of breath",
+    "hr": "Heart rate",
+    "qus": "Quantitative ultrasound",
+    "dxa": "Dual-energy X-ray absorptiometry",
+    "dexa": "Dual-energy X-ray absorptiometry",
+    "frax": "Fracture Risk Assessment Tool",
+    "hla-b27": "Human leukocyte antigen B27",
+    "hla-drb1": "Human leukocyte antigen DRB1",
+    "spo₂": "Oxygen saturation"
+  };
+
+  function normal(value) {
+    if (typeof normalizeSpelling === "function") return normalizeSpelling(value);
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function clean(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function hasAbbreviationToken(value) {
+    const text = clean(value);
+    if (FULL_FORM_OVERRIDES[normal(text)]) return true;
+    return text.split(/\s+/).some(token => {
+      const t = token.replace(/[.,;:]+$/g, "");
+      return /^[A-Z]{2,}(?:[-‑][A-Z0-9]+)?$/.test(t);
+    });
+  }
+
+  function expandOne(value) {
+    const text = clean(value);
+    if (!text) return [];
+
+    const paren = text.match(/^(.+?)\s*\(([^()]+)\)\s*$/);
+    if (!paren) return [FULL_FORM_OVERRIDES[normal(text)] || text];
+
+    const outer = clean(paren[1]);
+    const inner = clean(paren[2]);
+    const outerExpanded = FULL_FORM_OVERRIDES[normal(outer)] || "";
+    const innerExpanded = FULL_FORM_OVERRIDES[normal(inner)] || "";
+    const outerIsAbbreviation = !!outerExpanded || hasAbbreviationToken(outer);
+    const innerIsAbbreviation = !!innerExpanded || hasAbbreviationToken(inner);
+
+    if (outerIsAbbreviation && !innerIsAbbreviation) return [inner];
+    if (!outerIsAbbreviation && innerIsAbbreviation) return [outer];
+    if (innerExpanded && !outerExpanded) return [innerExpanded];
+    if (outerExpanded && !innerExpanded) return [outerExpanded];
+    return [outer, inner];
+  }
+
+  function acceptedFullForms(w) {
+    const raw = String(w?.word || "");
+    const out = [];
+    const seen = new Set();
+    for (const part of raw.split(/\s*\/\s*/)) {
+      for (const form of expandOne(part)) {
+        const value = clean(form);
+        const key = normal(value);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(value);
+      }
+    }
+    return out.length ? out : [raw.trim()];
+  }
+
+  function fullFormFor(w) {
+    return acceptedFullForms(w)[0] || String(w?.word || "").trim();
+  }
+
+  window.spellingAcceptedFullForms = acceptedFullForms;
+  window.spellingFullFormFor = fullFormFor;
+
+  function align(actualText, expectedText) {
+    const actual = Array.from(String(actualText || ""));
+    const expected = Array.from(String(expectedText || ""));
+    const aKeys = actual.map(ch => ch.toLowerCase());
+    const eKeys = expected.map(ch => ch.toLowerCase());
+    const n = actual.length;
+    const m = expected.length;
+    const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+
+    for (let i = n; i >= 0; i--) dp[i][m] = n - i;
+    for (let j = m; j >= 0; j--) dp[n][j] = m - j;
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        if (aKeys[i] === eKeys[j]) dp[i][j] = dp[i + 1][j + 1];
+        else dp[i][j] = Math.min(
+          1 + dp[i + 1][j + 1],
+          1 + dp[i + 1][j],
+          1 + dp[i][j + 1]
+        );
+      }
+    }
+
+    const actualParts = [];
+    const expectedParts = [];
+    let i = 0;
+    let j = 0;
+    while (i < n || j < m) {
+      if (i < n && j < m && aKeys[i] === eKeys[j] && dp[i][j] === dp[i + 1][j + 1]) {
+        actualParts.push({ char: actual[i], bad: false });
+        expectedParts.push({ char: expected[j], bad: false });
+        i++;
+        j++;
+        continue;
+      }
+
+      if (i < n && j < m && dp[i][j] === 1 + dp[i + 1][j + 1]) {
+        actualParts.push({ char: actual[i], bad: true });
+        expectedParts.push({ char: expected[j], bad: true });
+        i++;
+        j++;
+        continue;
+      }
+
+      if (i < n && dp[i][j] === 1 + dp[i + 1][j]) {
+        actualParts.push({ char: actual[i], bad: true });
+        i++;
+        continue;
+      }
+
+      if (j < m) {
+        expectedParts.push({ char: expected[j], bad: true });
+        j++;
+        continue;
+      }
+    }
+
+    return { actualParts, expectedParts };
+  }
+
+  function esc(value) {
+    if (typeof escapeHtml === "function") return escapeHtml(value);
+    return String(value ?? "").replace(/[&<>"']/g, ch => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    }[ch]));
+  }
+
+  function partsHtml(parts, emptyText) {
+    if (!parts.length) return '<span class="em-spelling-empty">' + esc(emptyText) + "</span>";
+    return parts.map(part => part.bad
+      ? '<span class="em-spelling-diff-bad">' + esc(part.char) + "</span>"
+      : esc(part.char)
+    ).join("");
+  }
+
+  function comparisonHtml(wrong, correct) {
+    const actual = clean(wrong);
+    const expected = clean(correct);
+    const diff = align(actual, expected);
+    return [
+      '<section class="em-spelling-compare" aria-label="Spelling comparison">',
+      '<div class="em-spelling-compare-label">Your answer</div>',
+      '<div class="em-spelling-answer em-spelling-wrong-answer">',
+      actual ? esc(actual) : '<span class="em-spelling-empty">No answer</span>',
+      "</div>",
+      '<div class="em-spelling-compare-label">Character comparison</div>',
+      '<div class="em-spelling-answer em-spelling-correct-answer">',
+      partsHtml(diff.expectedParts, expected),
+      "</div>",
+      "</section>"
+    ].join("");
+  }
+
+  window.renderSpellingComparisonHtml = comparisonHtml;
+
+  const originalOverlay = window.openLearningAnswerOverlay;
+  if (typeof originalOverlay === "function" && !originalOverlay.__spellingComparisonWrapped) {
+    const wrappedOverlay = async function(opts) {
+      const input = opts || {};
+      const next = { ...input };
+      const compare = !!(input.spellingComparison && input.isWrong && input.word);
+      const correct = input.correctAnswer || fullFormFor(input.word);
+
+      if (compare) {
+        next.word = { ...input.word, word: correct };
+        next.repeatWord = input.word;
+      }
+
+      const result = await originalOverlay.call(this, next);
+      if (compare) {
+        const content = document.getElementById("emContent");
+        if (content) {
+          content.querySelector(".em-spelling-compare")?.remove();
+          content.insertAdjacentHTML("afterbegin", comparisonHtml(input.wrongAnswer, correct));
+        }
+      }
+      return result;
+    };
+    wrappedOverlay.__spellingComparisonWrapped = true;
+    window.openLearningAnswerOverlay = wrappedOverlay;
+    window.openEasyAnswerOverlay = wrappedOverlay;
+  }
+
+  console.log("[Practice] Full-form spelling prompts and character feedback installed.");
 })();
