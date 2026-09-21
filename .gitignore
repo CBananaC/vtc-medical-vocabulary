@@ -16,6 +16,21 @@ vocab_sync_tokens.local.json
 *.backup.json
 *.local.json
 
+# Reorganized local VTC vocabulary datasets. Keep the public manifest and
+# layout guide, but do not publish the study data or original snapshots.
+data/*/*/*.json
+data/_original/
+
+# Private review assets and local prototypes
+/whoami-assets/
+/prototype-v1/
+/sample_api_demo.html
+
+# Internal project notes stay local
+/AGENTS.md
+/PROJECT_DESCRIPTION.md
+/PROJECT_LOG.md
+
 # Development/runtime files
 .venv/
 venv/
