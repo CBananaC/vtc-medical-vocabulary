@@ -5437,7 +5437,7 @@ setTimeout(() => {
       }
     }
     if (field === "status") {
-      return ["not_practiced", "learning", "known", "mastered"].map(k => [k, map.get(k) || 0]);
+      return ["not_practiced", "learning", "known", "mastered", "bookmarked"].map(k => [k, map.get(k) || 0]);
     }
     return [...map.entries()].sort((a, b) => {
       if (field === "level") {
