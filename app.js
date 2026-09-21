@@ -3442,7 +3442,7 @@ function buildLeanBackupPayload() {
     if (hasMeaningfulProgressRecord(r)) learningSet.add(key);
   }
   for (const k of masteredSet) learningSet.delete(k);
-  const sessions = (Array.isArray(currentHistory) ? currentHistory : []).map(normalizeBackupSession).filter(Boolean).slice(-100);
+  const sessions = (Array.isArray(currentHistory) ? currentHistory : []).map(normalizeBackupSession).filter(Boolean);
   return {
     schema: "ielts-vocab-cloud-sync-v3",
     meta: { exportedAt: now, updatedAt: now, mergedAt: now, app: "IELTS Vocabulary Webapp", storageMode: "lean-user-learning-backup" },
@@ -3476,7 +3476,7 @@ function payloadToInternalState(data) {
     return {
       known: lookupFromArray(masteredWords),
       needsReview: lookupFromArray(learningWords),
-      practiceHistory: (data.practice?.sessions || []).map(normalizeBackupSession).filter(Boolean).slice(-100),
+      practiceHistory: (data.practice?.sessions || []).map(normalizeBackupSession).filter(Boolean),
       goal: data.goalTracking?.goal || {},
       dailyRecord: data.goalTracking?.dailyRecord || {},
       preferences: data.preferences || null,
@@ -3501,7 +3501,7 @@ function payloadToInternalState(data) {
   return {
     known: lookupFromArray(mastered),
     needsReview: lookupFromArray([...learning]),
-    practiceHistory: (Array.isArray(oldHistory) ? oldHistory : []).map(normalizeBackupSession).filter(Boolean).slice(-100),
+    practiceHistory: (Array.isArray(oldHistory) ? oldHistory : []).map(normalizeBackupSession).filter(Boolean),
     goal: d.goal || data.goal || {},
     dailyRecord: d.dailyRecord || data.dailyRecord || {},
     preferences: data.preferences || d.preferences || null,
@@ -3587,7 +3587,7 @@ window.mergeCloudSyncPayloadV3 = function(localPayload, remotePayload) {
     const ns = normalizeBackupSession(s);
     if (ns) sessionMap.set(ns.id, { ...(sessionMap.get(ns.id) || {}), ...ns });
   }
-  const mergedSessions = [...sessionMap.values()].slice(-100);
+  const mergedSessions = [...sessionMap.values()];
   const now = new Date().toISOString();
   const localPrefs = local.preferences && typeof local.preferences === "object" ? local.preferences : null;
   const remotePrefs = remote.preferences && typeof remote.preferences === "object" ? remote.preferences : null;
@@ -5054,7 +5054,6 @@ setTimeout(() => {
     { id: "whoami",        ico: "🦴", name: "Who am I?",       desc: "Recognise the structure and spell its name", cls: "m5" }
   ];
 
-  const HISTORY_CAP = 100;
   const DEFAULT_LENGTH = 10;
   const LAST_LOADED_POOL_KEY = "ielts_vocab_practice_last_loaded_pool_v1";
   const REPEAT_WRONG_SPELLING_DEFAULT_VERSION = 1;
@@ -5197,8 +5196,7 @@ setTimeout(() => {
 
   function normalizeLocalPracticeHistory(arr) {
     return (Array.isArray(arr) ? arr : [])
-      .map(stripExactPoolFromHistorySession)
-      .slice(-HISTORY_CAP);
+      .map(stripExactPoolFromHistorySession);
   }
 
   function loadHistory() {
@@ -10273,8 +10271,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     (localHistory || []).forEach(addSession);
 
     return [...map.values()]
-      .sort((a, b) => String(a.startedAt || a.endedAt || "").localeCompare(String(b.startedAt || b.endedAt || "")))
-      .slice(-100);
+      .sort((a, b) => String(a.startedAt || a.endedAt || "").localeCompare(String(b.startedAt || b.endedAt || "")));
   }
 
   function mergeArrayUnion(a, b) {
@@ -11268,7 +11265,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const mastered = new Set(trueKeys(knownObj));
     const learning = new Set(trueKeys(reviewObj));
 
-    const sessions = (Array.isArray(hist) ? hist : []).slice(-100).map(cleanSession);
+    const sessions = (Array.isArray(hist) ? hist : []).map(cleanSession);
     for (const s of sessions) {
       for (const w of s.masteredWords || []) mastered.add(w);
       for (const w of s.learningWords || s.wrongKeys || []) learning.add(w);
@@ -11316,7 +11313,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
     const mastered = uniqueList(payload.wordState?.masteredWords || []);
     const learning = uniqueList(payload.wordState?.learningWords || []).filter(w => !mastered.includes(w));
-    const sessions = Array.isArray(payload.practice?.sessions) ? payload.practice.sessions.slice(-100) : [];
+    const sessions = Array.isArray(payload.practice?.sessions) ? payload.practice.sessions : [];
     const lastLoadedPool = payload.practice?.lastLoadedPool || null;
     const goal = payload.goalTracking?.goal || {};
     const dailyRecord = payload.goalTracking?.dailyRecord || {};
@@ -11972,7 +11969,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const learning = new Set(trueKeys(reviewObj));
 
     const sessions = (Array.isArray(history) ? history : [])
-      .slice(-100)
       .map(normalizeSession);
 
     for (const s of sessions) {
@@ -12079,7 +12075,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     for (const w of learning) reviewObj[w] = true;
 
     const sessions = Array.isArray(payload.practice?.sessions)
-      ? payload.practice.sessions.slice(-100).map(normalizeSession)
+      ? payload.practice.sessions.map(normalizeSession)
       : [];
     const lastLoadedPool = payload.practice?.lastLoadedPool || null;
 
@@ -24198,7 +24194,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     });
     var list = Object.keys(byId).map(function(id){ return byId[id]; });
     list.sort(function(x,y){ return String(x.startedAt||x.endedAt||"").localeCompare(String(y.startedAt||y.endedAt||"")); });
-    return list.slice(-300);
+    return list;
   }
   function pickNewer(a, b){
     var ta = (a && a.updatedAt) || "", tb = (b && b.updatedAt) || "";
