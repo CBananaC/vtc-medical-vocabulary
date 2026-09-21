@@ -1737,7 +1737,7 @@ def _sync_sessions(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     out = []
-    for s in sessions[-100:]:
+    for s in sessions:
         if not isinstance(s, dict):
             continue
         wrong_keys = _sync_arr(s.get("wrongKeys") or [])
@@ -1820,7 +1820,7 @@ def _sync_lean_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "masteredWords": sorted(mastered),
             "learningWords": sorted(learning),
         },
-        "practice": {"sessions": sessions[-100:]},
+        "practice": {"sessions": sessions},
         "goalTracking": {
             "goal": _sync_goal(payload),
             "dailyRecord": _sync_daily(payload),
@@ -1828,7 +1828,7 @@ def _sync_lean_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "syncInfo": {
             "masteredCount": len(mastered),
             "learningCount": len(learning),
-            "sessionCount": len(sessions[-100:]),
+            "sessionCount": len(sessions),
         },
     }
 
@@ -1845,7 +1845,7 @@ def _sync_merge_payloads(local_payload: Dict[str, Any], remote_payload: Dict[str
         sid = str(s.get("id") or "")
         if sid:
             by_id[sid] = {**by_id.get(sid, {}), **s}
-    sessions = sorted(by_id.values(), key=lambda s: str(s.get("startedAt") or s.get("endedAt") or ""))[-100:]
+    sessions = sorted(by_id.values(), key=lambda s: str(s.get("startedAt") or s.get("endedAt") or ""))
 
     daily = {}
     for src in [remote["goalTracking"].get("dailyRecord") or {}, local["goalTracking"].get("dailyRecord") or {}]:
@@ -2202,7 +2202,7 @@ def _v6_merge_sessions(a, b) -> List[Dict[str, Any]]:
             continue
         by_id[sid] = {**by_id.get(sid, {}), **s}
     out = sorted(by_id.values(), key=lambda s: str(s.get("startedAt") or s.get("endedAt") or ""))
-    return out[-300:]
+    return out
 
 
 def _v6_pick_newer(a, b):
@@ -2577,7 +2577,7 @@ def _sync_sessions_v4(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             row["poolConfig"] = None
         out.append(row)
 
-    return out[-100:]
+    return out
 
 
 def _sync_last_loaded_pool_v4(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2909,7 +2909,7 @@ def _sync_lean_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "relatedCreatedWords": related_created_words,
         },
         "practice": {
-            "sessions": sessions[-100:],
+            "sessions": sessions,
             "lastLoadedPool": last_loaded_pool or None,
         },
         "goalTracking": {
@@ -2924,7 +2924,7 @@ def _sync_lean_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "learningCount": len((per_skill["meaningLearningWords"] | per_skill["spellingLearningWords"]) - (per_skill["meaningKnownWords"] & per_skill["spellingKnownWords"])),
             "meaningKnownCount": len(per_skill["meaningKnownWords"]),
             "spellingKnownCount": len(per_skill["spellingKnownWords"]),
-            "sessionCount": len(sessions[-100:]),
+            "sessionCount": len(sessions),
             "schemaVersion": 4,
         },
     }
@@ -3112,7 +3112,7 @@ def _sync_merge_payloads(local_payload: Dict[str, Any], remote_payload: Dict[str
     sessions = sorted(
         by_id.values(),
         key=lambda s: str(s.get("startedAt") or s.get("endedAt") or s.get("updatedAt") or "")
-    )[-100:]
+    )
     local_last_pool = _sync_last_loaded_pool_v4(local)
     remote_last_pool = _sync_last_loaded_pool_v4(remote)
     last_loaded_pool = local_last_pool if str(local_last_pool.get("savedAt") or "") >= str(remote_last_pool.get("savedAt") or "") else remote_last_pool
