@@ -9,14 +9,68 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from flask import Flask, jsonify, request, send_from_directory, redirect, make_response, redirect, make_response
+from flask import Flask, jsonify, request, send_from_directory, redirect, make_response
+
+try:
+    import google.auth
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+except ImportError:  # pragma: no cover - dependency is supplied by google-cloud-storage
+    google = None
+    GoogleAuthRequest = None
 
 BASE_DIR = Path(__file__).resolve().parent
 
+VOCABULARY_MANIFEST_RELATIVE_PATH = "data/vocabulary-manifest.json"
+VOCABULARY_MANIFEST_PATH = BASE_DIR / VOCABULARY_MANIFEST_RELATIVE_PATH
+
+
+def _load_bundled_vocabulary_files() -> Tuple[str, ...]:
+    """Read the public vocabulary paths from the checked-in data manifest."""
+    try:
+        manifest = json.loads(VOCABULARY_MANIFEST_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return ()
+
+    paths = []
+    for dataset in manifest.get("datasets", []) if isinstance(manifest, dict) else []:
+        if not isinstance(dataset, dict):
+            continue
+        path = str(dataset.get("path") or "").strip().lstrip("/")
+        if path.startswith("data/") and path.endswith(".json"):
+            paths.append(path)
+    return tuple(dict.fromkeys(paths))
+
+
+BUNDLED_VOCABULARY_FILES = _load_bundled_vocabulary_files()
+
+def _vtc_vocab_entry_count() -> int:
+    """Return the unique bundled VTC vocabulary count without exposing contents."""
+    terms = set()
+    for filename in BUNDLED_VOCABULARY_FILES:
+        try:
+            payload = json.loads((BASE_DIR / filename).read_text(encoding="utf-8"))
+            rows = []
+            if isinstance(payload, dict):
+                rows = payload.get("entries", []) or payload.get("items", [])
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                term = row.get("term") or row.get("word") or ""
+                key = re.sub(r"\s+", " ", str(term).strip().lower())
+                if key:
+                    terms.add(key)
+        except Exception:
+            continue
+    return len(terms)
+
 MW_LEARNERS_KEY = os.environ.get("MW_LEARNERS_KEY", "").strip()
 MW_DICTIONARY_KEY = os.environ.get("MW_DICTIONARY_KEY", "").strip()
+MW_MEDICAL_KEY = os.environ.get("MW_MEDICAL_KEY", "").strip()
 MW_KEY = MW_DICTIONARY_KEY
 GOOGLE_TRANSLATE_KEY = os.environ.get("GOOGLE_TRANSLATE_KEY", "").strip()
+WHO_ICD_API_TOKEN = os.environ.get("WHO_ICD_API_TOKEN", "").strip()
+UMLS_API_KEY = os.environ.get("UMLS_API_KEY", "").strip()
+GOOGLE_CLOUD_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
 GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
 GOOGLE_OAUTH_CLIENT_SECRET = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
 GOOGLE_OAUTH_REDIRECT_URI = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI", "").strip()
@@ -47,6 +101,8 @@ app = Flask(__name__, static_folder=None)
 
 PUBLIC_STATIC_FILES = {
     APP_ENTRYPOINT,
+    VOCABULARY_MANIFEST_RELATIVE_PATH,
+    *BUNDLED_VOCABULARY_FILES,
     "app.js",
     "styles.css",
     "sw.js",
@@ -55,7 +111,12 @@ PUBLIC_STATIC_FILES = {
     "icon-192.png",
     "icon-512.png",
     "icon.png",
+    "sample_api_demo.html",
 }
+
+PUBLIC_STATIC_PREFIXES = (
+    "whoami-assets/",
+)
 
 
 @app.after_request
@@ -88,7 +149,8 @@ def favicon():
 
 @app.get("/<path:path>")
 def static_files(path: str):
-    if path not in PUBLIC_STATIC_FILES:
+    is_public_prefix = any(path.startswith(prefix) for prefix in PUBLIC_STATIC_PREFIXES)
+    if path not in PUBLIC_STATIC_FILES and not is_public_prefix:
         return send_from_directory(BASE_DIR, APP_ENTRYPOINT)
     file_path = BASE_DIR / path
     if file_path.exists() and file_path.is_file():
@@ -104,7 +166,12 @@ def health():
         "definition_source": "merriam-webster-collegiate",
         "has_mw_dictionary_key": bool(MW_DICTIONARY_KEY),
         "has_mw_learners_key": bool(MW_LEARNERS_KEY),
+        "has_mw_medical_key": bool(MW_MEDICAL_KEY),
         "has_google_translate_key": bool(GOOGLE_TRANSLATE_KEY),
+        "has_who_icd_api_token": bool(WHO_ICD_API_TOKEN),
+        "has_umls_api_key": bool(UMLS_API_KEY),
+        "google_tts_auth": "application-default-credentials",
+        "google_cloud_project_configured": bool(GOOGLE_CLOUD_PROJECT),
         "has_google_oauth_client_id": bool(GOOGLE_OAUTH_CLIENT_ID),
         "has_google_oauth_client_secret": bool(GOOGLE_OAUTH_CLIENT_SECRET),
         "cloud_sync_token_storage": "gcs" if CLOUD_SYNC_BUCKET else "local-file",
@@ -112,6 +179,7 @@ def health():
         "app_entrypoint": APP_ENTRYPOINT,
         "generated_vocab_storage": "gcs" if GENERATED_VOCAB_BUCKET else "local-file",
         "sync_cors_origins_configured": bool(SYNC_ALLOWED_ORIGINS),
+        "vtc_vocab_entries": _vtc_vocab_entry_count(),
     })
 
 
@@ -145,6 +213,268 @@ def define():
         return jsonify(parsed)
     except Exception as exc:
         return jsonify({"detail": f"Could not parse Merriam-Webster response: {type(exc).__name__}: {exc}"}), 502
+
+
+@app.get("/api/define-medical")
+def define_medical():
+    """Return a parsed Merriam-Webster Medical Dictionary entry.
+
+    This uses its own key because Merriam-Webster limits a free key to two
+    reference APIs. The key is never sent to the browser.
+    """
+    word = (request.args.get("word") or "").strip()
+    if not word:
+        return jsonify({"detail": "Missing word"}), 400
+
+    if not MW_MEDICAL_KEY:
+        return jsonify({"detail": "MW_MEDICAL_KEY is not configured on the server"}), 503
+
+    url = f"https://www.dictionaryapi.com/api/v3/references/medical/json/{requests.utils.quote(word)}"
+    try:
+        r = requests.get(url, params={"key": MW_MEDICAL_KEY}, timeout=15)
+        r.raise_for_status()
+        raw_data = r.json()
+    except Exception as exc:
+        return jsonify({"detail": f"Merriam-Webster Medical request failed: {exc}"}), 502
+
+    try:
+        # The Medical API uses the same core JSON entry structures needed by
+        # the existing parser: hwi, prs, shortdef, def, and meta.
+        parsed = parse_mw_collegiate_response(word, raw_data)
+        parsed["source"] = "merriam-webster-medical"
+        parsed["fetchedAt"] = now_iso()
+        return jsonify(parsed)
+    except Exception as exc:
+        return jsonify({"detail": f"Could not parse Merriam-Webster Medical response: {type(exc).__name__}: {exc}"}), 502
+
+
+def _who_text(value: Any) -> str:
+    """Extract a displayable label from a WHO JSON-LD language value."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("@value") or value.get("value") or value.get("label") or value.get("title") or "")
+    return ""
+
+
+@app.get("/api/demo/who-icd11-zh")
+def demo_who_icd11_zh():
+    """Search the authenticated WHO ICD-11 API in Chinese when configured.
+
+    The short-lived OAuth bearer token is server-side only. The demo deliberately
+    returns normalized matches rather than exposing the upstream response or token.
+    """
+    word = (request.args.get("word") or "").strip()
+    if not word:
+        return jsonify({"detail": "Missing word"}), 400
+    if not WHO_ICD_API_TOKEN:
+        return jsonify({"detail": "WHO_ICD_API_TOKEN is not configured on the server"}), 503
+
+    url = "https://id.who.int/icd/release/11/2026-01/mms/search"
+    try:
+        response = requests.get(
+            url,
+            params={"q": word},
+            headers={
+                "API-Version": "v2",
+                "Accept": "application/json",
+                "Accept-Language": "zh",
+                "Authorization": f"Bearer {WHO_ICD_API_TOKEN}",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        raw = response.json()
+    except Exception:
+        return jsonify({"detail": "WHO ICD-11 Chinese request failed"}), 502
+
+    candidates = []
+    if isinstance(raw, dict):
+        for key in ("destinationEntities", "results", "entities", "items"):
+            if isinstance(raw.get(key), list):
+                candidates = raw[key]
+                break
+        if not candidates and isinstance(raw.get("result"), list):
+            candidates = raw["result"]
+
+    matches = []
+    for item in candidates[:5]:
+        if not isinstance(item, dict):
+            continue
+        title = _who_text(item.get("title") or item.get("label") or item.get("name"))
+        definition = _who_text(item.get("definition") or item.get("description"))
+        code = _who_text(item.get("theCode") or item.get("code"))
+        uri = _who_text(item.get("@id") or item.get("id") or item.get("foundationUri"))
+        if title or definition:
+            matches.append({"title": title, "definition": definition, "code": code, "uri": uri})
+    return jsonify({"source": "who-icd11", "language": "zh", "matches": matches})
+
+
+@app.get("/api/demo/umls")
+def demo_umls():
+    """Return a small UMLS concept sample with Chinese atoms and source definitions."""
+    word = (request.args.get("word") or "").strip()
+    if not word:
+        return jsonify({"detail": "Missing word"}), 400
+    if not UMLS_API_KEY:
+        return jsonify({"detail": "UMLS_API_KEY is not configured on the server"}), 503
+
+    base_url = "https://uts-ws.nlm.nih.gov/rest"
+    try:
+        search_response = requests.get(
+            f"{base_url}/search/current",
+            params={
+                "string": word,
+                "searchType": "exact",
+                "returnIdType": "concept",
+                "pageSize": 3,
+                "apiKey": UMLS_API_KEY,
+            },
+            timeout=15,
+        )
+        search_response.raise_for_status()
+        search_raw = search_response.json()
+    except Exception:
+        return jsonify({"detail": "UMLS search request failed"}), 502
+
+    search_result = (search_raw.get("result") or {}) if isinstance(search_raw, dict) else {}
+    concepts = search_result.get("results") if isinstance(search_result, dict) else []
+    if not isinstance(concepts, list):
+        concepts = []
+
+    matches = []
+    for concept in concepts[:3]:
+        if not isinstance(concept, dict):
+            continue
+        cui = str(concept.get("ui") or "")
+        if not cui:
+            continue
+        definitions = []
+        chinese_terms = []
+        try:
+            definitions_response = requests.get(
+                f"{base_url}/content/current/CUI/{requests.utils.quote(cui)}/definitions",
+                params={"apiKey": UMLS_API_KEY, "pageSize": 5},
+                timeout=15,
+            )
+            definitions_response.raise_for_status()
+            definitions_raw = definitions_response.json()
+            for definition in (definitions_raw.get("result") or [])[:5]:
+                if isinstance(definition, dict) and definition.get("value"):
+                    definitions.append({
+                        "source": definition.get("rootSource") or "UMLS source",
+                        "text": definition["value"],
+                    })
+        except Exception:
+            pass
+        try:
+            atoms_response = requests.get(
+                f"{base_url}/content/current/CUI/{requests.utils.quote(cui)}/atoms",
+                params={"apiKey": UMLS_API_KEY, "pageSize": 200},
+                timeout=15,
+            )
+            atoms_response.raise_for_status()
+            atoms_raw = atoms_response.json()
+            for atom in (atoms_raw.get("result") or []):
+                name = atom.get("name") if isinstance(atom, dict) else ""
+                if name and re.search(r"[\u3400-\u9fff]", name) and name not in chinese_terms:
+                    chinese_terms.append(name)
+        except Exception:
+            pass
+        matches.append({
+            "cui": cui,
+            "name": concept.get("name") or "",
+            "semanticTypes": concept.get("semanticTypes") or [],
+            "chineseTerms": chinese_terms[:8],
+            "definitions": definitions,
+        })
+    return jsonify({"source": "umls", "matches": matches})
+
+
+def _synthesize_google_tts(text: str):
+    """Return a JSON-safe Google Cloud TTS result and HTTP status."""
+    text = str(text or "").strip()
+    if not text:
+        return {"detail": "Missing text"}, 400
+    if len(text) > 200:
+        return {"detail": "Text is too long"}, 400
+    if google is None or GoogleAuthRequest is None:
+        return {"detail": "google-auth is not installed on the server"}, 503
+
+    try:
+        credentials, detected_project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(GoogleAuthRequest())
+        access_token = credentials.token
+        project = GOOGLE_CLOUD_PROJECT or detected_project or ""
+        if not access_token:
+            return {"detail": "Google application credentials did not return an access token"}, 503
+    except Exception:
+        return {"detail": "Google application-default credentials are not available on the server"}, 503
+
+    payload = {
+        "input": {"text": text},
+        "voice": {"languageCode": "en-US", "ssmlGender": "NEUTRAL"},
+        "audioConfig": {"audioEncoding": "MP3", "speakingRate": 0.82},
+    }
+    try:
+        response = requests.post(
+            "https://texttospeech.googleapis.com/v1/text:synthesize",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                **({"x-goog-user-project": project} if project else {}),
+            },
+            json=payload,
+            timeout=20,
+        )
+        response.raise_for_status()
+        audio_content = (response.json() or {}).get("audioContent")
+        if not audio_content:
+            return {"detail": "Google Cloud TTS returned no audio"}, 502
+    except Exception:
+        return {"detail": "Google Cloud TTS request failed"}, 502
+
+    return {
+        "source": "google-cloud-tts",
+        "text": text,
+        "projectConfigured": bool(project),
+        "mimeType": "audio/mpeg",
+        "audioDataUri": f"data:audio/mpeg;base64,{audio_content}",
+    }, 200
+
+
+@app.get("/api/audio")
+def api_audio():
+    """Synthesize one vocabulary term with server-side Google Cloud TTS."""
+    text = (request.args.get("text") or request.args.get("word") or "").strip()
+    result, status = _synthesize_google_tts(text)
+    return jsonify(result), status
+
+
+@app.get("/api/demo/google-tts")
+def demo_google_tts():
+    """Compatibility demo endpoint for one English medical term."""
+    word = (request.args.get("word") or "").strip()
+    result, status = _synthesize_google_tts(word)
+    if status == 200:
+        result["word"] = result.pop("text", word)
+    return jsonify(result), status
+
+
+@app.get("/api/demo/open-dictionary")
+def demo_open_dictionary():
+    """Proxy the no-key open dictionary fallback used by the API sample."""
+    word = (request.args.get("word") or "").strip()
+    if not word:
+        return jsonify({"detail": "Missing word"}), 400
+    url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{requests.utils.quote(word)}"
+    try:
+        r = requests.get(url, timeout=10)
+        r.raise_for_status()
+        return jsonify(r.json())
+    except Exception as exc:
+        return jsonify({"detail": f"Open dictionary request failed: {exc}"}), 502
 
 
 # ============================================================
