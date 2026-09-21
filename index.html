@@ -15,7 +15,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/styles.css?v=20260921-bookmarks-v1">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -162,6 +162,7 @@
       <button class="game-close" onclick="exitGame()">✕</button>
       <div class="progress-dots" id="progressDots"></div>
       <div class="game-streak" id="gameStreak">🔥0</div>
+      <button class="game-sound-toggle" id="gameSoundToggle" type="button" onclick="togglePracticeAudio()" aria-label="Audio on; tap to mute" aria-pressed="false">🔊</button>
     </div>
     <div class="game-body" id="gameBody"></div>
   </div>
@@ -177,6 +178,6 @@
   </nav>
 </div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=20260921-bookmarks-v1"></script>
 </body>
 </html>
