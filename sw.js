@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v36-20260921-bookmarks";
+const CACHE_NAME = "ielts-vocab-pwa-v37-20260921-unlimited-session-history";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,7 +10,7 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260921-bookmarks-v1",
+  "/app.js?v=20260921-session-history-v1",
   "/styles.css?v=20260921-bookmarks-v1"
 ];
 
