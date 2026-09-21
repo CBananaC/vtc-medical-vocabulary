@@ -2,7 +2,7 @@
 
 Mobile-first vocabulary and spelling practice for the English-taught VTC medical and rehabilitation programme.
 
-This repository contains the application code and deployment scaffolding adapted from the earlier IELTS vocabulary webapp. Private VTC course materials, personal study records, vocabulary datasets, API keys, OAuth credentials, and sync tokens are intentionally excluded.
+This project contains the application code and deployment scaffolding adapted from the earlier IELTS vocabulary webapp. The local study build keeps bundled VTC vocabulary under `data/<course>/<short-course>/<session>.json`; private course material, personal study records, API keys, OAuth credentials, and sync tokens remain outside the public source boundary.
 
 ## Security boundary
 
@@ -14,7 +14,7 @@ This repository contains the application code and deployment scaffolding adapted
 
 ## Local development
 
-The source tree intentionally has no bundled vocabulary dataset. Supply a permitted local worklist or generated data file outside Git, configure the required environment variables, then run:
+The local build reads its bundled dataset paths from `data/vocabulary-manifest.json`. The dataset JSON files are ignored by Git and are included in a deployment only when that publication scope is explicitly approved. Configure the required environment variables, then run:
 
 ```bash
 python3 -m venv .venv
