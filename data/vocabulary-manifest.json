@@ -1,0 +1,175 @@
+{
+  "format_version": "1.0",
+  "naming": {
+    "course_folder": "HHS course code",
+    "short_course_folder": "Short course name",
+    "session_file": {
+      "L1": "Lecture 1",
+      "L2": "Lecture 2",
+      "L3": "Lecture 3",
+      "L4": "Lecture 4",
+      "L5": "Lecture 5",
+      "L6": "Lecture 6",
+      "W1": "Workshop 1",
+      "W2": "Workshop 2",
+      "T1": "Tutorial 1"
+    }
+  },
+  "datasets": [
+    {
+      "path": "data/HHS4185/Common-Rehab/L1.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "L1",
+      "session_type": "Lecture",
+      "session_number": 1,
+      "display": "HHS4185 · Common Rehab · Lecture 1"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/L2.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "L2",
+      "session_type": "Lecture",
+      "session_number": 2,
+      "display": "HHS4185 · Common Rehab · Lecture 2"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/L3.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "L3",
+      "session_type": "Lecture",
+      "session_number": 3,
+      "display": "HHS4185 · Common Rehab · Lecture 3"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/W1.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "W1",
+      "session_type": "Workshop",
+      "session_number": 1,
+      "display": "HHS4185 · Common Rehab · Workshop 1"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/T1.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "T1",
+      "session_type": "Tutorial",
+      "session_number": 1,
+      "display": "HHS4185 · Common Rehab · Tutorial 1"
+    },
+    {
+      "path": "data/HHS3190M/Anatomy/L1.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Anatomy",
+      "session_code": "L1",
+      "session_type": "Lecture",
+      "session_number": 1,
+      "display": "HHS3190M · Anatomy · Lecture 1"
+    },
+    {
+      "path": "data/HHS3190M/Anatomy/L1-whoami.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Anatomy",
+      "session_code": "L1",
+      "session_type": "Lecture",
+      "session_number": 1,
+      "display": "HHS3190M · Anatomy · Lecture 1 · Who Am I visuals",
+      "layer": "visual_candidates",
+      "review_status": "pending_manual_review"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L1.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L1",
+      "session_type": "Lecture",
+      "session_number": 1,
+      "display": "HHS3190M · Physiology · Lecture 1"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L2.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L2",
+      "session_type": "Lecture",
+      "session_number": 2,
+      "display": "HHS3190M · Physiology · Lecture 2"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/W2.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "W2",
+      "session_type": "Workshop",
+      "session_number": 2,
+      "display": "HHS4185 · Common Rehab · Workshop 2"
+    },
+    {
+      "path": "data/HHS3892/First-Aid/L1.json",
+      "course_code": "HHS3892",
+      "course_short_title": "First Aid",
+      "session_code": "L1",
+      "session_type": "Lecture",
+      "session_number": 1,
+      "display": "HHS3892 · First Aid · Lecture 1"
+    },
+    {
+      "path": "data/HHS3892/First-Aid/L2.json",
+      "course_code": "HHS3892",
+      "course_short_title": "First Aid",
+      "session_code": "L2",
+      "session_type": "Lecture",
+      "session_number": 2,
+      "display": "HHS3892 · First Aid · Lecture 2"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L3.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L3",
+      "session_type": "Lecture",
+      "session_number": 3,
+      "display": "HHS3190M · Physiology · Lecture 3"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L4.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L4",
+      "session_type": "Lecture",
+      "session_number": 4,
+      "display": "HHS3190M · Physiology · Lecture 4"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L5.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L5",
+      "session_type": "Lecture",
+      "session_number": 5,
+      "display": "HHS3190M · Physiology · Lecture 5"
+    },
+    {
+      "path": "data/HHS3190M/Physiology/L6.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Physiology",
+      "session_code": "L6",
+      "session_type": "Lecture",
+      "session_number": 6,
+      "display": "HHS3190M · Physiology · Lecture 6"
+    },
+    {
+      "path": "data/HHS4185/Common-Rehab/L4.json",
+      "course_code": "HHS4185",
+      "course_short_title": "Common Rehab",
+      "session_code": "L4",
+      "session_type": "Lecture",
+      "session_number": 4,
+      "display": "HHS4185 · Common Rehab · Lecture 4"
+    }
+  ]
+}
