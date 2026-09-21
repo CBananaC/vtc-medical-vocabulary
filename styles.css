@@ -4016,19 +4016,6 @@ body.filter-panel-open {
   border-color: #C89B26 !important;
 }
 
-.g-prog-bookmark-track {
-  height: 4px;
-  margin-top: 5px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #F6EDCF;
-}
-.g-prog-bookmark-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: #D2A21A;
-  transition: width 0.35s ease;
-}
 .g-prog-bookmark-count,
 .ip-acc-section.status-bookmarked .ip-acc-label,
 .ip-acc-section.status-bookmarked .ip-acc-count {
@@ -4037,3 +4024,18 @@ body.filter-panel-open {
 .ip-acc-section.status-bookmarked .ip-acc-count {
   background: #FFF4CF;
 }
+
+.filter-empty-note,
+.pw-filter-empty-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  font-weight: 700;
+}
+.filter-empty-note {
+  padding: 10px 12px;
+  border: 1px dashed var(--line, #E8E2F1);
+  border-radius: 12px;
+  background: rgba(250, 247, 255, 0.72);
+}
+.pw-filter-empty-note { padding: 0 2px 4px; }
