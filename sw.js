@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v46-20260923-spell-cooldown-fill";
+const CACHE_NAME = "ielts-vocab-pwa-v47-20260923-practice-history-feed";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260923-spell-cooldown-fill-v1",
-  "/styles.css?v=20260923-spell-cooldown-fill-v1"
+  "/app.js?v=20260923-practice-history-feed-v1",
+  "/styles.css?v=20260923-practice-history-feed-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
