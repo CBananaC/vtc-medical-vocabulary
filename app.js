@@ -247,9 +247,47 @@ async function loadBundledVocabularyLists() {
       : String(w?.word || "");
   }
 
-  function renderSameSpellingQuestion(w) {
+  function applySuccessfulRepeatCooldown(g, w, cooldownUntil) {
+    if (window.game !== g || g.spellingRepeatWordKey !== w?.key
+      || Number(g.pendingSpellingRepeats || 0) <= 0) return;
+
+    const input = document.getElementById("spellInput");
+    const check = document.getElementById("checkSpellBtn");
+    if (!input || !check) return;
+
+    const remaining = Math.max(0, Number(cooldownUntil) - Date.now());
+    if (remaining <= 0) return;
+
+    const token = Number(g.spellingRepeatCooldownToken || 0) + 1;
+    g.spellingRepeatCooldownToken = token;
+    input.disabled = true;
+    check.disabled = true;
+
+    const status = document.createElement("div");
+    status.className = "spelling-repeat-cooldown";
+    status.setAttribute("role", "status");
+    status.textContent = "Wait 1 second before the next reattempt.";
+    status.style.cssText = "margin-top:8px;text-align:center;color:var(--muted);font-size:13px;font-weight:700";
+    input.closest(".game-spell")?.appendChild(status);
+
+    window.setTimeout(() => {
+      if (window.game !== g || g.spellingRepeatCooldownToken !== token
+        || g.spellingRepeatWordKey !== w.key || Number(g.pendingSpellingRepeats || 0) <= 0
+        || !document.contains(input) || !document.contains(check)) return;
+      input.disabled = false;
+      check.disabled = false;
+      status.remove();
+      input.focus();
+    }, remaining);
+  }
+
+  function renderSameSpellingQuestion(w, cooldownUntil) {
     if (typeof window.renderSpellV2 === "function") {
-      window.renderSpellV2(w);
+      const rendered = window.renderSpellV2(w);
+      if (Number(cooldownUntil) > 0) {
+        const g = window.game;
+        Promise.resolve(rendered).then(() => applySuccessfulRepeatCooldown(g, w, cooldownUntil));
+      }
     }
   }
 
@@ -258,6 +296,7 @@ async function loadBundledVocabularyLists() {
     if (!g || g.mode !== "spelling" || !word?.key) return;
     const repeats = Math.max(1, Math.min(5, Number(count) || 1));
     const current = (Array.isArray(g.pool) ? g.pool : []).find(w => w.key === word.key) || word;
+    g.spellingRepeatCooldownToken = Number(g.spellingRepeatCooldownToken || 0) + 1;
     g.pendingSpellingRepeats = repeats;
     g.spellingRepeatWordKey = current.key;
     if (typeof window.closeEasyAnswerOverlay === "function") window.closeEasyAnswerOverlay();
@@ -309,7 +348,7 @@ async function loadBundledVocabularyLists() {
       if (activePracticeGame()?.audioMuted !== true && typeof practicePlayPronunciation === "function") {
         practicePlayPronunciation(w.key);
       }
-      renderSameSpellingQuestion(w);
+      renderSameSpellingQuestion(w, Date.now() + 1000);
       return true;
     }
 
@@ -6278,7 +6317,7 @@ setTimeout(() => {
     }
   }
 
-  function recordAttempt(key, mode, ok) {
+  function recordAttempt(key, mode, ok, options = {}) {
     // PER-SKILL MASTERY MODEL (test model)
     // - Skill axes: "meaning" (wordToMeaning + meaningToWord) and "spelling".
     // - Promotion (per-skill): first-attempt-correct in THAT skill OR 3 consecutive correct in THAT skill.
@@ -6325,7 +6364,7 @@ setTimeout(() => {
 
     const wasMastered = isWhoAmIMode ? !!progress[key]._whoamiKnown : !!(km[key] && ks[key]);
 
-    if (ok) {
+    if (ok && options.allowKnownPromotion !== false) {
       progress[key][streakField]++;
       const alreadyKnown = isMeaningMode ? !!km[key] : (isWhoAmIMode ? !!progress[key]._whoamiKnown : !!ks[key]);
       const shouldPromote = !alreadyKnown && (isFirstAttemptInSkill || progress[key][streakField] >= 3);
@@ -6353,7 +6392,7 @@ setTimeout(() => {
           toast(`${label}: ${w?.word || key}`);
         }
       }
-    } else {
+    } else if (!ok) {
       // Wrong: reset only this skill's streak, demote only this skill.
       progress[key][streakField] = 0;
       let demoted = false;
@@ -6410,9 +6449,11 @@ setTimeout(() => {
     }
 
     const spellTillRemember = g.mode === "spelling" && g.spellTillRemember;
-    const immediateSpellRepeat = spellTillRemember
+    const immediateSpellingRepeat = g.mode === "spelling"
+      && g.repeatWrongSpelling === true
       && Number(g.pendingSpellingRepeats || 0) > 0
       && g.spellingRepeatWordKey === w.key;
+    const immediateSpellRepeat = spellTillRemember && immediateSpellingRepeat;
 
     if (ok) {
       g.correct++;
@@ -6439,7 +6480,11 @@ setTimeout(() => {
       }
     }
 
-    recordAttempt(w.key, g.mode, ok);
+    // Keep immediate respells in attempt/correct totals, but do not let a
+    // correct 1/3/5 repeat advance the streak or promote spelling to Known.
+    recordAttempt(w.key, g.mode, ok, {
+      allowKnownPromotion: !(ok && immediateSpellingRepeat)
+    });
   }
 
   window.scheduleSpellTillRememberReview = scheduleSpellTillRememberReview;
