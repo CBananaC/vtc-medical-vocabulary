@@ -1983,7 +1983,7 @@ function renderVtcSourceHtml(w) {
     : "";
   const status = w.sourceStatus || "generated_not_verified";
   return `<div class="vtc-source-card">
-    <div class="vtc-group-line">${escapeHtml(w.courseCode || "VTC")} · ${escapeHtml(w.courseTitle || "Course vocabulary")} · ${escapeHtml(w.lecture || "Lecture 1")}</div>
+    <div class="vtc-group-line">${escapeHtml(w.courseTitle || "Course vocabulary")} · ${escapeHtml(w.lecture || "Lecture 1")}</div>
     ${field("English definition", v.english_definition, "vtc-english")}
     ${field("繁體中文定義", v.traditional_chinese_definition, "vtc-chinese")}
     ${field("Context", v.context, "vtc-context")}
@@ -3459,6 +3459,7 @@ function normalizeBackupSession(s) {
     studyUntilMastered: !!s.studyUntilMastered,
     spellTillRemember: !!s.spellTillRemember,
     repeatWrongSpelling: s.mode === "spelling" && s.repeatWrongSpelling !== false,
+    muteAudio: s.muteAudio === true,
     totalAnswered: Number(s.totalAnswered || s.total || 0),
     correctAnswered: Number(s.correctAnswered || s.correct || 0),
     uniqueWordsCorrect: Number(s.uniqueWordsCorrect || masteredWords.length || 0),
@@ -5134,6 +5135,8 @@ setTimeout(() => {
     studyUntilMastered: false,
     spellTillRemember: true,
     repeatWrongSpelling: true,
+    muteAudio: false,
+    repeatPoolKeys: null,
     poolOverrideKeys: null
   };
 
@@ -5179,7 +5182,7 @@ setTimeout(() => {
     return out;
   }
 
-  function practicePoolConfig(filter, length, mode, studyUntilMastered, spellTillRemember, repeatWrongSpelling) {
+  function practicePoolConfig(filter, length, mode, studyUntilMastered, spellTillRemember, repeatWrongSpelling, muteAudio) {
     return {
       filter: cloneFilterConfig(filter || emptyFilter()),
       description: describeFilter(filter || emptyFilter()),
@@ -5187,7 +5190,8 @@ setTimeout(() => {
       mode: mode || null,
       studyUntilMastered: mode === "spelling" ? false : !!studyUntilMastered,
       spellTillRemember: !!spellTillRemember,
-      repeatWrongSpelling: mode === "spelling" && repeatWrongSpelling !== false
+      repeatWrongSpelling: mode === "spelling" && repeatWrongSpelling !== false,
+      muteAudio: muteAudio === true
     };
   }
 
@@ -5418,9 +5422,19 @@ setTimeout(() => {
   }
 
   function courseFilterLabel(value) {
-    const [code, ...titleParts] = String(value || "").split("::");
-    const title = titleParts.join("::");
-    return code && title ? `${code} · ${title}` : (title || code);
+    const raw = String(value || "");
+    const [code, ...titleParts] = raw.split("::");
+    const title = titleParts.join("::").trim();
+    // Course codes remain internal keys so Anatomy and Physiology can both
+    // belong to HHS3190M, but the learner-facing UI uses the short course
+    // name only. A code-only legacy value should not leak into the UI.
+    if (title) return title;
+    const legacyShortNames = {
+      HHS3190M: "Anatomy / Physiology",
+      HHS3892: "First Aid",
+      HHS4185: "Common Rehab"
+    };
+    return legacyShortNames[code.trim()] || "Course";
   }
 
   function sessionInfoForPath(path) {
@@ -5590,6 +5604,21 @@ setTimeout(() => {
     return parts.join(" · ");
   }
 
+  function displayPracticeDescription(source) {
+    const filter = source?.filter || source?.poolConfig?.filter;
+    if (filter) {
+      const label = describeFilter(cloneFilterConfig(filter));
+      if (label && label !== "All words" && label !== "Course") return label;
+    }
+    const raw = source?.poolDescription || source?.description || "";
+    const cleaned = String(raw)
+      .replace(/\b(?:HHS\d+[A-Z0-9]*|VTC)\b\s*(?:·|•|[-:])?\s*/gi, "")
+      .replace(/\s{2,}/g, " ")
+      .replace(/^\s*[·•-]\s*|\s*[·•-]\s*$/g, "")
+      .trim();
+    return cleaned || "All words";
+  }
+
   // ============================================================
   // RENDER — Practice page root
   // ============================================================
@@ -5678,7 +5707,7 @@ setTimeout(() => {
           <div class="l0-prev">
             <div class="l0-prev-label">Previous Practice</div>
             <div class="l0-prev-title">${modeMeta.ico} ${escapeHtml(modeMeta.name)} · ${length} words ${scoreHtml}</div>
-            <div class="l0-prev-meta">${escapeHtml(cfg.description || describeFilter(cfg.filter || emptyFilter()))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}${cfg.spellTillRemember ? " · Spell till know" : ""}</div>
+            <div class="l0-prev-meta">${escapeHtml(displayPracticeDescription(cfg))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}${cfg.spellTillRemember ? " · Spell till know" : ""}</div>
             <div class="l0-prev-actions">
               ${viewBtn}
               ${repeatPrevBtn}
@@ -5798,6 +5827,7 @@ setTimeout(() => {
       studyUntilMastered: sum,
       spellTillRemember: !!(lastCfg && lastCfg.spellTillRemember),
       repeatWrongSpelling: mode === "spelling" && repeatWrongSpellingFromSaved(lastCfg?.repeatWrongSpelling, lastCfg?.repeatWrongSpellingDefaultVersion),
+      muteAudio: lastCfg?.muteAudio === true,
       poolDescription: `Review · ${review.length} wrong words`
     });
   };
@@ -5814,34 +5844,68 @@ setTimeout(() => {
       studyUntilMastered: sum,
       spellTillRemember: !!(lastCfg && lastCfg.spellTillRemember),
       repeatWrongSpelling: mode === "spelling" && repeatWrongSpellingFromSaved(lastCfg?.repeatWrongSpelling, lastCfg?.repeatWrongSpellingDefaultVersion),
+      muteAudio: lastCfg?.muteAudio === true,
       poolDescription: `Mastered · ${mastered.length} words`
     });
   };
 
   // ── Layer 1: Filter / Word pool ──────────────────────────────
+  function renderPracticeSessionGroups(selectedCourses) {
+    if (!selectedCourses.length) {
+      return `
+        <div class="pw-section">
+          <div class="pw-section-title">Course sessions</div>
+          <div class="pw-filter-empty-note">Select one or more courses above to see their Lecture, Tutorial, and Workshop sessions.</div>
+        </div>
+      `;
+    }
+
+    const groups = selectedCourses.map(courseValue => {
+      const scopedFilter = cloneFilterConfig(wizard.filter);
+      scopedFilter.courses = [courseValue];
+      const sessionRows = ["lecture", "tutorial", "workshop"].map(field => {
+        const dim = FILTER_DIMS.find(d => d.field === field);
+        const counts = optionCountsFor(field, scopedFilter);
+        if (!dim || !counts.length) return "";
+        const selected = wizard.filter[dim.key] || [];
+        const chips = counts.map(([value, count]) => {
+          const safeValue = String(value).replace(/'/g, "\\'");
+          return `<button class="pw-chip ${selected.includes(value) ? "active" : ""}" onclick="practiceToggleFilter('${dim.key}','${escapeHtml(safeValue)}')">${escapeHtml(value)}<span class="n">${count}</span></button>`;
+        }).join("");
+        return `
+          <div class="pw-course-session-row">
+            <div class="pw-course-session-label">${escapeHtml(dim.title)}</div>
+            <div class="pw-chip-row">${chips}</div>
+          </div>
+        `;
+      }).filter(Boolean).join("");
+      if (!sessionRows) return "";
+      return `
+        <div class="pw-course-session-group">
+          <div class="pw-course-session-title">${escapeHtml(courseFilterLabel(courseValue))}</div>
+          ${sessionRows}
+        </div>
+      `;
+    }).filter(Boolean).join("");
+
+    return `
+      <div class="pw-section pw-course-sessions-section">
+        <div class="pw-section-title">Course sessions · ${selectedCourses.length} course${selectedCourses.length === 1 ? "" : "s"}</div>
+        ${groups || `<div class="pw-filter-empty-note">No sessions are available for the selected course${selectedCourses.length === 1 ? "" : "s"}.</div>`}
+      </div>
+    `;
+  }
+
   function renderLayer1(root) {
-    const pool = wizardPool();
+    const pool = resolvePool(wizard.filter);
     const canProceed = pool.length > 0;
 
     let chipGroups = "";
-    let sessionPromptAdded = false;
     const selectedCourses = wizard.filter.courses || [];
-    const oneCourseSelected = selectedCourses.length === 1;
     for (const d of FILTER_DIMS) {
       const isSessionDimension = ["lecture", "tutorial", "workshop"].includes(d.field);
-      if (isSessionDimension && !oneCourseSelected) {
-        if (!sessionPromptAdded) {
-          const note = selectedCourses.length
-            ? "Choose one course above to see its session numbers without mixing courses."
-            : "Select one course above to see its Lecture, Tutorial, and Workshop sessions separately.";
-          chipGroups += `
-            <div class="pw-section">
-              <div class="pw-section-title">Course sessions</div>
-              <div class="pw-filter-empty-note">${note}</div>
-            </div>
-          `;
-          sessionPromptAdded = true;
-        }
+      if (isSessionDimension) {
+        if (d.field === "lecture") chipGroups += renderPracticeSessionGroups(selectedCourses);
         continue;
       }
       const counts = optionCountsFor(d.field, wizard.filter);
@@ -5872,12 +5936,9 @@ setTimeout(() => {
         const bookmarkClass = d.field === "status" && val === "bookmarked" ? " bookmark-filter-chip" : "";
         return `<button class="pw-chip${bookmarkClass} ${active || isAllActive ? "active" : ""}" onclick="practiceToggleFilter('${d.key}','${escapeHtml(safeVal)}')">${escapeHtml(label)}<span class="n">${n}</span></button>`;
       }).join("");
-      const sectionTitle = isSessionDimension
-        ? `${d.title} · ${courseFilterLabel(selectedCourses[0])}`
-        : d.title;
       chipGroups += `
         <div class="pw-section">
-          <div class="pw-section-title">${escapeHtml(sectionTitle)}</div>
+          <div class="pw-section-title">${escapeHtml(d.title)}</div>
           <div class="pw-chip-row">${chips}</div>
         </div>
       `;
@@ -5921,13 +5982,13 @@ setTimeout(() => {
       const modeMaxLen = wizard.repeatPoolKeys
         ? Math.max(1, modePool.length || exactRepeatWords.length)
         : Math.max(1, modePool.length);
-      const modeLength = Math.min(wizard.length, modeMaxLen);
+      const isSelected = wizard.mode === m.id;
+      if (isSelected && wizard.length > modeMaxLen) wizard.length = modeMaxLen;
+      const modeLength = Math.max(1, Math.min(wizard.length, modeMaxLen));
       const acc = poolModeAccuracy(modePoolKeys, m.id);
       const stat = acc
         ? `Pool accuracy: ${acc.pct}% · ${acc.attempts} attempts`
         : "Not yet practiced for this pool";
-      const isSelected = wizard.mode === m.id;
-
       const optionsBlock = isSelected ? `
         <div class="l2-options" onclick="event.stopPropagation()">
           <div class="l2-opt-label">Session length · <span id="pwSliderVal">${modeLength}</span> ${m.id === "whoami" ? "visual cards" : "words"}</div>
@@ -5957,6 +6018,13 @@ setTimeout(() => {
                 <div class="l2-toggle-desc">After a wrong answer, choose 1, 3, or 5 immediate respells.</div>
               </div>
               <button class="l2-pill-toggle ${wizard.repeatWrongSpelling ? "on" : ""}" onclick="practiceToggleRepeatWrongSpelling()" aria-label="Repeat wrong spelling: ${wizard.repeatWrongSpelling ? "on" : "off"}" aria-pressed="${wizard.repeatWrongSpelling}">${wizard.repeatWrongSpelling ? "On" : "Off"}</button>
+            </div>
+            <div class="l2-toggle-row">
+              <div class="l2-toggle-body">
+                <div class="l2-toggle-name">🔇 Mute audio</div>
+                <div class="l2-toggle-desc">Mute automatic pronunciation. Play sound buttons remain available.</div>
+              </div>
+              <button class="l2-pill-toggle ${wizard.muteAudio ? "on" : ""}" onclick="practiceToggleMuteAudio()" aria-label="Mute audio: ${wizard.muteAudio ? "on" : "off"}" aria-pressed="${wizard.muteAudio}">${wizard.muteAudio ? "On" : "Off"}</button>
             </div>
           ` : ""}
           <button class="l2-start-btn" ${m.id === "whoami" && modePool.length === 0 ? "disabled" : ""} onclick="practiceLaunch()">▶ Start practice</button>
@@ -6091,6 +6159,11 @@ setTimeout(() => {
     renderPracticeRoot();
   };
 
+  window.practiceToggleMuteAudio = function() {
+    wizard.muteAudio = !wizard.muteAudio;
+    renderPracticeRoot();
+  };
+
   window.practiceQuickStart = function() {
     const cfg = loadLastCfg();
     if (!cfg) return;
@@ -6100,13 +6173,14 @@ setTimeout(() => {
     wizard.studyUntilMastered = cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered;
     wizard.spellTillRemember = cfg.spellTillRemember !== false;
     wizard.repeatWrongSpelling = cfg.mode === "spelling" && repeatWrongSpellingFromSaved(cfg.repeatWrongSpelling, cfg.repeatWrongSpellingDefaultVersion);
+    wizard.muteAudio = cfg.muteAudio === true;
     wizard.repeatPoolKeys = null;
     wizard.poolOverrideKeys = null;
     practiceLaunch();
   };
 
   window.practiceStartFresh = function() {
-    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: false, spellTillRemember: true, repeatWrongSpelling: true, repeatPoolKeys: null, poolOverrideKeys: null };
+    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: false, spellTillRemember: true, repeatWrongSpelling: true, muteAudio: false, repeatPoolKeys: null, poolOverrideKeys: null };
     renderPracticeRoot();
   };
 
@@ -6123,6 +6197,7 @@ setTimeout(() => {
       studyUntilMastered: opts.mode === "spelling" ? false : !!opts.studyUntilMastered,
       spellTillRemember: opts.spellTillRemember !== false,
       repeatWrongSpelling: opts.mode === "spelling" && opts.repeatWrongSpelling !== false,
+      muteAudio: opts.muteAudio === true,
       repeatPoolKeys: [...new Set(keys)],
       poolOverrideKeys: null
     };
@@ -6152,7 +6227,8 @@ setTimeout(() => {
       studyUntilMastered: wizard.mode === "spelling" ? false : !!wizard.studyUntilMastered,
       spellTillRemember: !!wizard.spellTillRemember,
       repeatWrongSpelling: wizard.mode === "spelling" && wizard.repeatWrongSpelling !== false,
-      repeatWrongSpellingDefaultVersion: REPEAT_WRONG_SPELLING_DEFAULT_VERSION
+      repeatWrongSpellingDefaultVersion: REPEAT_WRONG_SPELLING_DEFAULT_VERSION,
+      muteAudio: wizard.muteAudio === true
     };
     saveLastCfg(cfg);
 
@@ -6174,8 +6250,9 @@ setTimeout(() => {
       studyUntilMastered: cfg.studyUntilMastered,
       spellTillRemember: !!cfg.spellTillRemember,
       repeatWrongSpelling: cfg.repeatWrongSpelling,
+      muteAudio: cfg.muteAudio === true,
       poolDescription: `${wizard.poolOverrideKeys ? "Remaining untested · " : ""}${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
-      poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling),
+      poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling, cfg.muteAudio),
       initialWords
     });
   };
@@ -6184,7 +6261,7 @@ setTimeout(() => {
   // SESSION — replaces legacy startGame / renderGame / ...
   // ============================================================
   function startPracticeSession(opts) {
-    const { mode, pool, length, studyUntilMastered, spellTillRemember, repeatWrongSpelling, poolDescription } = opts;
+    const { mode, pool, length, studyUntilMastered, spellTillRemember, repeatWrongSpelling, muteAudio, poolDescription } = opts;
     const initial = Array.isArray(opts.initialWords) && opts.initialWords.length
       ? opts.initialWords.slice(0, length)
       : sample(pool, length);
@@ -6192,7 +6269,7 @@ setTimeout(() => {
     const effectiveStudyUntilMastered = mode === "spelling" ? false : !!studyUntilMastered;
     const effectiveRepeatWrongSpelling = mode === "spelling"
       && (repeatWrongSpelling ?? opts.poolConfig?.repeatWrongSpelling ?? true);
-    const poolConfig = opts.poolConfig || practicePoolConfig(wizard.filter || emptyFilter(), length, mode, effectiveStudyUntilMastered, spellTillRemember, effectiveRepeatWrongSpelling);
+    const poolConfig = opts.poolConfig || practicePoolConfig(wizard.filter || emptyFilter(), length, mode, effectiveStudyUntilMastered, spellTillRemember, effectiveRepeatWrongSpelling, muteAudio === true);
 
     window.game = {
       mode,
@@ -6219,7 +6296,7 @@ setTimeout(() => {
       pendingSpellingRepeats: 0,
       spellingRepeatWordKey: null,
       whoamiLastAssetByKey: {},
-      audioMuted: false,
+      audioMuted: muteAudio === true,
       skipped: new Set(),
       startedAt: new Date().toISOString(),
       sessionId: "s_" + Date.now()
@@ -6808,6 +6885,7 @@ setTimeout(() => {
       spellTillRemember: g.spellTillRemember,
       repeatWrongSpelling: g.repeatWrongSpelling,
       repeatWrongSpellingDefaultVersion: REPEAT_WRONG_SPELLING_DEFAULT_VERSION,
+      muteAudio: g.audioMuted === true,
       totalAnswered: g.totalAnswered,
       correctAnswered: g.correct,
       uniqueWordsCorrect: g.mastered.size,
@@ -6959,7 +7037,7 @@ setTimeout(() => {
     const mode = g.mode;
     const sum = g.studyUntilMastered;
     const desc = (g.poolDescription || "") + " · retry wrong";
-    window.startPracticeSession({ mode, pool, length: pool.length, studyUntilMastered: sum, spellTillRemember: g.spellTillRemember, repeatWrongSpelling: g.repeatWrongSpelling, poolDescription: desc });
+    window.startPracticeSession({ mode, pool, length: pool.length, studyUntilMastered: sum, spellTillRemember: g.spellTillRemember, repeatWrongSpelling: g.repeatWrongSpelling, muteAudio: g.audioMuted === true, poolDescription: desc });
   };
 
   window.practicePlayAgain = function() {
@@ -6973,6 +7051,7 @@ setTimeout(() => {
       studyUntilMastered: g.studyUntilMastered,
       spellTillRemember: g.spellTillRemember,
       repeatWrongSpelling: g.repeatWrongSpelling,
+      muteAudio: g.audioMuted === true,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig,
       initialWords
@@ -7093,6 +7172,10 @@ setTimeout(() => {
   function sessionPoolConfig(s) {
     if (s && s.poolConfig && typeof s.poolConfig === "object") {
       const cfg = { ...s.poolConfig };
+      cfg.description = displayPracticeDescription({
+        filter: cfg.filter || s.filter,
+        poolDescription: cfg.description || s.poolDescription
+      });
       if ((s.mode || cfg.mode) === "spelling") {
         if (!Object.prototype.hasOwnProperty.call(cfg, "spellTillRemember")) {
           cfg.spellTillRemember = true;
@@ -7108,7 +7191,10 @@ setTimeout(() => {
     const mode = s?.mode || lastCfg?.mode || "wordToMeaning";
     return {
       filter: (s && s.filter) || lastCfg?.filter || emptyFilter(),
-      description: s?.poolDescription || describeFilter((s && s.filter) || lastCfg?.filter || emptyFilter()),
+      description: displayPracticeDescription({
+        filter: (s && s.filter) || lastCfg?.filter || emptyFilter(),
+        poolDescription: s?.poolDescription || lastCfg?.description
+      }),
       length: Number(s?.sessionLength || lastCfg?.length || DEFAULT_LENGTH),
       mode,
       studyUntilMastered: mode === "spelling" ? false : !!(s?.studyUntilMastered ?? lastCfg?.studyUntilMastered),
@@ -7118,7 +7204,8 @@ setTimeout(() => {
         s?.repeatWrongSpelling !== undefined
           ? s?.repeatWrongSpellingDefaultVersion
           : lastCfg?.repeatWrongSpellingDefaultVersion
-      )
+      ),
+      muteAudio: s?.muteAudio ?? lastCfg?.muteAudio ?? false
     };
   }
 
@@ -7160,7 +7247,11 @@ setTimeout(() => {
       studyUntilMastered: cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
       repeatWrongSpelling: cfg.mode === "spelling" && cfg.repeatWrongSpelling !== false,
-      description: cfg.description || last.poolDescription || describeFilter(cfg.filter || emptyFilter())
+      muteAudio: cfg.muteAudio === true,
+      description: displayPracticeDescription({
+        filter: cfg.filter,
+        poolDescription: cfg.description || last.poolDescription
+      })
     };
   }
 
@@ -7176,7 +7267,7 @@ setTimeout(() => {
   function sessionOptionLine(s) {
     const cfg = sessionPoolConfig(s);
     const parts = [];
-    if (cfg.description) parts.push(cfg.description);
+    if (cfg.description) parts.push(displayPracticeDescription(cfg));
     parts.push(`${Number(cfg.length || s.sessionLength || DEFAULT_LENGTH)} words`);
     if (s.mode !== "spelling" && (s.studyUntilMastered || cfg.studyUntilMastered)) parts.push("Until mastered");
     if (s.spellTillRemember || cfg.spellTillRemember) parts.push("Spell till know");
@@ -7355,7 +7446,7 @@ setTimeout(() => {
             <div class="ip-hero-title">${m.ico} ${escapeHtml(m.name)}</div>
             <div class="ip-hero-count">${s.correctAnswered || 0} / ${s.sessionLength || s.totalAnswered || rows.length || 0}</div>
           </div>
-          <div class="ip-hero-sub">${escapeHtml(s.poolDescription || "")}</div>
+          <div class="ip-hero-sub">${escapeHtml(displayPracticeDescription(s))}</div>
           <div class="ip-hero-sub strong">${escapeHtml(recencyLabel(s.endedAt || s.startedAt))}${s.completed === false ? " · ended early" : ""}</div>
         </div>
         ${wordList}
@@ -7388,6 +7479,7 @@ setTimeout(() => {
       studyUntilMastered: s.mode === "spelling" ? false : true,
       spellTillRemember: s.mode === "spelling" ? s.spellTillRemember !== false : !!s.spellTillRemember,
       repeatWrongSpelling: s.mode === "spelling" && repeatWrongSpellingFromSaved(s.repeatWrongSpelling, s.repeatWrongSpellingDefaultVersion),
+      muteAudio: s.muteAudio === true,
       poolDescription: `Retry · ${recencyLabel(s.endedAt)} wrong words`
     });
   };
@@ -7408,6 +7500,7 @@ setTimeout(() => {
       studyUntilMastered: mode === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
       repeatWrongSpelling: mode === "spelling" && cfg.repeatWrongSpelling !== false,
+      muteAudio: cfg.muteAudio === true,
       repeatPoolKeys: null,
       poolOverrideKeys: remainingKeys
     };
@@ -7428,6 +7521,7 @@ setTimeout(() => {
       studyUntilMastered: (cfg.mode || s.mode) === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
       repeatWrongSpelling: (cfg.mode || s.mode) === "spelling" && cfg.repeatWrongSpelling !== false,
+      muteAudio: cfg.muteAudio === true,
       repeatPoolKeys: null,
       poolOverrideKeys: null
     };
@@ -21222,7 +21316,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   const taxonomy = window.vtcFilterTaxonomy || {};
   const wordsTaxonomyFilter = {
-    course: "__all",
+    course: [],
     lecture: "__all",
     tutorial: "__all",
     workshop: "__all"
@@ -21233,28 +21327,37 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   currentBoldTitleFilter = "__all";
   wordsSourceFilter = "all";
 
+  function selectedWordsCourses() {
+    const value = wordsTaxonomyFilter.course;
+    if (Array.isArray(value)) return value.filter(item => item && item !== "__all");
+    return value && value !== "__all" ? [String(value)] : [];
+  }
+
+  function pathMatchesWordsTaxonomy(path, exceptField = "", courseOverride = null) {
+    const selectedCourses = courseOverride ? [courseOverride] : selectedWordsCourses();
+    if (exceptField !== "course" && selectedCourses.length) {
+      const values = [
+        taxonomy.courseFilterValue?.(path),
+        path.course,
+        path.courseCode,
+        path.courseTitle,
+        path.subject
+      ].filter(Boolean).map(value => String(value).trim().toLowerCase());
+      if (!selectedCourses.some(course => values.includes(String(course).trim().toLowerCase()))) return false;
+    }
+    const session = taxonomy.sessionInfoForPath?.(path);
+    for (const field of ["lecture", "tutorial", "workshop"]) {
+      if (field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
+        if (!session || session.type !== field || session.number !== wordsTaxonomyFilter[field]) return false;
+      }
+    }
+    return true;
+  }
+
   function wordHasVisiblePathV2(w, exceptField = "") {
     const paths = typeof window.exactPracticePaths === "function" ? window.exactPracticePaths(w) : [];
     if (!paths.length) return true;
-    return paths.some(path => {
-      if (exceptField !== "course" && wordsTaxonomyFilter.course !== "__all") {
-        const values = [
-          taxonomy.courseFilterValue?.(path),
-          path.course,
-          path.courseCode,
-          path.courseTitle,
-          path.subject
-        ].filter(Boolean).map(value => String(value).trim().toLowerCase());
-        if (!values.includes(String(wordsTaxonomyFilter.course).trim().toLowerCase())) return false;
-      }
-      const session = taxonomy.sessionInfoForPath?.(path);
-      for (const field of ["lecture", "tutorial", "workshop"]) {
-        if (field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
-          if (!session || session.type !== field || session.number !== wordsTaxonomyFilter[field]) return false;
-        }
-      }
-      return true;
-    });
+    return paths.some(path => pathMatchesWordsTaxonomy(path, exceptField));
   }
 
   // Re-derive wordStatus per current skill selector
@@ -21275,13 +21378,17 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   window.setWordsTaxonomyFilter = function(field, value) {
     if (field === "level") return; // Level currently has only the All option.
     if (!Object.prototype.hasOwnProperty.call(wordsTaxonomyFilter, field)) return;
-    const nextValue = value === "__all" || wordsTaxonomyFilter[field] === value ? "__all" : String(value);
-    const courseChanged = field === "course" && nextValue !== wordsTaxonomyFilter.course;
-    wordsTaxonomyFilter[field] = nextValue;
-    if (courseChanged) {
+    if (field === "course") {
+      const selected = selectedWordsCourses();
+      const next = value === "__all" ? [] : (selected.includes(String(value))
+        ? selected.filter(item => item !== String(value))
+        : [...selected, String(value)]);
+      wordsTaxonomyFilter.course = next;
       wordsTaxonomyFilter.lecture = "__all";
       wordsTaxonomyFilter.tutorial = "__all";
       wordsTaxonomyFilter.workshop = "__all";
+    } else {
+      wordsTaxonomyFilter[field] = value === "__all" || wordsTaxonomyFilter[field] === value ? "__all" : String(value);
     }
     shuffledWordKeys = [];
     window.renderFilterPanel?.();
@@ -21335,11 +21442,15 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   }
 
   function wordsSessionOptions(field) {
+    return wordsSessionOptionsForCourse(field, null);
+  }
+
+  function wordsSessionOptionsForCourse(field, courseValue) {
     const counts = new Map();
     for (const word of wordsCountBase(field)) {
       const values = new Set();
       for (const path of window.exactPracticePaths?.(word) || []) {
-        if (!wordHasVisiblePathV2({ ...word, exactSuggestedCombinedPaths: [path] }, field)) continue;
+        if (!pathMatchesWordsTaxonomy(path, field, courseValue)) continue;
         const session = taxonomy.sessionInfoForPath?.(path);
         if (session?.type === field) values.add(session.number);
       }
@@ -21348,10 +21459,21 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     return [...counts.entries()].sort((a, b) => Number(a[0]) - Number(b[0]));
   }
 
+  function wordsCourseScopedCount(courseValue) {
+    let count = 0;
+    for (const word of wordsCountBase("course")) {
+      if ((window.exactPracticePaths?.(word) || []).some(path => pathMatchesWordsTaxonomy(path, "", courseValue))) count++;
+    }
+    return count;
+  }
+
   function wordsFilterGroup(title, field, options, selected) {
     const chips = options.map(([value, label, count]) => {
       const safeValue = String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      return `<button class="filter-chip ${selected === value ? "active" : ""}" onclick="setWordsTaxonomyFilter('${field}','${escapeHtml(safeValue)}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
+      const active = value === "__all"
+        ? (Array.isArray(selected) ? selected.length === 0 : !selected || selected === "__all")
+        : (Array.isArray(selected) ? selected.includes(value) : selected === value);
+      return `<button class="filter-chip ${active ? "active" : ""}" onclick="setWordsTaxonomyFilter('${field}','${escapeHtml(safeValue)}')">${escapeHtml(label)} <span class="n">${count}</span></button>`;
     }).join("");
     return `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">${chips}</div></div>`;
   }
@@ -21364,24 +21486,31 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const allCount = wordsCountBase("level").length;
     const visibleWords = wordsCountBase("", true);
     const statusCount = status => visibleWords.filter(word => wordMatchesStatusFilterV2(word, status)).length;
-    const sessionGroup = (type, title) => {
-      const options = wordsSessionOptions(type);
+    const selectedCourses = selectedWordsCourses();
+    const sessionGroup = (courseValue, type, title) => {
+      const options = wordsSessionOptionsForCourse(type, courseValue);
       if (!options.length) return "";
-      const courseLabel = taxonomy.courseFilterLabel?.(wordsTaxonomyFilter.course) || wordsTaxonomyFilter.course;
-      return wordsFilterGroup(`${title} · ${courseLabel}`, type, [
-        ["__all", "All", wordsCountBase(type).length],
+      return wordsFilterGroup(title, type, [
+        ["__all", "All", wordsCourseScopedCount(courseValue)],
         ...options.map(([number, count]) => [number, number, count])
       ], wordsTaxonomyFilter[type]);
     };
-    const sessionGroups = wordsTaxonomyFilter.course === "__all"
-      ? '<div class="filter-group"><div class="filter-group-title">Course sessions</div><div class="filter-empty-note">Select one course above to see its Lecture, Tutorial, and Workshop sessions separately.</div></div>'
-      : [sessionGroup("lecture", "Lecture"), sessionGroup("tutorial", "Tutorial"), sessionGroup("workshop", "Workshop")].filter(Boolean).join("");
+    const sessionGroups = selectedCourses.length === 0
+      ? '<div class="filter-group"><div class="filter-group-title">Course sessions</div><div class="filter-empty-note">Select one or more courses above to see their Lecture, Tutorial, and Workshop sessions.</div></div>'
+      : `<div class="filter-group"><div class="filter-group-title">Course sessions · ${selectedCourses.length} course${selectedCourses.length === 1 ? "" : "s"}</div>${selectedCourses.map(courseValue => {
+          const rows = [
+            sessionGroup(courseValue, "lecture", "Lecture"),
+            sessionGroup(courseValue, "tutorial", "Tutorial"),
+            sessionGroup(courseValue, "workshop", "Workshop")
+          ].filter(Boolean).join("");
+          return `<div class="words-course-session-group"><div class="words-course-session-title">${escapeHtml(taxonomy.courseFilterLabel?.(courseValue) || "Course")}</div>${rows || '<div class="filter-empty-note">No sessions available.</div>'}</div>`;
+        }).join("")}</div>`;
     body.innerHTML = [
       wordsFilterGroup("Level", "level", [["__all", "All", allCount]], "__all"),
       wordsFilterGroup("Course", "course", [
         ["__all", "All", wordsCountBase("course").length],
         ...wordsCourseOptions().map(([value, count]) => [value, taxonomy.courseFilterLabel?.(value) || value, count])
-      ], wordsTaxonomyFilter.course),
+      ], selectedCourses),
       sessionGroups,
       '<div class="filter-group"><div class="filter-group-title">Topic Group</div><div class="filter-empty-note">No topic groups yet.</div></div>',
       `<div class="filter-group"><div class="filter-group-title">Skill View</div><div class="filter-chip-row">
@@ -21405,11 +21534,14 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
 
   window.hasActiveWordFilters = function() {
-    return currentStatusFilter !== "__all" || Object.values(wordsTaxonomyFilter).some(value => value !== "__all");
+    return currentStatusFilter !== "__all"
+      || selectedWordsCourses().length > 0
+      || ["lecture", "tutorial", "workshop"].some(field => wordsTaxonomyFilter[field] !== "__all");
   };
   try { hasActiveWordFilters = window.hasActiveWordFilters; } catch {}
   window.resetWordFilters = function() {
-    for (const field of Object.keys(wordsTaxonomyFilter)) wordsTaxonomyFilter[field] = "__all";
+    wordsTaxonomyFilter.course = [];
+    for (const field of ["lecture", "tutorial", "workshop"]) wordsTaxonomyFilter[field] = "__all";
     currentLevelFilter = currentTopHeaderFilter = currentBoxedBoldFilter = currentBoldTitleFilter = "__all";
     currentStatusFilter = "__all";
     currentQuick = null;
@@ -21430,7 +21562,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const summary = document.getElementById("activeFilterSummary");
     if (summary) {
       const chips = [];
-      if (wordsTaxonomyFilter.course !== "__all") chips.push(taxonomy.courseFilterLabel?.(wordsTaxonomyFilter.course) || wordsTaxonomyFilter.course);
+      for (const courseValue of selectedWordsCourses()) chips.push(taxonomy.courseFilterLabel?.(courseValue) || "Course");
       for (const field of ["lecture", "tutorial", "workshop"]) {
         if (wordsTaxonomyFilter[field] !== "__all") chips.push(`${field[0].toUpperCase()}${field.slice(1)} ${wordsTaxonomyFilter[field]}`);
       }
@@ -21524,7 +21656,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                   : (Array.isArray(s.correctKeys) ? s.correctKeys.length : 0);
     const total = s.sessionLength || s.total || s.totalAnswered || 0;
     const date = phRelative(s.endedAt || s.startedAt);
-    const pool = s.poolDescription || "All words";
+    const pool = displayPracticeDescription(s);
     const poolSize = s.poolSize || total;
     const wrong = Array.isArray(s.wrongKeys) ? s.wrongKeys.length : 0;
     const spellingOption = s.spellTillRemember
