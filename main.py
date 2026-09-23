@@ -1760,6 +1760,8 @@ def _sync_sessions(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             "masteredWords": mastered,
             "learningWords": learning,
             "correctKeys": correct_keys,
+            "loadedWordKeys": _sync_arr(s.get("loadedWordKeys") or []),
+            "poolWordKeys": _sync_arr(s.get("poolWordKeys") or s.get("fullPoolWordKeys") or []),
             "poolConfig": s.get("poolConfig") if isinstance(s.get("poolConfig"), dict) else None,
             "poolDescription": s.get("poolDescription") or "",
             "poolSize": int(s.get("poolSize") or 0),
@@ -2573,6 +2575,8 @@ def _sync_sessions_v4(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         row["learningWords"] = _sync_arr(row.get("learningWords") or row.get("wrongKeys") or [])
         row["wrongKeys"] = _sync_arr(row.get("wrongKeys") or [])
         row["correctKeys"] = _sync_arr(row.get("correctKeys") or [])
+        row["loadedWordKeys"] = _sync_arr(row.get("loadedWordKeys") or [])
+        row["poolWordKeys"] = _sync_arr(row.get("poolWordKeys") or [])
         if not isinstance(row.get("poolConfig"), dict):
             row["poolConfig"] = None
         out.append(row)
