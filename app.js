@@ -3437,6 +3437,7 @@ function normalizeBackupSession(s) {
   const wrongKeys = arrFromLookup(s.wrongKeys || []);
   const correctKeys = arrFromLookup(s.correctKeys || []);
   const loadedWordKeys = arrFromLookup(s.loadedWordKeys || s.wordKeys || s.poolKeys || []);
+  const poolWordKeys = arrFromLookup(s.poolWordKeys || s.fullPoolWordKeys || []);
   const id = String(s.id || s.sessionId || s.startedAt || ("s_" + Date.now() + "_" + Math.random().toString(36).slice(2))).trim();
   return {
     id,
@@ -3450,6 +3451,7 @@ function normalizeBackupSession(s) {
     learningWords,
     correctKeys,
     loadedWordKeys,
+    poolWordKeys,
     poolDescription: s.poolDescription || "",
     poolConfig: s.poolConfig || null,
     poolSize: Number(s.poolSize || 0),
@@ -5131,7 +5133,8 @@ setTimeout(() => {
     length: DEFAULT_LENGTH,
     studyUntilMastered: false,
     spellTillRemember: true,
-    repeatWrongSpelling: true
+    repeatWrongSpelling: true,
+    poolOverrideKeys: null
   };
 
   function cloneFilterConfig(filter) {
@@ -5279,15 +5282,8 @@ setTimeout(() => {
   }
 
   // ---------- Persistence ----------
-  function stripExactPoolFromHistorySession(s) {
-    if (!s || typeof s !== "object") return s;
-    const { loadedWordKeys, ...rest } = s;
-    return rest;
-  }
-
   function normalizeLocalPracticeHistory(arr) {
-    return (Array.isArray(arr) ? arr : [])
-      .map(stripExactPoolFromHistorySession);
+    return Array.isArray(arr) ? arr.slice() : [];
   }
 
   function loadHistory() {
@@ -5481,6 +5477,12 @@ setTimeout(() => {
 
   function resolvePool(filter) {
     return words.filter(w => wordMatchesMultiFilter(w, filter));
+  }
+
+  function wizardPool(filter = wizard.filter) {
+    if (!Array.isArray(wizard.poolOverrideKeys)) return resolvePool(filter);
+    const allowed = new Set(wizard.poolOverrideKeys.map(String));
+    return words.filter(w => allowed.has(String(w.key)));
   }
 
   // Counts available for a given dimension, given the OTHER dimensions
@@ -5818,7 +5820,7 @@ setTimeout(() => {
 
   // ── Layer 1: Filter / Word pool ──────────────────────────────
   function renderLayer1(root) {
-    const pool = resolvePool(wizard.filter);
+    const pool = wizardPool();
     const canProceed = pool.length > 0;
 
     let chipGroups = "";
@@ -5903,7 +5905,7 @@ setTimeout(() => {
 
   // ── Layer 2: Practice type + inline options ──────────────────
   function renderLayer2(root) {
-    const pool = resolvePool(wizard.filter);
+    const pool = wizardPool();
     const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
       ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
       : [];
@@ -5984,7 +5986,7 @@ setTimeout(() => {
           <div class="pw-title">Practice</div>
         </div>
         <div class="pw-summary-strip">
-          <span>${wizard.repeatPoolKeys ? `${exactRepeatWords.length} saved words · ` : ""}${pool.length} words · ${escapeHtml(describeFilter(wizard.filter))}</span>
+          <span>${wizard.poolOverrideKeys ? `${pool.length} untested words · ` : `${wizard.repeatPoolKeys ? `${exactRepeatWords.length} saved words · ` : ""}${pool.length} words · `}${escapeHtml(describeFilter(wizard.filter))}</span>
           <span class="edit" onclick="practiceGoStep(1)">Edit ›</span>
         </div>
         <div class="l2-mode-list">${modeCards}</div>
@@ -6047,7 +6049,10 @@ setTimeout(() => {
   window.practiceGoStep = function(n) {
     // Reset mode when entering Layer 2 fresh from Layer 1
     if (n === 2 && wizard.step === 1) wizard.mode = null;
-    if (n === 1) wizard.repeatPoolKeys = null;
+    if (n === 1) {
+      wizard.repeatPoolKeys = null;
+      wizard.poolOverrideKeys = null;
+    }
     wizard.step = n;
     window.scrollTo(0, 0);
     renderPracticeRoot();
@@ -6066,7 +6071,7 @@ setTimeout(() => {
   window.practiceSetLengthInput = function(v) {
     const n = parseInt(v, 10);
     if (!isNaN(n) && n > 0) {
-      const pool = resolvePool(wizard.filter);
+      const pool = wizardPool();
       wizard.length = Math.min(n, pool.length);
     }
   };
@@ -6096,11 +6101,12 @@ setTimeout(() => {
     wizard.spellTillRemember = cfg.spellTillRemember !== false;
     wizard.repeatWrongSpelling = cfg.mode === "spelling" && repeatWrongSpellingFromSaved(cfg.repeatWrongSpelling, cfg.repeatWrongSpellingDefaultVersion);
     wizard.repeatPoolKeys = null;
+    wizard.poolOverrideKeys = null;
     practiceLaunch();
   };
 
   window.practiceStartFresh = function() {
-    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: false, spellTillRemember: true, repeatWrongSpelling: true, repeatPoolKeys: null };
+    wizard = { step: 1, filter: emptyFilter(), mode: null, length: DEFAULT_LENGTH, studyUntilMastered: false, spellTillRemember: true, repeatWrongSpelling: true, repeatPoolKeys: null, poolOverrideKeys: null };
     renderPracticeRoot();
   };
 
@@ -6117,14 +6123,15 @@ setTimeout(() => {
       studyUntilMastered: opts.mode === "spelling" ? false : !!opts.studyUntilMastered,
       spellTillRemember: opts.spellTillRemember !== false,
       repeatWrongSpelling: opts.mode === "spelling" && opts.repeatWrongSpelling !== false,
-      repeatPoolKeys: [...new Set(keys)]
+      repeatPoolKeys: [...new Set(keys)],
+      poolOverrideKeys: null
     };
     renderPracticeRoot();
   };
 
   // ---------- Launch ----------
   window.practiceLaunch = function() {
-    const basePool = resolvePool(wizard.filter);
+    const basePool = wizardPool();
     const pool = practicePoolForMode(basePool, wizard.mode);
     const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
       ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(w => w && (wizard.mode !== "whoami" || isWhoAmIWord(w)))
@@ -6167,7 +6174,7 @@ setTimeout(() => {
       studyUntilMastered: cfg.studyUntilMastered,
       spellTillRemember: !!cfg.spellTillRemember,
       repeatWrongSpelling: cfg.repeatWrongSpelling,
-      poolDescription: `${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
+      poolDescription: `${wizard.poolOverrideKeys ? "Remaining untested · " : ""}${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
       poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling),
       initialWords
     });
@@ -6794,6 +6801,9 @@ setTimeout(() => {
       poolSize: g.pool.length,
       sessionLength: g.sessionLength,
       loadedWordKeys: Object.keys(g.perWord || {}),
+      poolWordKeys: g.pool.length > g.sessionLength
+        ? [...new Set((Array.isArray(g.pool) ? g.pool : []).map(w => w && w.key).filter(Boolean))]
+        : [],
       studyUntilMastered: g.studyUntilMastered,
       spellTillRemember: g.spellTillRemember,
       repeatWrongSpelling: g.repeatWrongSpelling,
@@ -7112,6 +7122,32 @@ setTimeout(() => {
     };
   }
 
+  function remainingPoolKeysForSession(s) {
+    if (!s || s.completed === false) return [];
+
+    let poolKeys = arrFromLookup(s.poolWordKeys || []);
+    // Older records did not retain the full candidate keys, and current
+    // filters can produce a different pool after progress or dataset changes.
+    // Only offer this action when the original pool was saved with the session.
+    if (!poolKeys.length) return [];
+
+    poolKeys = [...new Set(poolKeys)];
+    const expectedSize = Number(s.poolSize || 0);
+    if (expectedSize && poolKeys.length !== expectedSize) return [];
+    const availableKeys = new Set(words.map(w => w.key));
+    if (poolKeys.some(key => !availableKeys.has(key))) return [];
+
+    const testedKeys = new Set([
+      ...arrFromLookup(s.loadedWordKeys || []),
+      ...arrFromLookup(s.correctKeys || []),
+      ...arrFromLookup(s.wrongKeys || [])
+    ]);
+    const poolKeySet = new Set(poolKeys);
+    if ([...testedKeys].some(key => !poolKeySet.has(key))) return [];
+
+    return poolKeys.filter(key => !testedKeys.has(key));
+  }
+
   function previousPracticeConfigFromHistory() {
     const hist = loadHistory();
     const last = hist[hist.length - 1];
@@ -7301,9 +7337,14 @@ setTimeout(() => {
     const repeatBtn = isLatestExactSession(s)
       ? `<button class="ip-action-btn primary" onclick="practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
       : `<button class="ip-action-btn primary" onclick="practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
+    const remainingKeys = remainingPoolKeysForSession(s);
+    const remainingBtn = remainingKeys.length
+      ? `<button class="ip-action-btn remaining" title="Practice untested words from this pool" aria-label="Practice ${remainingKeys.length} untested words from this pool" onclick="practiceStartRemainingFromSession('${escapeHtml(safeId)}')"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3.5 5h17l-6.7 7.4v5.3l-4.1 2v-7.3L3.5 5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Untested ${remainingKeys.length}</span></button>`
+      : "";
     const retryBtn = wrongKeys.length
       ? `<button class="ip-action-btn danger" onclick="practiceRetryFromSession('${escapeHtml(safeId)}')">Retry ${wrongKeys.length} wrong</button>`
       : "";
+    const actionCount = [repeatBtn, remainingBtn, retryBtn].filter(Boolean).length;
 
     const historyBody = document.getElementById("historyDetailBody");
     try { historyBody.dataset.kind = "session"; } catch {}
@@ -7318,8 +7359,9 @@ setTimeout(() => {
           <div class="ip-hero-sub strong">${escapeHtml(recencyLabel(s.endedAt || s.startedAt))}${s.completed === false ? " · ended early" : ""}</div>
         </div>
         ${wordList}
-        <div class="ip-action-bar ${retryBtn ? "" : "single"}">
+        <div class="ip-action-bar ${actionCount === 1 ? "single" : actionCount === 3 ? "has-remaining" : ""}">
           ${repeatBtn}
+          ${remainingBtn}
           ${retryBtn}
         </div>
       </div>
@@ -7350,6 +7392,32 @@ setTimeout(() => {
     });
   };
 
+  window.practiceStartRemainingFromSession = function(id) {
+    const s = loadHistory().find(x => x.id === id);
+    if (!s) { toast("Session not found"); return; }
+    const remainingKeys = remainingPoolKeysForSession(s);
+    if (!remainingKeys.length) { toast("No untested words remain in this pool"); return; }
+
+    const cfg = sessionPoolConfig(s);
+    const mode = cfg.mode || s.mode || "wordToMeaning";
+    wizard = {
+      step: 2,
+      filter: cloneFilterConfig(cfg.filter || emptyFilter()),
+      mode,
+      length: Math.max(1, Math.min(Number(s.sessionLength || DEFAULT_LENGTH), remainingKeys.length)),
+      studyUntilMastered: mode === "spelling" ? false : !!cfg.studyUntilMastered,
+      spellTillRemember: cfg.spellTillRemember !== false,
+      repeatWrongSpelling: mode === "spelling" && cfg.repeatWrongSpelling !== false,
+      repeatPoolKeys: null,
+      poolOverrideKeys: remainingKeys
+    };
+
+    practiceCloseSessionDetail();
+    practiceCloseHistoryPanel();
+    window.scrollTo(0, 0);
+    renderPracticeRoot();
+  };
+
   function prepareRepeatWizardFromSession(s, exact) {
     const cfg = sessionPoolConfig(s);
     wizard = {
@@ -7360,7 +7428,8 @@ setTimeout(() => {
       studyUntilMastered: (cfg.mode || s.mode) === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
       repeatWrongSpelling: (cfg.mode || s.mode) === "spelling" && cfg.repeatWrongSpelling !== false,
-      repeatPoolKeys: null
+      repeatPoolKeys: null,
+      poolOverrideKeys: null
     };
 
     if (exact) {
@@ -12076,6 +12145,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       learningWords,
       wrongKeys,
       correctKeys,
+      loadedWordKeys: uniqueList(s.loadedWordKeys || []),
+      poolWordKeys: uniqueList(s.poolWordKeys || s.fullPoolWordKeys || []),
       poolConfig: s.poolConfig || null,
 
       poolDescription: s.poolDescription || "",
@@ -23775,6 +23846,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       z-index: 5;
     }
     .ip-action-bar.single { grid-template-columns: 1fr; }
+    .ip-action-bar.has-remaining { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .ip-action-bar.has-remaining .ip-action-btn { padding: 12px 4px; font-size: 11px; }
     .ip-action-btn {
       border-radius: 14px;
       padding: 14px 14px;
@@ -23796,6 +23869,16 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       color: #BE123C;
       border-color: #FECDD3;
     }
+    .ip-action-btn.remaining {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      background: #E0F2FE;
+      color: #0369A1;
+      border-color: #BAE6FD;
+    }
+    .ip-action-btn.remaining svg { flex: 0 0 18px; }
 
     /* === Tab strip on Known/Learning panels — reuse chart segmented look === */
     .ip-panel-tabs {
