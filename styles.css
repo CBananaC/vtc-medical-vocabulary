@@ -404,14 +404,11 @@
 
   /* Who Am I? visual recognition mode */
   .l2-mode-card.m5 .l2-mode-ico { background: #DDF7EE; }
-  .whoami-instruction { color: var(--ink-soft); font-weight: 800; font-size: 18px; line-height: 1.35; margin: 8px 0 14px; }
-  .whoami-figure { margin: 0 0 18px; padding: 12px; background: white; border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow-sm); }
-  .whoami-image { display: block; width: 100%; max-height: min(48vh, 420px); object-fit: contain; border-radius: 14px; background: #F8FAFC; }
-  .whoami-figure figcaption { color: var(--muted); font-size: 11px; font-weight: 800; text-align: center; margin-top: 9px; }
-  .whoami-answer-label { color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
+  .whoami-figure { margin: 0 0 18px; padding: 0; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+  .whoami-image { display: block; width: 100%; max-height: min(56vh, 520px); object-fit: contain; border-radius: 16px; background: white; }
   .whoami-spell { gap: 10px; }
-  .whoami-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .whoami-hint { padding: 12px 14px; border-radius: 14px; background: var(--yellow-soft); color: #854D0E; font-size: 13px; line-height: 1.45; font-weight: 800; }
+  .whoami-spell .whoami-input { margin: 0; }
+  .whoami-spell #whoamiCheckBtn { width: 100%; }
   .whoami-result { margin-top: 16px; padding: 14px; background: white; border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-sm); }
   .whoami-result.is-correct { border-color: var(--green); background: #F7FEE7; }
   .whoami-result.is-wrong { border-color: #FDA4AF; background: #FFF7F8; }
@@ -2097,6 +2094,22 @@ body.easy-mode .swipe-overlay { display: none !important; }
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
+}
+.em-visual-answer {
+  margin: 0 0 14px;
+  padding: 10px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.em-visual-answer img {
+  display: block;
+  width: 100%;
+  max-height: min(44vh, 360px);
+  object-fit: contain;
+  border-radius: 10px;
+  background: #F8FAFC;
 }
 .em-pron {
   font-family: 'JetBrains Mono', monospace;
