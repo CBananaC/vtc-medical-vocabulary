@@ -5666,6 +5666,7 @@ setTimeout(() => {
       .trim();
     return cleaned || "All words";
   }
+  window.displayPracticeDescription = displayPracticeDescription;
 
   // ============================================================
   // RENDER — Practice page root
@@ -20834,7 +20835,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       const paths = (typeof exactPracticePaths === "function") ? exactPracticePaths(w) : [];
       const entries = new Map();
       for (const p of paths) {
-        if (normP(p.level) !== "vtc") continue;
+        if (String(p?.level || "").trim().toLowerCase() !== "vtc") continue;
         const courseValue = courseValueFor(p);
         if (!courseValue) continue;
         if (group === "course") {
@@ -20921,7 +20922,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const taxonomy = window.vtcFilterTaxonomy || {};
     const sessionParts = group === "session" ? chartSessionParts(name) : null;
     return exactPracticePaths(w).some(p => {
-      if (normP(p.level) !== "vtc") return false;
+      if (String(p?.level || "").trim().toLowerCase() !== "vtc") return false;
       const courseValue = taxonomy.courseFilterValue?.(p) || "";
       if (group === "course") return courseValue === name;
       if (group === "session" && sessionParts) {
@@ -21768,7 +21769,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                   : (Array.isArray(s.correctKeys) ? s.correctKeys.length : 0);
     const total = s.sessionLength || s.total || s.totalAnswered || 0;
     const date = phRelative(s.endedAt || s.startedAt);
-    const pool = displayPracticeDescription(s);
+    const pool = window.displayPracticeDescription
+      ? window.displayPracticeDescription(s)
+      : String(s.poolDescription || s.description || "All words");
     const poolSize = s.poolSize || total;
     const wrong = Array.isArray(s.wrongKeys) ? s.wrongKeys.length : 0;
     const spellingOption = s.spellTillRemember
@@ -24574,7 +24577,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   var LOG = "[sync v6]";
   var SCHEMA = "ielts-vocab-sync-v6";
-  window.__APP_BUILD = "v6-build-20260923-progress-course-session-history-v1";
+  window.__APP_BUILD = "v6-build-20260923-progress-course-session-history-v2";
   try { console.log("%c[build] " + window.__APP_BUILD, "color:#16a34a;font-weight:bold"); } catch(e){}
 
   // ---- canonical localStorage keys ----------------------------------------
