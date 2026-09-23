@@ -7254,6 +7254,7 @@ setTimeout(() => {
 
     return poolKeys.filter(key => !testedKeys.has(key));
   }
+  window.practiceRemainingPoolKeysForSession = remainingPoolKeysForSession;
 
   function previousPracticeConfigFromHistory() {
     const hist = loadHistory();
@@ -7309,11 +7310,6 @@ setTimeout(() => {
       const status = s.completed === false ? " · ended early" : "";
       const wrongCount = (s.wrongKeys || []).length;
       const exact = isLatestExactSession(s);
-      const remainingCount = remainingPoolKeysForSession(s).length;
-      const filterIcon = `<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>`;
-      const remainingBtn = remainingCount > 0
-        ? `<button class="hv-session-btn remaining" title="Practice ${remainingCount} untested words from this pool" aria-label="Practice ${remainingCount} untested words from this pool" onclick="event.stopPropagation();practiceStartRemainingFromSession('${escapeHtml(safeId)}')">${filterIcon}<span>${remainingCount} left</span></button>`
-        : `<button class="hv-session-btn remaining" title="No untested words are available for this pool" aria-label="No untested words are available for this pool" disabled>${filterIcon}<span>0 left</span></button>`;
       const repeatBtn = exact
         ? `<button class="hv-session-btn repeat-exact" onclick="event.stopPropagation();practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
         : `<button class="hv-session-btn repeat-setup" onclick="event.stopPropagation();practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
@@ -7329,7 +7325,7 @@ setTimeout(() => {
           <div class="hv-session-meta">${escapeHtml(sessionOptionLine(s))}${exact ? " · exact words saved" : ""}${status}</div>
           <div class="hv-session-foot"><span>${recencyLabel(s.endedAt || s.startedAt)}</span></div>
           <div class="hv-session-actions">
-            ${remainingBtn}
+            <button class="hv-session-btn view" onclick="event.stopPropagation();practiceOpenSessionDetail('${escapeHtml(safeId)}')">View</button>
             ${repeatBtn}
             ${redoBtn}
           </div>
@@ -21825,6 +21821,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const repeatLabel = "↻";
     const repeatTitle = exactPossible ? "Repeat exact set" : "Repeat setup";
     const repeatFn = exactPossible ? "practiceRepeatExactSession" : "practiceRepeatSetupFromSession";
+    const remainingCount = typeof window.practiceRemainingPoolKeysForSession === "function"
+      ? window.practiceRemainingPoolKeysForSession(s).length
+      : 0;
+    const filterIcon = `<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>`;
+    const remainingBtn = remainingCount > 0
+      ? `<button class="ph-btn remaining" title="Practice ${remainingCount} untested words from this pool" aria-label="Practice ${remainingCount} untested words from this pool" onclick="event.stopPropagation();practiceStartRemainingFromSession('${sId}')">${filterIcon}<span>${remainingCount} left</span></button>`
+      : `<button class="ph-btn remaining" title="No untested words are available for this pool" aria-label="No untested words are available for this pool" disabled>${filterIcon}<span>0 left</span></button>`;
     // The card itself is tappable to open View detail. Buttons stop propagation.
     return `
       <div class="ph-card ${isLatest ? "latest" : ""}" onclick="practiceOpenSessionDetail('${sId}')">
@@ -21838,7 +21841,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <div class="ph-pool">${escapeHtml(pool)}${spellingOption} · ${poolSize} loaded</div>
         <div class="ph-date">${escapeHtml(date)}</div>
         <div class="ph-actions">
-          <button class="ph-btn" onclick="event.stopPropagation();practiceOpenSessionDetail('${sId}')">👁 View</button>
+          ${remainingBtn}
           <button class="ph-btn primary ph-btn-icon" title="${escapeHtml(repeatTitle)}" aria-label="${escapeHtml(repeatTitle)}" onclick="event.stopPropagation();${repeatFn}('${sId}')">${repeatLabel}</button>
           ${wrong > 0 ? `<button class="ph-btn danger" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">↩︎ ${wrong}</button>` : ""}
         </div>
@@ -22710,6 +22713,28 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
     .ph-btn:active { transform: scale(.96); }
     .ph-btn:hover { background: #F3E8FF; }
+    .ph-btn.remaining {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      background: #DCFCE7;
+      color: #166534;
+      border-color: #BBF7D0;
+    }
+    .ph-btn.remaining:hover { background: #BBF7D0; }
+    .ph-btn.remaining svg {
+      width: 15px;
+      height: 15px;
+      fill: currentColor;
+      flex: none;
+    }
+    .ph-btn.remaining:disabled {
+      background: #F2FAF5;
+      color: #9BB6A5;
+      border-color: #DCEFE4;
+      cursor: not-allowed;
+    }
     /* Repeat action — soft mint. */
     .ph-btn.primary {
       background: #CCFBF1;
