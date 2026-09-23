@@ -82,6 +82,24 @@
       "review_status": "pending_manual_review"
     },
     {
+      "path": "data/HHS3190M/Anatomy/L2.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Anatomy",
+      "session_code": "L2",
+      "session_type": "Lecture",
+      "session_number": 2,
+      "display": "HHS3190M · Anatomy · Lecture 2"
+    },
+    {
+      "path": "data/HHS3190M/Anatomy/L3.json",
+      "course_code": "HHS3190M",
+      "course_short_title": "Anatomy",
+      "session_code": "L3",
+      "session_type": "Lecture",
+      "session_number": 3,
+      "display": "HHS3190M · Anatomy · Lecture 3"
+    },
+    {
       "path": "data/HHS3190M/Physiology/L1.json",
       "course_code": "HHS3190M",
       "course_short_title": "Physiology",
