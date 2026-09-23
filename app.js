@@ -6652,35 +6652,18 @@ setTimeout(() => {
       return;
     }
 
-    const hint = typeof practiceHintForWord === "function"
-      ? practiceHintForWord(w)
-      : (w.vtc?.context || "Use the highlighted anatomy area as your visual clue.");
-    const reviewPending = (w.visual || w.vtc?.visual)?.review_status === "pending_manual_review";
-
     $("gameBody").innerHTML = `
-      <div class="game-prompt-label">WHO AM I?</div>
-      <div class="whoami-instruction">Identify the structure and spell its full name.</div>
       <figure class="whoami-figure">
-        <img class="whoami-image" src="${escapeHtml(asset.src)}" alt="Anatomy study image; focus area pending manual review" />
-        <figcaption>${reviewPending ? "Candidate visual · pending manual review" : "Visual anatomy clue"}</figcaption>
+        <img class="whoami-image" src="${escapeHtml(asset.src)}" alt="Visual anatomy clue" />
       </figure>
-      <div class="whoami-answer-label">Type the full vocabulary name</div>
       <div class="game-spell whoami-spell">
-        <input class="spell-input whoami-input" id="whoamiInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type the name…" />
-        <div class="whoami-actions">
-          <button class="game-btn secondary" id="whoamiHintBtn" type="button">Hint</button>
-          <button class="game-btn primary" id="whoamiCheckBtn" type="button">Check</button>
-        </div>
-        <div class="whoami-hint" id="whoamiHintBox" hidden>${escapeHtml(hint)}</div>
+        <input class="spell-input whoami-input" id="whoamiInput" aria-label="Type the full vocabulary name" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
+        <button class="game-btn primary" id="whoamiCheckBtn" type="button">Check</button>
       </div>
     `;
 
     const input = $("whoamiInput");
     input?.focus();
-    $("whoamiHintBtn").onclick = () => {
-      const box = $("whoamiHintBox");
-      if (box) box.hidden = !box.hidden;
-    };
     $("whoamiCheckBtn").onclick = () => window.answerWhoAmIV2(w);
     input?.addEventListener("keydown", event => {
       if (event.key === "Enter") window.answerWhoAmIV2(w);
@@ -6699,20 +6682,26 @@ setTimeout(() => {
       else if (typeof window.openSheet === "function") window.openSheet(w.key);
     };
 
-    const audio = document.createElement("button");
-    audio.className = "game-btn secondary";
-    audio.textContent = "🔊 Audio";
-    audio.onclick = () => {
-      if (typeof practicePlayPronunciation === "function") practicePlayPronunciation(w.key, audio);
-    };
+    const skip = document.createElement("button");
+    skip.className = "game-btn secondary";
+    skip.textContent = "Skip this word";
+    skip.onclick = () => skipCurrentPracticeWord();
 
     const next = document.createElement("button");
     next.className = "game-btn primary";
     next.textContent = "Continue ›";
     next.onclick = nextQuestionV2;
 
-    actions.append(info, audio, next);
+    actions.append(info, skip, next);
     body.appendChild(actions);
+
+    const bookmark = document.createElement("button");
+    bookmark.className = "em-bookmark-btn";
+    bookmark.type = "button";
+    body.appendChild(bookmark);
+    if (typeof window.bindWordBookmarkButton === "function") {
+      window.bindWordBookmarkButton(bookmark, w);
+    }
   }
 
   function answerWhoAmIV2(w) {
@@ -6735,6 +6724,25 @@ setTimeout(() => {
       ? window.spellingFullFormFor(w)
       : w.word;
     const body = $("gameBody");
+
+    // Who Am I uses the same full-screen answer surface as spelling and
+    // meaning. The image is added to that surface, while the existing
+    // bookmark, definition, hint, and Continue/Skip actions remain shared.
+    if (typeof window.openLearningAnswerOverlay === "function") {
+      window.openLearningAnswerOverlay({
+        word: w,
+        isWrong: !ok,
+        spellingComparison: !ok,
+        wrongAnswer: answer,
+        correctAnswer: correct,
+        visualRevealSrc: revealSrc,
+        autoPlayAudio: true,
+        onContinue: () => nextQuestionV2(),
+        onSkip: () => skipCurrentPracticeWord()
+      });
+      return;
+    }
+
     const result = document.createElement("section");
     result.className = `whoami-result ${ok ? "is-correct" : "is-wrong"}`;
     result.innerHTML = `
@@ -6746,6 +6754,9 @@ setTimeout(() => {
     `;
     body.appendChild(result);
     renderWhoAmIActions(body, w, ok);
+    if (activePracticeGame()?.audioMuted !== true && typeof practicePlayPronunciation === "function") {
+      practicePlayPronunciation(w.key);
+    }
   }
 
   // ---------- Spelling ----------
@@ -14750,6 +14761,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const word = opts.word;
     const repeatWord = opts.repeatWord || word;
     const isWrong = !!opts.isWrong;
+    const visualRevealSrc = String(opts.visualRevealSrc || "").trim();
+    const autoPlayAudio = opts.autoPlayAudio === true;
     const onContinue = opts.onContinue;
     const onSkip = opts.onSkip || (activePracticeGame() ? (() => {
       if (typeof window.skipCurrentPracticeWord === "function") window.skipCurrentPracticeWord();
@@ -14809,6 +14822,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
     const pron = data?.pronunciation || word.vtc?.pronunciation || "";
     const pronHtml = pron ? `<div class="em-pron">/${h(pron)}/</div>` : "";
+    const visualHtml = visualRevealSrc
+      ? `<figure class="em-visual-answer"><img src="${h(visualRevealSrc)}" alt="Revealed visual anatomy answer" /></figure>`
+      : "";
     const primaryActions = showRepeatChoices
       ? `<div class="em-repeat-choice-row" role="group" aria-label="Choose immediate respells">
           <button class="em-continue-btn em-repeat-choice-btn" data-repeat-count="1" type="button">1</button>
@@ -14818,6 +14834,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       : `<button class="em-continue-btn" id="learningOverlayContinueBtn" type="button">Continue ›</button>`;
 
     content.innerHTML = `
+      ${visualHtml}
       ${pronHtml}
       <div class="em-def-list">${renderLearningDefinitionsHtml(data)}</div>
       <div class="em-overlay-actions">
@@ -14831,7 +14848,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       window.bindWordBookmarkButton(document.getElementById("learningOverlayBookmarkBtn"), word);
     }
 
-    if (isWrong && activePracticeGame()?.audioMuted !== true) {
+    if ((isWrong || autoPlayAudio) && activePracticeGame()?.audioMuted !== true) {
       try { practicePlayPronunciation(word.key, audioBtn); } catch (err) { console.warn("Answer audio failed:", err); }
     }
 
@@ -25971,7 +25988,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         const content = document.getElementById("emContent");
         if (content) {
           content.querySelector(".em-spelling-compare")?.remove();
-          content.insertAdjacentHTML("afterbegin", comparisonHtml(input.wrongAnswer, correct));
+          const comparison = comparisonHtml(input.wrongAnswer, correct);
+          const visual = content.querySelector(".em-visual-answer");
+          if (visual) visual.insertAdjacentHTML("afterend", comparison);
+          else content.insertAdjacentHTML("afterbegin", comparison);
         }
       }
       return result;
