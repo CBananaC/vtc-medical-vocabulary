@@ -369,6 +369,18 @@
   .spell-input:focus { outline: none; border-color: var(--purple); box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.12); }
   .spell-input.correct { border-color: var(--green); background: var(--green-soft); }
   .spell-input.wrong { border-color: var(--coral); background: var(--coral-soft); }
+  .spell-input.is-repeat-cooling {
+    opacity: 1;
+    cursor: wait;
+    background-color: #d1d5db;
+    background-image: linear-gradient(to right, var(--spelling-repeat-cooldown-color, #fff), var(--spelling-repeat-cooldown-color, #fff));
+    background-repeat: no-repeat;
+    background-size: 0% 100%;
+    animation: spelling-repeat-cooldown-fill var(--spelling-repeat-cooldown-duration, 1s) linear forwards;
+  }
+  @keyframes spelling-repeat-cooldown-fill {
+    to { background-size: 100% 100%; }
+  }
   .game-bottom { padding: 16px 20px calc(20px + var(--safe-bottom)); display: flex; gap: 10px; }
   .game-btn { flex: 1; padding: 16px; border-radius: 14px; font-weight: 800; font-size: 15px; cursor: pointer; border: none; }
   .game-btn.primary { background: var(--grad); color: white; box-shadow: var(--shadow-md); }
