@@ -260,10 +260,24 @@ async function loadBundledVocabularyLists() {
 
     const token = Number(g.spellingRepeatCooldownToken || 0) + 1;
     g.spellingRepeatCooldownToken = token;
-    input.style.setProperty("--spelling-repeat-cooldown-color", getComputedStyle(input).backgroundColor || "white");
+    g.spellingRepeatCooldownUntil = Number(cooldownUntil);
+    const inputStyle = getComputedStyle(input);
+    const lockedValue = input.value;
+    const blockCooldownInput = event => {
+      if (event.cancelable) event.preventDefault();
+    };
+    const restoreLockedValue = () => {
+      if (Date.now() < Number(g.spellingRepeatCooldownUntil || 0)) input.value = lockedValue;
+    };
+    input.style.setProperty("--spelling-repeat-cooldown-color", inputStyle.backgroundColor || "white");
+    input.style.setProperty("--spelling-repeat-cooldown-border", inputStyle.borderColor || "transparent");
     input.style.setProperty("--spelling-repeat-cooldown-duration", `${remaining}ms`);
     input.classList.add("is-repeat-cooling");
-    input.disabled = true;
+    input.setAttribute("aria-disabled", "true");
+    input.addEventListener("beforeinput", blockCooldownInput, true);
+    input.addEventListener("paste", blockCooldownInput, true);
+    input.addEventListener("drop", blockCooldownInput, true);
+    input.addEventListener("input", restoreLockedValue, true);
     check.disabled = true;
 
     const status = document.createElement("div");
@@ -277,13 +291,19 @@ async function loadBundledVocabularyLists() {
       if (window.game !== g || g.spellingRepeatCooldownToken !== token
         || g.spellingRepeatWordKey !== w.key || Number(g.pendingSpellingRepeats || 0) <= 0
         || !document.contains(input) || !document.contains(check)) return;
-      input.disabled = false;
+      g.spellingRepeatCooldownUntil = 0;
       check.disabled = false;
+      input.removeEventListener("beforeinput", blockCooldownInput, true);
+      input.removeEventListener("paste", blockCooldownInput, true);
+      input.removeEventListener("drop", blockCooldownInput, true);
+      input.removeEventListener("input", restoreLockedValue, true);
+      input.removeAttribute("aria-disabled");
       input.classList.remove("is-repeat-cooling");
       input.style.removeProperty("--spelling-repeat-cooldown-color");
+      input.style.removeProperty("--spelling-repeat-cooldown-border");
       input.style.removeProperty("--spelling-repeat-cooldown-duration");
       status.remove();
-      input.focus();
+      if (document.activeElement === input) input.focus();
     }, remaining);
   }
 
@@ -303,6 +323,7 @@ async function loadBundledVocabularyLists() {
     const repeats = Math.max(1, Math.min(5, Number(count) || 1));
     const current = (Array.isArray(g.pool) ? g.pool : []).find(w => w.key === word.key) || word;
     g.spellingRepeatCooldownToken = Number(g.spellingRepeatCooldownToken || 0) + 1;
+    g.spellingRepeatCooldownUntil = 0;
     g.pendingSpellingRepeats = repeats;
     g.spellingRepeatWordKey = current.key;
     if (typeof window.closeEasyAnswerOverlay === "function") window.closeEasyAnswerOverlay();
@@ -323,6 +344,7 @@ async function loadBundledVocabularyLists() {
     const g = window.game;
     const inp = document.getElementById("spellInput");
     if (!g || !w || !inp || inp.disabled) return true;
+    if (Date.now() < Number(g.spellingRepeatCooldownUntil || 0)) return true;
 
     const ok = answerMatches(w, inp.value);
     const submitted = inp.value;
