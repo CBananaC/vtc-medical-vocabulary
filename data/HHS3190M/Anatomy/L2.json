@@ -1,0 +1,1508 @@
+{
+  "format_version": "1.0",
+  "title": "HHS3190M Anatomy Lecture 2 - Bones and Joints",
+  "scope": "Bone composition and histology, long-bone structure and classification, joint classification, synovial joint structure and movement.",
+  "course_code": "HHS3190M",
+  "course_title": "Human Physiology & Functional Anatomy in Rehabilitation Services",
+  "lecture": "Lecture 2 - Bones and Joints",
+  "provenance": {
+    "source_file": "Physiology & Anatomy/(2) Lectures/Anatomy/(2) Bones and joints.pdf",
+    "source_status": "generated_not_verified",
+    "source_type": "lecture PDF",
+    "note": "Terms and concise English definitions are based on the supplied lecture slides. Traditional Chinese glosses follow slide labels where available; remaining glosses are generated study translations. Pronunciation is left blank because the lecture does not provide verified pronunciations. Source abbreviations are represented with their established full forms rather than used as quiz targets. Review against the original slides before examination use."
+  },
+  "entries": [
+    {
+      "term": "Skeletal system",
+      "pronunciation": "",
+      "english_definition": "The body system made up of bones and associated connective structures that supports, protects, and enables movement.",
+      "traditional_chinese_definition": "骨骼系統；由骨骼及相關結締組織構成，支撐和保護身體並協助活動。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Skeleton",
+      "pronunciation": "",
+      "english_definition": "The body’s framework of bones.",
+      "traditional_chinese_definition": "骨骼；構成身體支架的骨。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Axial skeleton",
+      "pronunciation": "",
+      "english_definition": "The central part of the skeleton, including the skull, vertebral column, ribs, and sternum.",
+      "traditional_chinese_definition": "中軸骨骼；包括顱骨、脊柱、肋骨和胸骨的骨骼中軸部分。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Appendicular skeleton",
+      "pronunciation": "",
+      "english_definition": "The bones of the limbs and the girdles that attach them to the axial skeleton.",
+      "traditional_chinese_definition": "附肢骨骼；包括四肢骨及把四肢連接到中軸骨骼的帶骨。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Bone tissue",
+      "pronunciation": "",
+      "english_definition": "Specialized connective tissue that forms the bones.",
+      "traditional_chinese_definition": "骨組織；構成骨骼的特化結締組織。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Support",
+      "pronunciation": "",
+      "english_definition": "The skeletal function of providing a framework for the body and surrounding tissues.",
+      "traditional_chinese_definition": "支撐；骨骼為身體及周圍組織提供支架的功能。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Protection",
+      "pronunciation": "",
+      "english_definition": "The skeletal function of shielding vital organs and soft tissues.",
+      "traditional_chinese_definition": "保護；骨骼遮護重要器官和軟組織的功能。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Lever",
+      "pronunciation": "",
+      "english_definition": "A rigid structure that muscles pull on to produce movement; bones act as levers.",
+      "traditional_chinese_definition": "槓桿；肌肉牽拉以產生活動的堅硬結構，骨骼可作為槓桿。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Hematopoiesis",
+      "pronunciation": "",
+      "english_definition": "The formation of blood cells, which takes place in red bone marrow.",
+      "traditional_chinese_definition": "造血；血細胞的生成，發生於紅骨髓。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Blood-cell production",
+      "pronunciation": "",
+      "english_definition": "The formation of blood cells in red bone marrow.",
+      "traditional_chinese_definition": "血細胞生成；在紅骨髓中製造血細胞。",
+      "context": "Topic: Skeletal anatomy. The opening section connects this concept with the framework, protection, movement, and blood-cell production of the body.",
+      "academic_area": "Skeletal anatomy"
+    },
+    {
+      "term": "Fetal skeleton",
+      "pronunciation": "",
+      "english_definition": "The developing framework of a fetus; at about three months it is described as formed mainly of cartilage.",
+      "traditional_chinese_definition": "胎兒骨骼；胎兒發育中的骨骼支架，約三個月時主要由軟骨構成。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Longitudinal growth",
+      "pronunciation": "",
+      "english_definition": "Increase in the length of a bone, continuing to about 15 years in girls and 16 years in boys in the lecture.",
+      "traditional_chinese_definition": "縱向生長；骨骼長度增加，課堂指出女性約持續至15歲、男性約至16歲。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Bone maturation",
+      "pronunciation": "",
+      "english_definition": "The continuing development of bone toward maturity; the lecture places completion at about 21 years.",
+      "traditional_chinese_definition": "骨骼成熟；骨骼持續發育至成熟的過程，課堂指出約至21歲。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Organic component / Organic component of bone",
+      "pronunciation": "",
+      "english_definition": "The non-mineral part of bone, including cells and osteoid, that contributes structure and tensile strength.",
+      "traditional_chinese_definition": "骨骼有機成分；骨骼中的非礦物部分，包括細胞及骨樣組織，提供結構和抗拉強度。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Inorganic component / Inorganic component of bone",
+      "pronunciation": "",
+      "english_definition": "The mineral part of bone, mainly mineral salts, that contributes hardness and resistance to compression.",
+      "traditional_chinese_definition": "骨骼無機成分；骨骼中的礦物部分，主要為礦物鹽，提供硬度及抗壓能力。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Mineral salts",
+      "pronunciation": "",
+      "english_definition": "Inorganic salts stored in bone; the lecture identifies calcium phosphates as the main example.",
+      "traditional_chinese_definition": "礦物質鹽類；儲存在骨骼中的無機鹽，課堂以磷酸鈣為主要例子。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Calcium phosphates",
+      "pronunciation": "",
+      "english_definition": "The main mineral salts in bone, contributing to its hardness and resistance to compression.",
+      "traditional_chinese_definition": "磷酸鈣；骨骼中的主要礦物鹽，有助骨骼保持硬度和抗壓能力。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Tensile strength",
+      "pronunciation": "",
+      "english_definition": "The ability of a material to resist being pulled or stretched apart.",
+      "traditional_chinese_definition": "抗拉強度；材料抵抗拉扯或拉伸而斷裂的能力。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Hardness",
+      "pronunciation": "",
+      "english_definition": "Resistance to indentation or deformation; bone mineral contributes to this property.",
+      "traditional_chinese_definition": "硬度；抵抗壓陷或變形的性質，骨礦物成分有助提供此性質。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Compression",
+      "pronunciation": "",
+      "english_definition": "A force that presses or squeezes a material.",
+      "traditional_chinese_definition": "壓縮；對材料施加擠壓的力量。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Resistance to compression",
+      "pronunciation": "",
+      "english_definition": "The ability to withstand forces that press or squeeze; bone mineral contributes to it.",
+      "traditional_chinese_definition": "抗壓能力；抵抗擠壓力量的能力，骨礦物成分有助提供此能力。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Osteoblast",
+      "pronunciation": "",
+      "english_definition": "A bone-forming cell that produces new bone material.",
+      "traditional_chinese_definition": "成骨細胞；形成新骨組織的細胞。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Osteocyte",
+      "pronunciation": "",
+      "english_definition": "A mature bone cell embedded in bone tissue.",
+      "traditional_chinese_definition": "骨細胞；位於骨組織內的成熟骨細胞。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Osteoclast",
+      "pronunciation": "",
+      "english_definition": "A large cell that resorbs or breaks down bone matrix.",
+      "traditional_chinese_definition": "破骨細胞；重吸收或分解骨基質的大型細胞。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Bone formation",
+      "pronunciation": "",
+      "english_definition": "The production of new bone tissue.",
+      "traditional_chinese_definition": "骨形成；新骨組織的生成。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Bone resorption",
+      "pronunciation": "",
+      "english_definition": "The breakdown and removal of bone matrix by resorbing cells.",
+      "traditional_chinese_definition": "骨吸收；由重吸收細胞分解並移除骨基質的過程。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Bone matrix",
+      "pronunciation": "",
+      "english_definition": "The material forming bone tissue around its cells, including organic and mineral components.",
+      "traditional_chinese_definition": "骨基質；包圍骨細胞並構成骨組織的材料，包括有機和礦物成分。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Osteoid",
+      "pronunciation": "",
+      "english_definition": "Unmineralized bone matrix composed of ground substance and collagen.",
+      "traditional_chinese_definition": "骨樣組織；尚未礦化的骨基質，由基質和膠原蛋白組成。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Ground substance",
+      "pronunciation": "",
+      "english_definition": "The non-fibrous material of the bone matrix, including proteoglycans and glycoproteins.",
+      "traditional_chinese_definition": "基質；骨基質中的非纖維物質，包括蛋白聚糖和糖蛋白。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Proteoglycan",
+      "pronunciation": "",
+      "english_definition": "A molecule made of a core protein with attached carbohydrate chains, found in connective-tissue ground substance.",
+      "traditional_chinese_definition": "蛋白聚糖；由核心蛋白及相連醣鏈構成、存在於結締組織基質的分子。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Glycoprotein",
+      "pronunciation": "",
+      "english_definition": "A protein with attached carbohydrate groups, found in the ground substance.",
+      "traditional_chinese_definition": "糖蛋白；附有醣基的蛋白質，存在於基質中。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Collagen",
+      "pronunciation": "",
+      "english_definition": "A structural protein forming fibres in connective tissues and contributing tensile strength.",
+      "traditional_chinese_definition": "膠原蛋白；形成結締組織纖維並提供抗拉強度的結構蛋白。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Red bone marrow",
+      "pronunciation": "",
+      "english_definition": "Marrow that produces blood cells; in adults it is found in cancellous tissue of areas such as ribs, vertebrae, sternum, and pelvis.",
+      "traditional_chinese_definition": "紅骨髓；製造血細胞的骨髓，成人的肋骨、脊椎骨、胸骨及骨盆松質組織內可見。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Yellow bone marrow",
+      "pronunciation": "",
+      "english_definition": "Marrow in the medullary cavity of long bones that stores fat cells.",
+      "traditional_chinese_definition": "黃骨髓；位於長骨髓腔並儲存脂肪細胞的骨髓。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Fat cell",
+      "pronunciation": "",
+      "english_definition": "A cell specialized for storing fat; the lecture notes these in yellow marrow.",
+      "traditional_chinese_definition": "脂肪細胞；專門儲存脂肪的細胞，課堂指出其存在於黃骨髓。",
+      "context": "Topic: Bone growth and composition. The lecture links growth, organic matrix, mineral content, and mechanical properties of bone.",
+      "academic_area": "Bone growth and composition"
+    },
+    {
+      "term": "Compact bone / Dense bone / Cortical bone",
+      "pronunciation": "",
+      "english_definition": "Strong, rigid bone tissue that forms the dense outer portions of bones.",
+      "traditional_chinese_definition": "緻密骨／密質骨；堅硬而緻密的骨組織，構成骨骼較厚實的外層。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Cancellous bone / Spongy bone",
+      "pronunciation": "",
+      "english_definition": "Bone tissue formed as a branching network of trabeculae with marrow-filled spaces.",
+      "traditional_chinese_definition": "鬆質骨／海綿骨；由骨小梁分支網絡構成、空隙內含骨髓的骨組織。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Haversian system / Osteon",
+      "pronunciation": "",
+      "english_definition": "The structural unit of compact bone, organized around a central canal.",
+      "traditional_chinese_definition": "哈弗氏系統／骨單位；緻密骨的結構單位，圍繞中央管道排列。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Haversian canal",
+      "pronunciation": "",
+      "english_definition": "The central canal of an osteon that contains blood vessels, lymphatic vessels, and nerves.",
+      "traditional_chinese_definition": "哈弗氏管；骨單位中央的管道，內有血管、淋巴管和神經。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Lamella / Lamellae",
+      "pronunciation": "",
+      "english_definition": "A layered ring of bone matrix arranged around a Haversian canal; plural: lamellae.",
+      "traditional_chinese_definition": "骨板；環繞哈弗氏管排列的一層骨基質；複數為骨板層。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Trabecula / Trabeculae",
+      "pronunciation": "",
+      "english_definition": "A thin bony strut forming the branching network of cancellous bone.",
+      "traditional_chinese_definition": "骨小梁；構成鬆質骨分支網絡的薄骨柱。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Blood vessel",
+      "pronunciation": "",
+      "english_definition": "A tube that carries blood through the body; vessels pass through canals in compact bone.",
+      "traditional_chinese_definition": "血管；在身體內輸送血液的管道，血管通過緻密骨內的管道。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Lymphatic vessel",
+      "pronunciation": "",
+      "english_definition": "A vessel that carries lymph; the lecture lists these in the central canal of an osteon.",
+      "traditional_chinese_definition": "淋巴管；輸送淋巴液的管道，課堂指出其位於骨單位中央管道內。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Periosteum",
+      "pronunciation": "",
+      "english_definition": "A double-layered protective membrane covering bone and providing attachment sites for tendons and ligaments.",
+      "traditional_chinese_definition": "骨外膜；覆蓋骨骼的雙層保護膜，並為肌腱和韌帶提供附著點。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Osteogenic layer",
+      "pronunciation": "",
+      "english_definition": "The inner layer of the periosteum, containing bone-forming cells involved in growth and repair.",
+      "traditional_chinese_definition": "成骨層；骨外膜的內層，含參與生長和修復的成骨細胞。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Outer fibrous layer",
+      "pronunciation": "",
+      "english_definition": "The outer layer of the periosteum, rich in blood supply, nerves, and lymphatic vessels.",
+      "traditional_chinese_definition": "外層纖維層；骨外膜的外層，含有豐富血液供應、神經及淋巴管。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Endosteum",
+      "pronunciation": "",
+      "english_definition": "A membrane covering internal bone surfaces, including trabeculae, and containing bone cells.",
+      "traditional_chinese_definition": "骨內膜；覆蓋骨骼內表面（包括骨小梁）並含有骨細胞的膜。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Cartilage",
+      "pronunciation": "",
+      "english_definition": "Firm connective tissue containing collagen and elastin fibres; it has no blood vessels or nerves and can reduce friction.",
+      "traditional_chinese_definition": "軟骨；含膠原及彈性纖維的堅韌結締組織，不含血管或神經，並可減少摩擦。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Connective tissue",
+      "pronunciation": "",
+      "english_definition": "A tissue that supports, binds, or connects other tissues and structures.",
+      "traditional_chinese_definition": "結締組織；支撐、連結或連接其他組織和結構的組織。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Hyaline cartilage",
+      "pronunciation": "",
+      "english_definition": "The most abundant cartilage type, providing support, flexibility, and resilience; articular cartilage is an example.",
+      "traditional_chinese_definition": "透明軟骨；最常見的軟骨類型，提供支撐、柔韌和回彈性；關節軟骨為一例。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Articular cartilage",
+      "pronunciation": "",
+      "english_definition": "Hyaline cartilage covering the joint surfaces at the ends of bones.",
+      "traditional_chinese_definition": "關節軟骨；覆蓋骨端關節面的透明軟骨。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Fibrocartilage",
+      "pronunciation": "",
+      "english_definition": "Strong cartilage found where support is needed; the lecture gives the intervertebral disc as an example.",
+      "traditional_chinese_definition": "纖維軟骨；出現在需要支撐部位的強韌軟骨，課堂以椎間盤為例。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Intervertebral disc",
+      "pronunciation": "",
+      "english_definition": "A disc between adjacent vertebrae; the lecture identifies it as an example of fibrocartilage.",
+      "traditional_chinese_definition": "椎間盤；位於相鄰脊椎骨之間的椎間盤，課堂將其列為纖維軟骨例子。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Elastic cartilage",
+      "pronunciation": "",
+      "english_definition": "Cartilage containing abundant elastic fibres; the lecture gives the ear as an example.",
+      "traditional_chinese_definition": "彈性軟骨；含有豐富彈性纖維的軟骨，課堂以耳軟骨為例。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Ligament",
+      "pronunciation": "",
+      "english_definition": "A band of connective tissue that connects bone to bone and helps stabilize a joint.",
+      "traditional_chinese_definition": "韌帶；連接骨與骨並有助穩定關節的結締組織帶。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Tendon",
+      "pronunciation": "",
+      "english_definition": "A collagen-rich connective structure that attaches muscle to bone.",
+      "traditional_chinese_definition": "肌腱；富含膠原、連接肌肉與骨骼的結締組織。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Aponeurosis",
+      "pronunciation": "",
+      "english_definition": "A broad, flat sheet-like tendon.",
+      "traditional_chinese_definition": "腱膜；寬而扁平、呈薄片狀的肌腱。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Shock absorption",
+      "pronunciation": "",
+      "english_definition": "Dissipation or reduction of impact forces; the lecture attributes this role to cartilage.",
+      "traditional_chinese_definition": "緩衝吸震；消散或減少撞擊力量，課堂指出軟骨具有此作用。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Friction",
+      "pronunciation": "",
+      "english_definition": "A force that resists movement between surfaces in contact.",
+      "traditional_chinese_definition": "摩擦；接觸表面之間阻礙相對移動的力量。",
+      "context": "Topic: Bone histology. These terms describe the microscopic tissues, coverings, and internal organization of bone.",
+      "academic_area": "Bone histology"
+    },
+    {
+      "term": "Long bone",
+      "pronunciation": "",
+      "english_definition": "A bone longer than it is wide, with a tubular shaft and expanded ends; common in limbs.",
+      "traditional_chinese_definition": "長骨；長度大於寬度、具有管狀骨幹和擴大骨端的骨，常見於四肢。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Short bone",
+      "pronunciation": "",
+      "english_definition": "A roughly cuboidal bone, such as a carpal or tarsal bone, with cancellous tissue surrounded by compact bone.",
+      "traditional_chinese_definition": "短骨；形狀大致呈立方體的骨，例如腕骨或跗骨，內有鬆質骨、外覆緻密骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Flat bone",
+      "pronunciation": "",
+      "english_definition": "A thin, flattened bone that commonly has a protective function, such as a skull-vault bone.",
+      "traditional_chinese_definition": "扁平骨；薄而扁平、通常具有保護功能的骨，例如顱頂骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Irregular bone",
+      "pronunciation": "",
+      "english_definition": "A bone with a shape that does not fit the long, short, or flat categories.",
+      "traditional_chinese_definition": "不規則骨；形狀不屬於長骨、短骨或扁平骨類別的骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Sesamoid bone",
+      "pronunciation": "",
+      "english_definition": "A bone embedded in a tendon where it passes over a bony surface; it can reduce friction and alter tendon pull.",
+      "traditional_chinese_definition": "籽骨；嵌於肌腱內、位於肌腱經過骨面之處的骨，可減少摩擦並改變肌腱牽引方向。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Diaphysis",
+      "pronunciation": "",
+      "english_definition": "The tubular shaft forming the axis of a long bone.",
+      "traditional_chinese_definition": "骨幹；構成長骨軸心的管狀部分。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Epiphysis / Epiphyses",
+      "pronunciation": "",
+      "english_definition": "An expanded end of a long bone; the outer part is compact bone and the interior is mainly spongy bone.",
+      "traditional_chinese_definition": "骨骺；長骨擴大的骨端，外層為緻密骨、內部主要為鬆質骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Metaphysis",
+      "pronunciation": "",
+      "english_definition": "The region of a long bone between its shaft and end, where the growth plate is located during growth.",
+      "traditional_chinese_definition": "骨幹端；長骨骨幹與骨骺之間的區域，生長期間生長板位於此處。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Medullary cavity",
+      "pronunciation": "",
+      "english_definition": "The hollow central cavity in the shaft of a long bone that contains marrow.",
+      "traditional_chinese_definition": "髓腔；長骨骨幹中央的空腔，內含骨髓。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Epiphyseal plate / Growth plate",
+      "pronunciation": "",
+      "english_definition": "A cartilage plate between the shaft and end of a growing long bone that permits lengthwise growth.",
+      "traditional_chinese_definition": "骨骺板／生長板；生長中長骨骨幹與骨端之間的軟骨板，容許骨骼延長。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Epiphyseal line",
+      "pronunciation": "",
+      "english_definition": "The remnant line marking the former growth plate after growth has ended.",
+      "traditional_chinese_definition": "骨骺線；生長停止後原生長板留下的線狀痕跡。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Joint surface",
+      "pronunciation": "",
+      "english_definition": "A surface of a bone that meets another bone at a joint, usually covered by articular cartilage in a synovial joint.",
+      "traditional_chinese_definition": "關節面；骨骼在關節處與另一骨相接的表面，滑膜關節內通常覆有關節軟骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Humerus",
+      "pronunciation": "",
+      "english_definition": "The long bone of the upper arm.",
+      "traditional_chinese_definition": "肱骨；上臂的長骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Metacarpal",
+      "pronunciation": "",
+      "english_definition": "One of the five bones forming the framework of the palm.",
+      "traditional_chinese_definition": "掌骨；構成手掌骨架的五塊骨之一。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Metatarsal",
+      "pronunciation": "",
+      "english_definition": "One of the five long bones between the tarsals and toe bones.",
+      "traditional_chinese_definition": "蹠骨；位於跗骨與趾骨之間的五條長骨之一。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Phalanx / Phalanges",
+      "pronunciation": "",
+      "english_definition": "A bone of a finger or toe; the plural form refers to the group of these bones.",
+      "traditional_chinese_definition": "指骨／趾骨；手指或腳趾的骨，複數形式指這類骨骼的群組。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Scaphoid",
+      "pronunciation": "",
+      "english_definition": "A carpal bone on the thumb side of the wrist.",
+      "traditional_chinese_definition": "舟狀骨；位於腕部拇指側的一塊腕骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Lunate",
+      "pronunciation": "",
+      "english_definition": "A crescent-shaped carpal bone in the wrist.",
+      "traditional_chinese_definition": "月狀骨；腕部呈新月形的一塊腕骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Talus",
+      "pronunciation": "",
+      "english_definition": "A tarsal bone that meets the tibia and fibula to form the ankle joint.",
+      "traditional_chinese_definition": "距骨；與脛骨及腓骨相接以構成踝關節的跗骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Calcaneus / Calcaneum",
+      "pronunciation": "",
+      "english_definition": "The largest tarsal bone, forming the heel.",
+      "traditional_chinese_definition": "跟骨；最大的跗骨，構成足跟。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Frontal bone",
+      "pronunciation": "",
+      "english_definition": "The bone forming the forehead and part of the skull vault.",
+      "traditional_chinese_definition": "額骨；構成額部及顱頂部分的骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Parietal bone",
+      "pronunciation": "",
+      "english_definition": "One of the paired bones forming much of the upper sides of the skull.",
+      "traditional_chinese_definition": "頂骨；構成顱骨上側大部分的一對骨之一。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Vertebra",
+      "pronunciation": "",
+      "english_definition": "One of the bones forming the vertebral column.",
+      "traditional_chinese_definition": "脊椎骨；構成脊柱的一塊骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Innominate bone / Hip bone",
+      "pronunciation": "",
+      "english_definition": "One of the paired bones forming the sides of the pelvis.",
+      "traditional_chinese_definition": "髖骨；構成骨盆兩側的一對骨之一；亦稱無名骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Patella / Kneecap",
+      "pronunciation": "",
+      "english_definition": "The largest sesamoid bone, located in front of the knee joint.",
+      "traditional_chinese_definition": "髕骨／膝蓋骨；位於膝關節前方、體內最大的籽骨。",
+      "context": "Topic: Bone structure and classification. The lecture classifies bones by shape and describes the parts of a typical long bone.",
+      "academic_area": "Bone structure and classification"
+    },
+    {
+      "term": "Joint / Articulation",
+      "pronunciation": "",
+      "english_definition": "A place where two or more bones meet.",
+      "traditional_chinese_definition": "關節；兩塊或以上骨骼相接的位置。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Degree of movement",
+      "pronunciation": "",
+      "english_definition": "The amount of movement allowed at a joint; it is one basis for joint classification.",
+      "traditional_chinese_definition": "活動程度；關節容許活動的幅度，是關節分類依據之一。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Synarthrosis / Synarthroses / Fixed joint",
+      "pronunciation": "",
+      "english_definition": "A joint that allows essentially no movement; a fibrous joint is a common structural form.",
+      "traditional_chinese_definition": "不動關節；基本上不容許活動的關節，常見的結構類型為纖維關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Fibrous joint",
+      "pronunciation": "",
+      "english_definition": "A joint in which bones are connected by fibrous connective tissue.",
+      "traditional_chinese_definition": "纖維關節；骨骼由纖維結締組織連接的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Suture",
+      "pronunciation": "",
+      "english_definition": "A fibrous joint connecting skull bones by a thin layer of connective tissue.",
+      "traditional_chinese_definition": "縫合；以薄層結締組織連接顱骨的不動纖維關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Syndesmosis",
+      "pronunciation": "",
+      "english_definition": "A fibrous joint in which bones are connected by ligaments.",
+      "traditional_chinese_definition": "韌帶連接；以韌帶連接骨骼的纖維關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Amphiarthrosis / Amphiarthroses / Slightly movable joint / Slightly moveable joint",
+      "pronunciation": "",
+      "english_definition": "A joint that permits only slight movement, commonly with cartilage between the bones.",
+      "traditional_chinese_definition": "微動關節；只容許輕微活動的關節，骨骼之間常有軟骨。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Cartilaginous joint",
+      "pronunciation": "",
+      "english_definition": "A joint in which bones are joined by cartilage.",
+      "traditional_chinese_definition": "軟骨關節；骨骼由軟骨連接的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Symphysis",
+      "pronunciation": "",
+      "english_definition": "A cartilaginous joint where bones are joined by a disc or pad of fibrocartilage.",
+      "traditional_chinese_definition": "聯合；骨骼由纖維軟骨盤或軟墊連接的軟骨關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Pubic symphysis",
+      "pronunciation": "",
+      "english_definition": "The fibrocartilaginous joint between the left and right pubic bodies.",
+      "traditional_chinese_definition": "恥骨聯合；左右恥骨體之間的纖維軟骨關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Synchondrosis",
+      "pronunciation": "",
+      "english_definition": "A cartilaginous joint in which bone surfaces are joined by hyaline cartilage.",
+      "traditional_chinese_definition": "軟骨聯合；骨面由透明軟骨連接的軟骨關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Diarthrosis / Diarthroses / Freely movable joint / Freely moveable joint",
+      "pronunciation": "",
+      "english_definition": "A freely movable joint; a synovial joint is the main example in the lecture.",
+      "traditional_chinese_definition": "活動關節；可自由活動的關節，課堂以滑膜關節為主要例子。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Synovial joint",
+      "pronunciation": "",
+      "english_definition": "A freely movable joint with a capsule and an internal joint cavity.",
+      "traditional_chinese_definition": "滑膜關節；具有關節囊和內部關節腔、可自由活動的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Joint capsule",
+      "pronunciation": "",
+      "english_definition": "A surrounding structure enclosing a synovial joint cavity.",
+      "traditional_chinese_definition": "關節囊；包圍滑膜關節腔的外圍結構。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Joint cavity",
+      "pronunciation": "",
+      "english_definition": "The space enclosed within a synovial joint capsule.",
+      "traditional_chinese_definition": "關節腔；關節囊內的空間。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Synovial membrane",
+      "pronunciation": "",
+      "english_definition": "The membrane lining the inner surface of a synovial joint capsule.",
+      "traditional_chinese_definition": "滑膜；覆蓋滑膜關節囊內表面的膜。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Synovial fluid",
+      "pronunciation": "",
+      "english_definition": "Fluid in a synovial joint that lubricates surfaces and nourishes cartilage.",
+      "traditional_chinese_definition": "滑液；滑膜關節內潤滑關節表面並滋養軟骨的液體。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Lubrication",
+      "pronunciation": "",
+      "english_definition": "Reduction of friction between moving surfaces by a lubricant such as synovial fluid.",
+      "traditional_chinese_definition": "潤滑；以滑液等潤滑物減少活動表面之間的摩擦。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Stability",
+      "pronunciation": "",
+      "english_definition": "The ability of a joint to maintain alignment and resist unwanted movement.",
+      "traditional_chinese_definition": "穩定性；關節保持對位並抵抗不必要活動的能力。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Weight-bearing",
+      "pronunciation": "",
+      "english_definition": "Supporting or transmitting body weight through a structure or joint.",
+      "traditional_chinese_definition": "承重；由結構或關節支撐或傳遞身體重量。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Ball-and-socket joint",
+      "pronunciation": "",
+      "english_definition": "A multiaxial synovial joint in which a rounded head fits into a concave socket, allowing movement in many directions.",
+      "traditional_chinese_definition": "球窩關節；圓形骨頭嵌入凹形關節窩的多軸滑膜關節，可向多個方向活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Hinge joint",
+      "pronunciation": "",
+      "english_definition": "A uniaxial joint that mainly permits flexion and extension in one plane.",
+      "traditional_chinese_definition": "鉸鏈關節；主要容許在一個平面屈曲和伸展的單軸關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Pivot joint",
+      "pronunciation": "",
+      "english_definition": "A uniaxial joint in which a bony process rotates within a fossa around a longitudinal axis.",
+      "traditional_chinese_definition": "車軸關節；骨性突起在骨窩內繞縱軸旋轉的單軸關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Condyloid joint / Ellipsoid joint",
+      "pronunciation": "",
+      "english_definition": "A biaxial joint with an oval condyle fitting into an elliptical cavity, allowing movement in two planes.",
+      "traditional_chinese_definition": "髁狀關節／橢球關節；橢圓形髁嵌入橢圓腔的雙軸關節，可在兩個平面活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Saddle joint",
+      "pronunciation": "",
+      "english_definition": "A biaxial joint whose opposing surfaces are each concave in one direction and convex in the other.",
+      "traditional_chinese_definition": "鞍狀關節；相對關節面各自在一個方向凹、另一方向凸的雙軸關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Gliding joint / Plane joint",
+      "pronunciation": "",
+      "english_definition": "A synovial joint with relatively flat or slightly curved opposing surfaces that mainly glide.",
+      "traditional_chinese_definition": "滑動關節／平面關節；相對關節面較平或略彎曲、主要作滑動的滑膜關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Multiaxial / Multiaxial joint",
+      "pronunciation": "",
+      "english_definition": "A joint that permits movement around or across multiple axes.",
+      "traditional_chinese_definition": "多軸關節；容許繞多個軸或在多個軸向活動的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Uniaxial / Uniaxial joint",
+      "pronunciation": "",
+      "english_definition": "A joint that permits movement mainly around one axis.",
+      "traditional_chinese_definition": "單軸關節；主要容許繞一個軸活動的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Biaxial / Biaxial joint",
+      "pronunciation": "",
+      "english_definition": "A joint that permits movement in two planes or around two axes.",
+      "traditional_chinese_definition": "雙軸關節；容許在兩個平面或繞兩個軸活動的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Convex surface",
+      "pronunciation": "",
+      "english_definition": "A surface that curves outward.",
+      "traditional_chinese_definition": "凸面；向外彎曲的表面。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Concave surface",
+      "pronunciation": "",
+      "english_definition": "A surface that curves inward.",
+      "traditional_chinese_definition": "凹面；向內彎曲的表面。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Articular surface",
+      "pronunciation": "",
+      "english_definition": "A bone surface that participates in forming a joint.",
+      "traditional_chinese_definition": "關節面；參與構成關節的骨骼表面。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Longitudinal axis",
+      "pronunciation": "",
+      "english_definition": "An imaginary axis running along the length of a structure.",
+      "traditional_chinese_definition": "縱軸；沿結構長度方向延伸的假想軸。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Flexion",
+      "pronunciation": "",
+      "english_definition": "A movement that bends a joint and decreases the angle between body segments.",
+      "traditional_chinese_definition": "屈曲；使關節彎曲並減少身體部分之間角度的活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Extension",
+      "pronunciation": "",
+      "english_definition": "A movement that straightens a joint and increases the angle between body segments.",
+      "traditional_chinese_definition": "伸展；使關節伸直並增加身體部分之間角度的活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Abduction",
+      "pronunciation": "",
+      "english_definition": "Movement of a body part away from the midline.",
+      "traditional_chinese_definition": "外展；身體部位遠離中線的活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Adduction",
+      "pronunciation": "",
+      "english_definition": "Movement of a body part toward the midline.",
+      "traditional_chinese_definition": "內收；身體部位朝向中線的活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Rotation",
+      "pronunciation": "",
+      "english_definition": "Turning a bone or body part around an axis.",
+      "traditional_chinese_definition": "旋轉；骨骼或身體部位繞軸轉動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Lateral rotation",
+      "pronunciation": "",
+      "english_definition": "Rotation of a limb or joint away from the body’s midline.",
+      "traditional_chinese_definition": "外旋；肢體或關節遠離身體中線的旋轉。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Medial rotation",
+      "pronunciation": "",
+      "english_definition": "Rotation of a limb or joint toward the body’s midline.",
+      "traditional_chinese_definition": "內旋；肢體或關節朝向身體中線的旋轉。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Opposition",
+      "pronunciation": "",
+      "english_definition": "Movement of the thumb across the palm to meet a fingertip.",
+      "traditional_chinese_definition": "對掌；拇指橫越手掌與其他手指指尖相接的活動。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Shoulder joint",
+      "pronunciation": "",
+      "english_definition": "The ball-and-socket joint formed between the head of the humerus and the shoulder socket.",
+      "traditional_chinese_definition": "肩關節；由肱骨頭與肩帶關節窩構成的球窩關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Elbow joint",
+      "pronunciation": "",
+      "english_definition": "A hinge joint of the upper limb that mainly permits flexion and extension.",
+      "traditional_chinese_definition": "肘關節；上肢主要容許屈曲和伸展的鉸鏈關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Wrist joint",
+      "pronunciation": "",
+      "english_definition": "The joint between the forearm and carpal bones; the lecture uses it as a condyloid example.",
+      "traditional_chinese_definition": "腕關節；前臂與腕骨之間的關節，課堂以其作為髁狀關節例子。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Metacarpophalangeal joint",
+      "pronunciation": "",
+      "english_definition": "A joint between a metacarpal bone and a proximal phalanx.",
+      "traditional_chinese_definition": "掌指關節；掌骨與近端指骨或趾骨之間的關節。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Carpometacarpal joint",
+      "pronunciation": "",
+      "english_definition": "A joint between a carpal bone and a metacarpal; the thumb joint is a saddle-joint example.",
+      "traditional_chinese_definition": "腕掌關節；腕骨與掌骨之間的關節，拇指腕掌關節為鞍狀關節例子。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Intervertebral joint",
+      "pronunciation": "",
+      "english_definition": "A joint between adjacent vertebrae; the lecture gives spinal joints as a gliding example.",
+      "traditional_chinese_definition": "椎間關節；相鄰脊椎骨之間的關節，課堂以脊柱關節為滑動關節例子。",
+      "context": "Topic: Joint anatomy and movement. The joint section groups articulations by movement and structure and compares synovial joint shapes.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Anatomy",
+      "pronunciation": "",
+      "english_definition": "The study of body structures and the relationships among them.",
+      "traditional_chinese_definition": "解剖學；研究身體結構及其相互關係的學科。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Bone",
+      "pronunciation": "",
+      "english_definition": "A mineralized connective tissue that forms the skeleton.",
+      "traditional_chinese_definition": "骨；構成骨骼的礦化結締組織。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Organ",
+      "pronunciation": "",
+      "english_definition": "A body structure made of different tissues that performs one or more functions.",
+      "traditional_chinese_definition": "器官；由不同組織構成並執行一項或多項功能的身體結構。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Region",
+      "pronunciation": "",
+      "english_definition": "A defined area of the body.",
+      "traditional_chinese_definition": "區域；身體中界定出來的一個部位。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Proximal",
+      "pronunciation": "",
+      "english_definition": "Closer to the trunk or point of attachment of a limb.",
+      "traditional_chinese_definition": "近端的；較接近軀幹或肢體附著點。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Distal",
+      "pronunciation": "",
+      "english_definition": "Farther from the trunk or point of attachment of a limb.",
+      "traditional_chinese_definition": "遠端的；較遠離軀幹或肢體附著點。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Medial",
+      "pronunciation": "",
+      "english_definition": "Closer to the midline of the body.",
+      "traditional_chinese_definition": "內側的；較接近身體中線。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Lateral",
+      "pronunciation": "",
+      "english_definition": "Farther from the midline of the body.",
+      "traditional_chinese_definition": "外側的；較遠離身體中線。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Anterior",
+      "pronunciation": "",
+      "english_definition": "Toward the front of the body.",
+      "traditional_chinese_definition": "前方的；朝向身體前面。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Posterior",
+      "pronunciation": "",
+      "english_definition": "Toward the back of the body.",
+      "traditional_chinese_definition": "後方的；朝向身體後面。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Superior",
+      "pronunciation": "",
+      "english_definition": "Toward the head or upper part of a structure.",
+      "traditional_chinese_definition": "上方的；朝向頭部或結構較上方。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Inferior",
+      "pronunciation": "",
+      "english_definition": "Toward the feet or lower part of a structure.",
+      "traditional_chinese_definition": "下方的；朝向足部或結構較下方。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Inner surface",
+      "pronunciation": "",
+      "english_definition": "The surface facing the inside of a structure or body region.",
+      "traditional_chinese_definition": "內表面；朝向結構或身體區域內側的表面。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Outer surface",
+      "pronunciation": "",
+      "english_definition": "The surface facing the outside of a structure.",
+      "traditional_chinese_definition": "外表面；朝向結構外側的表面。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Body / Body of a bone",
+      "pronunciation": "",
+      "english_definition": "The main central part of a bone, distinct from its ends or projections.",
+      "traditional_chinese_definition": "骨體；骨骼的主要中央部分，與骨端或突起相區別。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Head / Head of a bone",
+      "pronunciation": "",
+      "english_definition": "An enlarged rounded end of a bone, often participating in a joint.",
+      "traditional_chinese_definition": "骨頭；骨骼末端較大而圓的部分，常參與構成關節。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Neck / Neck of a bone",
+      "pronunciation": "",
+      "english_definition": "A narrowed region connecting a bone head to the rest of the bone.",
+      "traditional_chinese_definition": "骨頸；連接骨頭與骨骼其餘部分的狹窄區域。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Base",
+      "pronunciation": "",
+      "english_definition": "The broad or proximal part of a structure.",
+      "traditional_chinese_definition": "基底；結構較寬或較近端的部分。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Apex",
+      "pronunciation": "",
+      "english_definition": "The pointed or distal end of a structure.",
+      "traditional_chinese_definition": "尖端；結構尖細或遠端的部分。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Shaft",
+      "pronunciation": "",
+      "english_definition": "The elongated central portion of a long bone.",
+      "traditional_chinese_definition": "骨幹；長骨中央延長的部分。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Ramus",
+      "pronunciation": "",
+      "english_definition": "A branch-like part of a bone extending from its body.",
+      "traditional_chinese_definition": "骨支；由骨體延伸出的分支狀部分。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Crest",
+      "pronunciation": "",
+      "english_definition": "A prominent narrow ridge of bone.",
+      "traditional_chinese_definition": "嵴；突出的狹窄骨脊。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Spine",
+      "pronunciation": "",
+      "english_definition": "A sharp, slender bony projection.",
+      "traditional_chinese_definition": "棘；尖銳、細長的骨性突起。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Fossa",
+      "pronunciation": "",
+      "english_definition": "A depression or hollow in a bone.",
+      "traditional_chinese_definition": "窩；骨骼上的凹陷。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Notch",
+      "pronunciation": "",
+      "english_definition": "An indentation in the edge of a bone.",
+      "traditional_chinese_definition": "切跡；骨骼邊緣的凹口。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Tuberosity",
+      "pronunciation": "",
+      "english_definition": "A large, rounded or roughened bony prominence.",
+      "traditional_chinese_definition": "粗隆；大型、圓形或粗糙的骨性隆起。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Condyle",
+      "pronunciation": "",
+      "english_definition": "A rounded articular projection at the end of a bone.",
+      "traditional_chinese_definition": "髁；骨端圓形的關節突起。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Epicondyle",
+      "pronunciation": "",
+      "english_definition": "A projection located above or beside a condyle.",
+      "traditional_chinese_definition": "上髁；位於髁上方或旁邊的突起。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Malleolus",
+      "pronunciation": "",
+      "english_definition": "A rounded bony prominence at either side of the ankle.",
+      "traditional_chinese_definition": "踝；踝部兩側的圓形骨性突起。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Ridge",
+      "pronunciation": "",
+      "english_definition": "A raised, narrow line or edge on a bone.",
+      "traditional_chinese_definition": "骨嵴；骨骼上隆起而狹長的線或邊緣。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Bony landmark",
+      "pronunciation": "",
+      "english_definition": "A recognizable bone feature used to describe location, attachment, or palpation.",
+      "traditional_chinese_definition": "骨性標誌；用於描述位置、附著或觸診的可辨認骨性特徵。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Palpable",
+      "pronunciation": "",
+      "english_definition": "Able to be felt by touch during physical examination.",
+      "traditional_chinese_definition": "可觸診的；可在身體檢查時以觸摸辨認。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Lower limb",
+      "pronunciation": "",
+      "english_definition": "The lower extremity, including the hip, thigh, leg, ankle, and foot.",
+      "traditional_chinese_definition": "下肢；包括髖、大腿、小腿、踝和足的下方肢體。",
+      "context": "Topic: Anatomical and skeletal terminology. These general terms describe the body framework and the surfaces, directions, and landmarks used when describing bones.",
+      "academic_area": "Anatomical and skeletal terminology"
+    },
+    {
+      "term": "Bone marrow",
+      "pronunciation": "",
+      "english_definition": "Soft tissue within spaces in bones; red marrow forms blood cells and yellow marrow stores fat.",
+      "traditional_chinese_definition": "骨髓；位於骨骼空隙內的軟組織，紅骨髓造血而黃骨髓儲脂。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Nerve",
+      "pronunciation": "",
+      "english_definition": "A bundle of nerve fibres that carries signals; nerves pass through the central canal of an osteon.",
+      "traditional_chinese_definition": "神經；傳遞訊號的神經纖維束，神經通過骨單位中央管道。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Fat cells",
+      "pronunciation": "",
+      "english_definition": "Cells that store fat; they are found in yellow bone marrow.",
+      "traditional_chinese_definition": "脂肪細胞；儲存脂肪的細胞，存在於黃骨髓中。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Fibrous connective tissue",
+      "pronunciation": "",
+      "english_definition": "Connective tissue rich in fibres that binds or supports structures.",
+      "traditional_chinese_definition": "纖維結締組織；富含纖維、用以連結或支撐結構的結締組織。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Elastin fibre / Elastin fiber",
+      "pronunciation": "",
+      "english_definition": "A flexible protein fibre that allows connective tissue to stretch and recoil.",
+      "traditional_chinese_definition": "彈性蛋白纖維；使結締組織能伸展並回復的柔韌蛋白纖維。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Collagen fibre / Collagen fiber",
+      "pronunciation": "",
+      "english_definition": "A strong protein fibre that contributes tensile strength to connective tissue.",
+      "traditional_chinese_definition": "膠原纖維；為結締組織提供抗拉強度的強韌蛋白纖維。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Friction reduction",
+      "pronunciation": "",
+      "english_definition": "The decrease in resistance between moving surfaces, aided by cartilage at joint surfaces.",
+      "traditional_chinese_definition": "減少摩擦；降低活動表面之間的阻力，關節面的軟骨有助於此作用。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Soft tissue",
+      "pronunciation": "",
+      "english_definition": "Non-bony body tissue, including structures such as ligaments, tendons, and muscles.",
+      "traditional_chinese_definition": "軟組織；非骨性的身體組織，包括韌帶、肌腱和肌肉等結構。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Muscle attachment",
+      "pronunciation": "",
+      "english_definition": "A site where a muscle connects to bone or another structure.",
+      "traditional_chinese_definition": "肌肉附著點；肌肉連接骨骼或其他結構的位置。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Anchoring point",
+      "pronunciation": "",
+      "english_definition": "A location where a tendon or ligament attaches to bone.",
+      "traditional_chinese_definition": "錨定點；肌腱或韌帶附著於骨骼的位置。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Nourishment",
+      "pronunciation": "",
+      "english_definition": "The supply of nutrients that supports tissue maintenance; synovial fluid nourishes cartilage.",
+      "traditional_chinese_definition": "營養供應；維持組織所需的營養提供，滑液可滋養軟骨。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Growth and repair",
+      "pronunciation": "",
+      "english_definition": "Processes that add new tissue and restore damaged tissue.",
+      "traditional_chinese_definition": "生長與修復；增加新組織並修補受損組織的過程。",
+      "context": "Topic: Bone composition and histology. The lecture distinguishes the marrow-containing spaces, supportive tissues, and membrane roles.",
+      "academic_area": "Bone composition and histology"
+    },
+    {
+      "term": "Atlas vertebra",
+      "pronunciation": "",
+      "english_definition": "The first cervical vertebra, which rotates with the head around the dens of the axis.",
+      "traditional_chinese_definition": "寰椎；第一頸椎，與頭部一同繞樞椎齒突旋轉。",
+      "context": "Topic: Joint anatomy and movement. The lecture uses the upper cervical vertebrae to illustrate rotation at a pivot joint.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Axis vertebra",
+      "pronunciation": "",
+      "english_definition": "The second cervical vertebra, whose dens provides the pivot for rotation of the atlas.",
+      "traditional_chinese_definition": "樞椎；第二頸椎，其齒突為寰椎旋轉提供樞軸。",
+      "context": "Topic: Joint anatomy and movement. The lecture uses the upper cervical vertebrae to illustrate rotation at a pivot joint.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Tissue",
+      "pronunciation": "",
+      "english_definition": "A group of similar cells and their surrounding material that performs a shared function.",
+      "traditional_chinese_definition": "組織；由相似細胞及其周圍物質構成、共同執行功能的單位。",
+      "context": "Topic: Anatomical terminology. These general terms support the description of body parts and joint examples in the lecture.",
+      "academic_area": "Anatomical terminology"
+    },
+    {
+      "term": "Structure",
+      "pronunciation": "",
+      "english_definition": "An organized body part or component with a defined form and relationship to other parts.",
+      "traditional_chinese_definition": "結構；具有特定形態並與其他部分相連的身體部分或組成。",
+      "context": "Topic: Anatomical terminology. These general terms support the description of body parts and joint examples in the lecture.",
+      "academic_area": "Anatomical terminology"
+    },
+    {
+      "term": "Hip joint",
+      "pronunciation": "",
+      "english_definition": "The ball-and-socket joint between the femoral head and acetabulum.",
+      "traditional_chinese_definition": "髖關節；由股骨頭與髖臼構成的球窩關節。",
+      "context": "Topic: Joint anatomy and movement. The lecture names these common synovial joints when comparing joint types and movement.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Knee joint",
+      "pronunciation": "",
+      "english_definition": "A hinge-type synovial joint formed by the femur, tibia, and patella.",
+      "traditional_chinese_definition": "膝關節；由股骨、脛骨和髕骨構成的鉸鏈型滑膜關節。",
+      "context": "Topic: Joint anatomy and movement. The lecture names these common synovial joints when comparing joint types and movement.",
+      "academic_area": "Joint anatomy and movement"
+    },
+    {
+      "term": "Cavity",
+      "pronunciation": "",
+      "english_definition": "An enclosed or hollow space within a body structure, such as the medullary cavity or joint cavity.",
+      "traditional_chinese_definition": "腔；身體結構內封閉或中空的空間，例如髓腔或關節腔。",
+      "context": "Topic: Anatomical terminology. The lecture uses these structural words when describing bone ends, spaces, and joint coverings.",
+      "academic_area": "Anatomical terminology"
+    },
+    {
+      "term": "Membrane",
+      "pronunciation": "",
+      "english_definition": "A thin tissue layer covering a surface or lining a space.",
+      "traditional_chinese_definition": "膜；覆蓋表面或襯裡空間的薄層組織。",
+      "context": "Topic: Anatomical terminology. The lecture uses these structural words when describing bone ends, spaces, and joint coverings.",
+      "academic_area": "Anatomical terminology"
+    },
+    {
+      "term": "Movement",
+      "pronunciation": "",
+      "english_definition": "A change in position of a body part, produced at joints by muscles.",
+      "traditional_chinese_definition": "活動；身體部位位置的改變，由肌肉在關節處產生。",
+      "context": "Topic: Anatomical terminology. The lecture uses these structural words when describing bone ends, spaces, and joint coverings.",
+      "academic_area": "Anatomical terminology"
+    },
+    {
+      "term": "Capsular structure",
+      "pronunciation": "",
+      "english_definition": "A surrounding capsule enclosing the cavity of a freely movable joint.",
+      "traditional_chinese_definition": "囊狀結構；包圍活動關節腔的外圍囊體。",
+      "context": "Topic: Anatomical terminology. The lecture uses these structural words when describing bone ends, spaces, and joint coverings.",
+      "academic_area": "Anatomical terminology"
+    }
+  ],
+  "course_short_title": "Anatomy",
+  "session_label": "Lecture 2",
+  "session_type": "Lecture",
+  "session_number": 2
+}
