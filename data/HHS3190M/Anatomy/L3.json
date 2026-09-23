@@ -1,0 +1,1388 @@
+{
+  "format_version": "1.0",
+  "title": "HHS3190M Anatomy Lecture 3 - Lower Limb Bones",
+  "scope": "Pelvic girdle and hip bone anatomy, femur and hip joint, knee and leg bones, ankle and foot bones, lower-limb joints and movements.",
+  "course_code": "HHS3190M",
+  "course_title": "Human Physiology & Functional Anatomy in Rehabilitation Services",
+  "lecture": "Lecture 3 - Lower Limb Bones",
+  "provenance": {
+    "source_file": "Physiology & Anatomy/(2) Lectures/Anatomy/(3) Lower limb bones.pdf",
+    "source_status": "generated_not_verified",
+    "source_type": "lecture PDF",
+    "note": "Terms and concise English definitions are based on the supplied lecture slides. Traditional Chinese glosses follow slide labels where available; remaining glosses are generated study translations. Pronunciation is left blank because the lecture does not provide verified pronunciations. Source abbreviations are represented with their established full forms rather than used as quiz targets. Review against the original slides before examination use. The slide has one occurrence of the misspelling “Talocural”; the dataset uses the standard spelling “Talocrural.”"
+  },
+  "entries": [
+    {
+      "term": "Lower limb",
+      "pronunciation": "",
+      "english_definition": "The lower extremity, including the gluteal, thigh, knee, leg, ankle, and foot regions.",
+      "traditional_chinese_definition": "下肢；包括臀部、大腿、膝部、小腿、踝部和足部的下方肢體。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Gluteal region / Buttock",
+      "pronunciation": "",
+      "english_definition": "The posterior hip region overlying the gluteal muscles.",
+      "traditional_chinese_definition": "臀區／臀部；覆蓋臀肌的髖部後方區域。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Thigh region",
+      "pronunciation": "",
+      "english_definition": "The region between the hip and knee, containing the femur.",
+      "traditional_chinese_definition": "大腿區；位於髖與膝之間、含有股骨的區域。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Knee region",
+      "pronunciation": "",
+      "english_definition": "The region around the knee, including the distal femur, proximal tibia and fibula, and patella.",
+      "traditional_chinese_definition": "膝區；膝周圍區域，包括股骨遠端、脛骨和腓骨近端及髕骨。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Leg region",
+      "pronunciation": "",
+      "english_definition": "The region between the knee and ankle containing the tibia and fibula.",
+      "traditional_chinese_definition": "小腿區；膝與踝之間、含有脛骨和腓骨的區域。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Ankle region",
+      "pronunciation": "",
+      "english_definition": "The region where the leg meets the foot.",
+      "traditional_chinese_definition": "踝區；小腿與足部相接的位置。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Foot region",
+      "pronunciation": "",
+      "english_definition": "The distal part of the lower limb, formed by tarsals, metatarsals, and phalanges.",
+      "traditional_chinese_definition": "足區；下肢遠端部分，由跗骨、蹠骨和趾骨組成。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Pelvis",
+      "pronunciation": "",
+      "english_definition": "The bony basin formed by the pelvic girdle and sacrum, supporting the trunk and protecting pelvic organs.",
+      "traditional_chinese_definition": "骨盆；由骨盆帶和骶骨構成的骨性盆腔，支撐軀幹並保護盆腔器官。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Pelvic girdle",
+      "pronunciation": "",
+      "english_definition": "A ring-like bony structure connecting the axial skeleton to the lower limbs, formed by two hip bones, the sacrum, and coccyx.",
+      "traditional_chinese_definition": "骨盆帶；連接中軸骨骼和下肢的環狀骨性結構，由兩塊髖骨、骶骨和尾骨構成。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Sacrum",
+      "pronunciation": "",
+      "english_definition": "The triangular bone at the base of the vertebral column that joins the hip bones.",
+      "traditional_chinese_definition": "骶骨；位於脊柱底部並與髖骨相接的三角形骨。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Coccyx",
+      "pronunciation": "",
+      "english_definition": "The small terminal bone at the base of the vertebral column, below the sacrum.",
+      "traditional_chinese_definition": "尾骨；位於骶骨下方、脊柱末端的小骨。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Sacroiliac joint",
+      "pronunciation": "",
+      "english_definition": "The joint between the sacrum and the ilium of a hip bone.",
+      "traditional_chinese_definition": "骶髂關節；骶骨與髖骨髂骨之間的關節。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Sacrococcygeal symphysis",
+      "pronunciation": "",
+      "english_definition": "The cartilaginous joint between the sacrum and coccyx.",
+      "traditional_chinese_definition": "骶尾聯合；骶骨與尾骨之間的軟骨關節。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Pelvic organ",
+      "pronunciation": "",
+      "english_definition": "An organ located within the pelvis, such as the uterus or intestines.",
+      "traditional_chinese_definition": "盆腔器官；位於骨盆內的器官，例如子宮或腸道。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Uterus",
+      "pronunciation": "",
+      "english_definition": "A muscular organ in the female pelvis in which pregnancy develops.",
+      "traditional_chinese_definition": "子宮；女性骨盆內、妊娠發育的肌性器官。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Intestine",
+      "pronunciation": "",
+      "english_definition": "A digestive tract organ located partly within the pelvis.",
+      "traditional_chinese_definition": "腸；部分位於骨盆內的消化道器官。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Axial skeleton",
+      "pronunciation": "",
+      "english_definition": "The central skeleton to which the pelvic girdle transfers weight.",
+      "traditional_chinese_definition": "中軸骨骼；骨盆帶將重量傳遞至的身體中央骨骼。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Weight transfer",
+      "pronunciation": "",
+      "english_definition": "The passage of load from one body region or structure to another.",
+      "traditional_chinese_definition": "重量轉移；負荷由一個身體區域或結構傳遞至另一處。",
+      "context": "Topic: Pelvic and regional anatomy. The lecture follows the lower limb from the pelvis through the thigh, leg, ankle, and foot.",
+      "academic_area": "Pelvic and regional anatomy"
+    },
+    {
+      "term": "Hip bone / Innominate bone",
+      "pronunciation": "",
+      "english_definition": "One of the paired pelvic bones, formed by the ilium, pubis, and ischium.",
+      "traditional_chinese_definition": "髖骨／無名骨；構成骨盆的一對骨之一，由髂骨、恥骨和坐骨融合而成。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Ilium",
+      "pronunciation": "",
+      "english_definition": "The broad, superior part of the hip bone; it forms the upper part of the acetabulum.",
+      "traditional_chinese_definition": "髂骨；髖骨寬闊的上部，構成髖臼上方部分。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Iliac wing",
+      "pronunciation": "",
+      "english_definition": "The broad, flattened upper portion of the ilium.",
+      "traditional_chinese_definition": "髂翼；髂骨上方寬而扁平的部分。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Iliac fossa",
+      "pronunciation": "",
+      "english_definition": "The concave inner surface of the ilium that provides an origin for the iliacus muscle.",
+      "traditional_chinese_definition": "髂窩；髂骨內側的凹面，為髂肌提供起點。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Iliacus muscle",
+      "pronunciation": "",
+      "english_definition": "A muscle arising from the iliac fossa that contributes to hip flexion.",
+      "traditional_chinese_definition": "髂肌；起自髂窩並參與髖屈曲的肌肉。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Gluteal muscle",
+      "pronunciation": "",
+      "english_definition": "A muscle of the buttock region that attaches to the outer surface of the ilium.",
+      "traditional_chinese_definition": "臀肌；臀部區域的肌肉，附著於髂骨外表面。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Iliac crest",
+      "pronunciation": "",
+      "english_definition": "The thickened superior border of the ilium, extending between the anterior and posterior superior iliac spines.",
+      "traditional_chinese_definition": "髂嵴；髂骨上方增厚的邊緣，延伸於髂前上棘與髂後上棘之間。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Anterior superior iliac spine",
+      "pronunciation": "",
+      "english_definition": "A prominent anterior landmark at the end of the iliac crest.",
+      "traditional_chinese_definition": "髂前上棘；髂嵴前端明顯突出的骨性標誌。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Posterior superior iliac spine",
+      "pronunciation": "",
+      "english_definition": "A posterior landmark at the end of the iliac crest.",
+      "traditional_chinese_definition": "髂後上棘；髂嵴後端的骨性標誌。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Anterior inferior iliac spine",
+      "pronunciation": "",
+      "english_definition": "A bony projection on the anterior ilium, inferior to the anterior superior iliac spine.",
+      "traditional_chinese_definition": "髂前下棘；位於髂前上棘下方的髂骨前方突起。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Posterior inferior iliac spine",
+      "pronunciation": "",
+      "english_definition": "A posterior projection of the ilium below its superior posterior spine.",
+      "traditional_chinese_definition": "髂後下棘；位於髂骨後上棘下方的後方突起。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Greater sciatic notch",
+      "pronunciation": "",
+      "english_definition": "A large indentation in the posterior hip bone through which the sciatic nerve passes.",
+      "traditional_chinese_definition": "坐骨大切跡；髖骨後方的大切口，坐骨神經由此通過。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Pubis",
+      "pronunciation": "",
+      "english_definition": "The anterior part of the hip bone, contributing to the acetabulum and obturator foramen.",
+      "traditional_chinese_definition": "恥骨；髖骨前部，參與構成髖臼和閉孔。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Pubic body",
+      "pronunciation": "",
+      "english_definition": "The medial part of the pubis that joins the opposite side at the pubic symphysis.",
+      "traditional_chinese_definition": "恥骨體；恥骨內側部分，在恥骨聯合處與對側相接。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Superior pubic ramus",
+      "pronunciation": "",
+      "english_definition": "The branch extending laterally from the pubic body and contributing to the acetabulum.",
+      "traditional_chinese_definition": "恥骨上支；由恥骨體向外側延伸並參與構成髖臼的骨支。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Inferior pubic ramus",
+      "pronunciation": "",
+      "english_definition": "The branch extending toward the ischium and contributing to the obturator foramen.",
+      "traditional_chinese_definition": "恥骨下支；朝坐骨延伸並參與構成閉孔的骨支。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Obturator foramen",
+      "pronunciation": "",
+      "english_definition": "A large opening formed by the pubis and ischium, traversed by the obturator nerve and vessels.",
+      "traditional_chinese_definition": "閉孔；由恥骨和坐骨形成的大孔，閉孔神經及血管由此通過。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Obturator nerve",
+      "pronunciation": "",
+      "english_definition": "A nerve passing through the obturator foramen to reach the lower limb.",
+      "traditional_chinese_definition": "閉孔神經；經閉孔通往下肢的神經。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Obturator artery",
+      "pronunciation": "",
+      "english_definition": "An artery passing through the obturator foramen toward the lower limb.",
+      "traditional_chinese_definition": "閉孔動脈；經閉孔通往下肢的動脈。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Obturator vein",
+      "pronunciation": "",
+      "english_definition": "A vein passing through the obturator foramen from the lower limb.",
+      "traditional_chinese_definition": "閉孔靜脈；經閉孔連接下肢的靜脈。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Ischium",
+      "pronunciation": "",
+      "english_definition": "The posteroinferior part of the hip bone, contributing to the lower acetabulum.",
+      "traditional_chinese_definition": "坐骨；髖骨後下部，參與構成髖臼下方部分。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Ischial body",
+      "pronunciation": "",
+      "english_definition": "The main body of the ischium, near the junction with its superior ramus.",
+      "traditional_chinese_definition": "坐骨體；坐骨的主體部分，鄰近其上支交界處。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Superior ischial ramus",
+      "pronunciation": "",
+      "english_definition": "The upper branch of the ischium.",
+      "traditional_chinese_definition": "坐骨上支；坐骨向上延伸的骨支。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Inferior ischial ramus",
+      "pronunciation": "",
+      "english_definition": "The lower branch of the ischium that joins the inferior pubic ramus.",
+      "traditional_chinese_definition": "坐骨下支；向下延伸並與恥骨下支相接的骨支。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Ischial tuberosity",
+      "pronunciation": "",
+      "english_definition": "The rough posteroinferior prominence of the ischium that bears weight while sitting.",
+      "traditional_chinese_definition": "坐骨粗隆；坐骨後下方粗糙突起，坐姿時承受身體重量。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Ischial spine",
+      "pronunciation": "",
+      "english_definition": "A bony projection near the junction of the ischial body and superior ramus.",
+      "traditional_chinese_definition": "坐骨棘；位於坐骨體與坐骨上支交界附近的骨性突起。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Mid-inguinal point",
+      "pronunciation": "",
+      "english_definition": "The midpoint between the anterior superior iliac spine and the centre of the pubic symphysis, where the femoral artery can be palpated.",
+      "traditional_chinese_definition": "腹股溝中點；髂前上棘與恥骨聯合中心之間的中點，可在此觸診股動脈。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Femoral artery",
+      "pronunciation": "",
+      "english_definition": "The major artery supplying the lower limb; it can be palpated at the mid-inguinal point.",
+      "traditional_chinese_definition": "股動脈；供應下肢的主要動脈，可在腹股溝中點觸診。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "True leg length",
+      "pronunciation": "",
+      "english_definition": "The measured distance from the anterior superior iliac spine to the medial malleolus.",
+      "traditional_chinese_definition": "真實腿長；由髂前上棘量度至內踝的距離。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Leg length discrepancy",
+      "pronunciation": "",
+      "english_definition": "A difference in measured length between the two lower limbs, which can accompany hip disorders.",
+      "traditional_chinese_definition": "腿長差異；兩側下肢量度長度的差異，可伴隨髖部疾病出現。",
+      "context": "Topic: Hip bone anatomy and landmarks. The lecture identifies the three fused parts of each hip bone and their palpable landmarks.",
+      "academic_area": "Hip bone anatomy and landmarks"
+    },
+    {
+      "term": "Femur / Thigh bone",
+      "pronunciation": "",
+      "english_definition": "The longest and heaviest bone of the body, forming the skeleton of the thigh.",
+      "traditional_chinese_definition": "股骨／大腿骨；人體最長、最重的骨，構成大腿骨架。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Proximal femur",
+      "pronunciation": "",
+      "english_definition": "The upper end of the femur, including the head, neck, and trochanters.",
+      "traditional_chinese_definition": "股骨近端；股骨上端，包括股骨頭、股骨頸及轉子。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Distal femur",
+      "pronunciation": "",
+      "english_definition": "The lower end of the femur, including its condyles and epicondyles.",
+      "traditional_chinese_definition": "股骨遠端；股骨下端，包括髁和上髁。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Femoral head",
+      "pronunciation": "",
+      "english_definition": "The smooth, rounded upper end of the femur that fits into the acetabulum.",
+      "traditional_chinese_definition": "股骨頭；股骨上端光滑圓形部分，嵌入髖臼內。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Femoral neck",
+      "pronunciation": "",
+      "english_definition": "The narrowed region connecting the femoral head to the shaft.",
+      "traditional_chinese_definition": "股骨頸；連接股骨頭和股骨幹的狹窄部分。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Fovea",
+      "pronunciation": "",
+      "english_definition": "A small depression on the femoral head for attachment of the ligament of the head.",
+      "traditional_chinese_definition": "頭凹；股骨頭上的小凹陷，供股骨頭韌帶附著。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Ligament of the head / Ligament of the head of the femur",
+      "pronunciation": "",
+      "english_definition": "A ligament attaching within the fovea of the femoral head.",
+      "traditional_chinese_definition": "股骨頭韌帶；附著於股骨頭頭凹內的韌帶。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Inclination angle",
+      "pronunciation": "",
+      "english_definition": "The angle between the femoral neck and shaft, given in the lecture as about 120–135 degrees.",
+      "traditional_chinese_definition": "傾斜角；股骨頸與股骨幹之間的角度，課堂列約120至135度。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Greater trochanter",
+      "pronunciation": "",
+      "english_definition": "The large lateral bony projection on the proximal femur.",
+      "traditional_chinese_definition": "大轉子；股骨近端外側的大型骨性突起。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Lesser trochanter",
+      "pronunciation": "",
+      "english_definition": "The smaller medial projection on the proximal femur.",
+      "traditional_chinese_definition": "小轉子；股骨近端內側較小的突起。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Intertrochanteric crest",
+      "pronunciation": "",
+      "english_definition": "A ridge on the posterior femur connecting the greater and lesser trochanters.",
+      "traditional_chinese_definition": "轉子間嵴；位於股骨後方、連接大小轉子的骨嵴。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Intertrochanteric line",
+      "pronunciation": "",
+      "english_definition": "A line on the anterior femur connecting the greater and lesser trochanters.",
+      "traditional_chinese_definition": "轉子間線；位於股骨前方、連接大小轉子的骨線。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Linea aspera",
+      "pronunciation": "",
+      "english_definition": "A rough longitudinal ridge on the posterior shaft of the femur.",
+      "traditional_chinese_definition": "粗線；股骨幹後方粗糙的縱向骨嵴。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Pectineal line",
+      "pronunciation": "",
+      "english_definition": "The medial proximal continuation of the linea aspera.",
+      "traditional_chinese_definition": "恥骨肌線；粗線向近端內側延續的骨線。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Gluteal tuberosity",
+      "pronunciation": "",
+      "english_definition": "A roughened area on the posterior femur where gluteus maximus attaches.",
+      "traditional_chinese_definition": "臀肌粗隆；股骨後方粗糙區域，供臀大肌附著。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Gluteus maximus",
+      "pronunciation": "",
+      "english_definition": "A large buttock muscle that attaches to the gluteal tuberosity.",
+      "traditional_chinese_definition": "臀大肌；臀部的大型肌肉，附著於臀肌粗隆。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Medial condyle",
+      "pronunciation": "",
+      "english_definition": "The rounded inner condyle at the distal femur.",
+      "traditional_chinese_definition": "內髁；股骨遠端內側的圓形髁。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Lateral condyle",
+      "pronunciation": "",
+      "english_definition": "The rounded outer condyle at the distal femur.",
+      "traditional_chinese_definition": "外髁；股骨遠端外側的圓形髁。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Medial epicondyle",
+      "pronunciation": "",
+      "english_definition": "A projection above the medial femoral condyle.",
+      "traditional_chinese_definition": "內上髁；位於股骨內髁上方的突起。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Lateral epicondyle",
+      "pronunciation": "",
+      "english_definition": "A projection above the lateral femoral condyle.",
+      "traditional_chinese_definition": "外上髁；位於股骨外髁上方的突起。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Adductor tubercle",
+      "pronunciation": "",
+      "english_definition": "A bony prominence above the medial femoral condyle associated with attachment of the adductor magnus tendon.",
+      "traditional_chinese_definition": "收肌結節；股骨內髁上方的骨性突起，與大收肌肌腱附著相關。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Intercondylar fossa",
+      "pronunciation": "",
+      "english_definition": "The depression between the femoral condyles that provides ligament attachment surfaces.",
+      "traditional_chinese_definition": "髁間窩；股骨兩髁之間的凹陷，為韌帶提供附著面。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Coxa vara",
+      "pronunciation": "",
+      "english_definition": "A hip alignment in which the femoral neck–shaft angle is smaller than usual.",
+      "traditional_chinese_definition": "髖內翻；股骨頸幹角小於一般角度的髖部排列。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Coxa valga",
+      "pronunciation": "",
+      "english_definition": "A hip alignment in which the femoral neck–shaft angle is larger than usual.",
+      "traditional_chinese_definition": "髖外翻；股骨頸幹角大於一般角度的髖部排列。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Femoral neck fracture / Fracture of the neck of the femur / Fracture of neck of femur",
+      "pronunciation": "",
+      "english_definition": "A break in the femoral neck, common in older adults after low-energy falls, especially with osteoporosis.",
+      "traditional_chinese_definition": "股骨頸骨折；股骨頸發生骨折，常見於患骨質疏鬆的長者低能量跌倒後。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Osteoporosis",
+      "pronunciation": "",
+      "english_definition": "A condition of reduced bone mass and strength that increases fracture risk.",
+      "traditional_chinese_definition": "骨質疏鬆症；骨量和骨強度下降、令骨折風險增加的狀況。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Low-energy fall",
+      "pronunciation": "",
+      "english_definition": "A fall from standing height or similarly low force that may cause fracture in weakened bone.",
+      "traditional_chinese_definition": "低能量跌倒；由站立高度或相近低力度造成的跌倒，可能令脆弱骨骼骨折。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Intracapsular fracture",
+      "pronunciation": "",
+      "english_definition": "A fracture within the hip joint capsule that may compromise blood supply to the femoral head.",
+      "traditional_chinese_definition": "關節囊內骨折；發生於髖關節囊內、可能影響股骨頭血液供應的骨折。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Extracapsular fracture",
+      "pronunciation": "",
+      "english_definition": "A fracture outside the hip joint capsule; the lecture notes that femoral-head blood supply is usually preserved.",
+      "traditional_chinese_definition": "關節囊外骨折；發生於髖關節囊外，課堂指出股骨頭血液供應通常仍完整。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Avascular necrosis",
+      "pronunciation": "",
+      "english_definition": "Bone-tissue death caused by inadequate blood supply; it may affect the femoral head after some intracapsular fractures.",
+      "traditional_chinese_definition": "缺血性壞死；血液供應不足引致骨組織死亡，部分關節囊內骨折後可影響股骨頭。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Hip joint",
+      "pronunciation": "",
+      "english_definition": "A ball-and-socket synovial joint formed by the femoral head and acetabulum, designed for stability and weight-bearing.",
+      "traditional_chinese_definition": "髖關節；由股骨頭和髖臼構成、著重穩定和承重的球窩滑膜關節。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Acetabulum",
+      "pronunciation": "",
+      "english_definition": "The cup-shaped socket of the hip bone that receives the femoral head.",
+      "traditional_chinese_definition": "髖臼；髖骨上的杯狀關節窩，用以容納股骨頭。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Hip flexion",
+      "pronunciation": "",
+      "english_definition": "Movement that brings the thigh forward toward the trunk.",
+      "traditional_chinese_definition": "髖屈曲；大腿向前朝軀幹移動的活動。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Hip extension",
+      "pronunciation": "",
+      "english_definition": "Movement that moves the thigh backward and straightens the hip.",
+      "traditional_chinese_definition": "髖伸展；大腿向後移並使髖部伸直的活動。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Hip abduction",
+      "pronunciation": "",
+      "english_definition": "Movement of the thigh away from the body midline.",
+      "traditional_chinese_definition": "髖外展；大腿遠離身體中線的活動。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Hip adduction",
+      "pronunciation": "",
+      "english_definition": "Movement of the thigh toward or across the body midline.",
+      "traditional_chinese_definition": "髖內收；大腿朝向或越過身體中線的活動。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Lateral rotation of the hip",
+      "pronunciation": "",
+      "english_definition": "Rotation of the thigh outward from the body midline.",
+      "traditional_chinese_definition": "髖外旋；大腿向外遠離身體中線的旋轉。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Medial rotation of the hip",
+      "pronunciation": "",
+      "english_definition": "Rotation of the thigh inward toward the body midline.",
+      "traditional_chinese_definition": "髖內旋；大腿向內朝向身體中線的旋轉。",
+      "context": "Topic: Femur and hip joint. This section relates femoral landmarks to hip movement, loading, and fracture risk.",
+      "academic_area": "Femur and hip joint"
+    },
+    {
+      "term": "Tibia / Shin bone",
+      "pronunciation": "",
+      "english_definition": "The medial, weight-bearing bone of the leg and the second-longest bone in the body.",
+      "traditional_chinese_definition": "脛骨／小腿骨；小腿內側負重的骨，亦為人體第二長的骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tibial shaft",
+      "pronunciation": "",
+      "english_definition": "The long central portion of the tibia.",
+      "traditional_chinese_definition": "脛骨幹；脛骨中央延長的部分。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tibial plateau",
+      "pronunciation": "",
+      "english_definition": "The widened, relatively flat upper surface of the tibia that meets the femoral condyles.",
+      "traditional_chinese_definition": "脛骨平台；脛骨上端寬闊而較平的表面，與股骨髁相接。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tibial tuberosity",
+      "pronunciation": "",
+      "english_definition": "A palpable anterior prominence on the proximal tibia where the patellar ligament attaches.",
+      "traditional_chinese_definition": "脛骨粗隆；脛骨近端前方可觸及的突起，供髕韌帶附著。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tibial condyle / Tibial condyles",
+      "pronunciation": "",
+      "english_definition": "One of the medial or lateral upper surfaces of the tibia that meets a femoral condyle.",
+      "traditional_chinese_definition": "脛骨髁；脛骨上端與股骨髁相接的內側或外側關節面。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Medial malleolus",
+      "pronunciation": "",
+      "english_definition": "The bony prominence on the lower inner tibia that forms part of the ankle joint.",
+      "traditional_chinese_definition": "內踝；脛骨下端內側的骨性突起，構成踝關節一部分。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Fibular notch",
+      "pronunciation": "",
+      "english_definition": "The indentation on the distal tibia where it meets the fibula.",
+      "traditional_chinese_definition": "腓骨切跡；脛骨遠端與腓骨相接的切跡。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Interosseous membrane",
+      "pronunciation": "",
+      "english_definition": "A fibrous sheet between the tibia and fibula that binds the bones together.",
+      "traditional_chinese_definition": "骨間膜；位於脛骨和腓骨之間、將兩骨連結的纖維膜。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Fibula",
+      "pronunciation": "",
+      "english_definition": "The smaller lateral bone of the leg, important for muscle attachment but not a primary weight-bearing bone.",
+      "traditional_chinese_definition": "腓骨；小腿外側較小的骨，供肌肉附著但並非主要承重骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Proximal tibiofibular joint",
+      "pronunciation": "",
+      "english_definition": "The joint between the head of the fibula and the lateral condyle of the tibia.",
+      "traditional_chinese_definition": "上脛腓關節；腓骨頭與脛骨外側髁之間的關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Distal tibiofibular joint",
+      "pronunciation": "",
+      "english_definition": "The distal connection between the tibia and fibula at the fibular notch.",
+      "traditional_chinese_definition": "下脛腓關節；脛骨與腓骨在腓骨切跡處的遠端連接。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Fibular head",
+      "pronunciation": "",
+      "english_definition": "The enlarged proximal end of the fibula that meets the lateral tibial condyle.",
+      "traditional_chinese_definition": "腓骨頭；腓骨近端擴大的部分，與脛骨外側髁相接。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Fibular neck",
+      "pronunciation": "",
+      "english_definition": "The narrowed region below the head of the fibula; the common fibular nerve lies near its lateral surface.",
+      "traditional_chinese_definition": "腓骨頸；腓骨頭下方的狹窄部分，腓骨總神經靠近其外側表面。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Common fibular nerve",
+      "pronunciation": "",
+      "english_definition": "A nerve passing near the lateral surface of the fibular neck and supplying parts of the lower limb.",
+      "traditional_chinese_definition": "腓骨總神經；經過腓骨頸外側附近並支配下肢部分區域的神經。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Lateral malleolus",
+      "pronunciation": "",
+      "english_definition": "The bony prominence at the distal fibula that helps form the ankle joint.",
+      "traditional_chinese_definition": "外踝；腓骨遠端的骨性突起，有助構成踝關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Knee joint",
+      "pronunciation": "",
+      "english_definition": "A hinge-type synovial joint formed by the femur, tibia, and patella.",
+      "traditional_chinese_definition": "膝關節；由股骨、脛骨和髕骨構成的鉸鏈型滑膜關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tibiofemoral joint",
+      "pronunciation": "",
+      "english_definition": "The weight-bearing articulation between the femoral condyles and tibial condyles.",
+      "traditional_chinese_definition": "脛股關節；股骨髁與脛骨髁之間、承受重量的關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Patellofemoral joint",
+      "pronunciation": "",
+      "english_definition": "The articulation between the patella and the anterior distal femur.",
+      "traditional_chinese_definition": "髕股關節；髕骨與股骨遠端前方之間的關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Patella / Kneecap",
+      "pronunciation": "",
+      "english_definition": "The largest sesamoid bone at the front of the knee; it improves quadriceps leverage for knee extension.",
+      "traditional_chinese_definition": "髕骨／膝蓋骨；位於膝前的最大籽骨，可增強股四頭肌伸膝時的槓桿作用。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Quadriceps tendon",
+      "pronunciation": "",
+      "english_definition": "The tendon above the patella that connects the quadriceps muscle group to the patella.",
+      "traditional_chinese_definition": "股四頭肌腱；位於髕骨上方、連接股四頭肌群與髕骨的肌腱。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Patellar ligament",
+      "pronunciation": "",
+      "english_definition": "The continuation below the patella that attaches it to the tibial tuberosity.",
+      "traditional_chinese_definition": "髕韌帶；髕骨下方延續至脛骨粗隆的韌帶。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Meniscus / Menisci / C-shaped fibrocartilage ring",
+      "pronunciation": "",
+      "english_definition": "A crescent-shaped fibrocartilage pad in the knee that improves joint stability and absorbs shock.",
+      "traditional_chinese_definition": "半月板；膝內新月形纖維軟骨墊，有助穩定關節和吸收衝擊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Medial meniscus",
+      "pronunciation": "",
+      "english_definition": "The C-shaped fibrocartilage pad on the inner side of the knee joint.",
+      "traditional_chinese_definition": "內側半月板；位於膝關節內側的C形纖維軟骨墊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Lateral meniscus",
+      "pronunciation": "",
+      "english_definition": "The C-shaped fibrocartilage pad on the outer side of the knee joint.",
+      "traditional_chinese_definition": "外側半月板；位於膝關節外側的C形纖維軟骨墊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Collateral ligament",
+      "pronunciation": "",
+      "english_definition": "A ligament along the side of a joint that resists excessive side-to-side movement.",
+      "traditional_chinese_definition": "副韌帶；位於關節側面、抵抗過度側向活動的韌帶。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Medial collateral ligament",
+      "pronunciation": "",
+      "english_definition": "The strap-like ligament on the inner side of the knee that helps resist excessive lateral opening.",
+      "traditional_chinese_definition": "內側副韌帶；位於膝內側的帶狀韌帶，有助抵抗過度外側張開。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Lateral collateral ligament",
+      "pronunciation": "",
+      "english_definition": "The strap-like ligament on the outer side of the knee that helps resist excessive medial opening.",
+      "traditional_chinese_definition": "外側副韌帶；位於膝外側的帶狀韌帶，有助抵抗過度內側張開。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Cruciate ligament",
+      "pronunciation": "",
+      "english_definition": "One of the crossing ligaments within the knee that connects the femur and tibia.",
+      "traditional_chinese_definition": "十字韌帶；膝內交叉排列、連接股骨和脛骨的韌帶之一。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Anterior cruciate ligament",
+      "pronunciation": "",
+      "english_definition": "A ligament inside the knee that helps prevent the tibia from moving excessively forward relative to the femur.",
+      "traditional_chinese_definition": "前十字韌帶；位於膝內、有助防止脛骨相對股骨過度向前移的韌帶。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Posterior cruciate ligament",
+      "pronunciation": "",
+      "english_definition": "A ligament inside the knee that helps prevent the tibia from moving excessively backward relative to the femur.",
+      "traditional_chinese_definition": "後十字韌帶；位於膝內、有助防止脛骨相對股骨過度向後移的韌帶。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Dislocation",
+      "pronunciation": "",
+      "english_definition": "Loss of normal alignment between the surfaces of a joint.",
+      "traditional_chinese_definition": "脫位；關節面失去正常對位的狀況。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Quadriceps",
+      "pronunciation": "",
+      "english_definition": "The four-muscle group at the front of the thigh that extends the knee.",
+      "traditional_chinese_definition": "股四頭肌；位於大腿前方、由四塊肌肉組成並負責伸膝的肌群。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Vastus medialis oblique",
+      "pronunciation": "",
+      "english_definition": "The oblique fibres of the medial quadriceps muscle that help control patellar tracking.",
+      "traditional_chinese_definition": "股內側斜肌；股四頭肌內側斜向肌纖維，有助控制髕骨活動軌跡。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Knee flexion",
+      "pronunciation": "",
+      "english_definition": "Bending the knee and decreasing the angle between the thigh and leg.",
+      "traditional_chinese_definition": "膝屈曲；彎曲膝部並減少大腿與小腿之間角度的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Knee extension",
+      "pronunciation": "",
+      "english_definition": "Straightening the knee and increasing the angle between the thigh and leg.",
+      "traditional_chinese_definition": "膝伸展；伸直膝部並增加大腿與小腿之間角度的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Foot",
+      "pronunciation": "",
+      "english_definition": "The distal lower-limb structure made up of tarsals, metatarsals, and toe bones.",
+      "traditional_chinese_definition": "足；由跗骨、蹠骨和趾骨構成的下肢遠端結構。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Tarsal / Tarsals",
+      "pronunciation": "",
+      "english_definition": "One of the seven irregular bones forming the ankle and proximal foot.",
+      "traditional_chinese_definition": "跗骨；構成踝部和足近端的七塊不規則骨之一。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Metatarsal / Metatarsals",
+      "pronunciation": "",
+      "english_definition": "One of five bones connecting the tarsals to the toe bones.",
+      "traditional_chinese_definition": "蹠骨；連接跗骨和趾骨的五塊骨之一。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Digit",
+      "pronunciation": "",
+      "english_definition": "A finger or toe.",
+      "traditional_chinese_definition": "指／趾；手或足末端的一個指狀部分。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Big toe",
+      "pronunciation": "",
+      "english_definition": "The first toe, which has two phalanges and contributes to weight bearing.",
+      "traditional_chinese_definition": "大腳趾；第一趾，只有兩節趾骨並參與承重。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Proximal phalanx",
+      "pronunciation": "",
+      "english_definition": "The toe bone nearest the metatarsal.",
+      "traditional_chinese_definition": "近端趾骨；最接近蹠骨的一節趾骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Middle phalanx",
+      "pronunciation": "",
+      "english_definition": "The middle toe bone, present in toes two through five but absent in the big toe.",
+      "traditional_chinese_definition": "中間趾骨；第二至第五趾中間的一節趾骨，大腳趾沒有此骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Distal phalanx",
+      "pronunciation": "",
+      "english_definition": "The toe bone at the tip of a digit.",
+      "traditional_chinese_definition": "遠端趾骨；位於趾端的一節趾骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Cuboid",
+      "pronunciation": "",
+      "english_definition": "A tarsal bone on the lateral side of the foot.",
+      "traditional_chinese_definition": "骰骨；位於足部外側的一塊跗骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Navicular",
+      "pronunciation": "",
+      "english_definition": "A tarsal bone on the medial side of the foot, in front of the talus.",
+      "traditional_chinese_definition": "舟狀骨；位於足內側、距骨前方的一塊跗骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Cuneiform / Cuneiform bone / Cuneiforms",
+      "pronunciation": "",
+      "english_definition": "One of three wedge-shaped tarsal bones: medial, intermediate, or lateral.",
+      "traditional_chinese_definition": "楔狀骨；三塊楔形跗骨之一，包括內側、中間和外側楔狀骨。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Medial cuneiform",
+      "pronunciation": "",
+      "english_definition": "The medial member of the three cuneiform bones.",
+      "traditional_chinese_definition": "內側楔狀骨；三塊楔狀骨中位於內側的一塊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Intermediate cuneiform",
+      "pronunciation": "",
+      "english_definition": "The middle member of the three cuneiform bones.",
+      "traditional_chinese_definition": "中間楔狀骨；三塊楔狀骨中位於中間的一塊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Lateral cuneiform",
+      "pronunciation": "",
+      "english_definition": "The lateral member of the three cuneiform bones.",
+      "traditional_chinese_definition": "外側楔狀骨；三塊楔狀骨中位於外側的一塊。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Heel bone",
+      "pronunciation": "",
+      "english_definition": "The common name for the calcaneus.",
+      "traditional_chinese_definition": "足跟骨；跟骨的常用名稱。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Achilles tendon",
+      "pronunciation": "",
+      "english_definition": "The strong tendon attaching calf muscles to the calcaneus.",
+      "traditional_chinese_definition": "跟腱／阿基里斯腱；連接小腿肌肉與跟骨的強韌肌腱。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Ankle joint / Talocrural joint",
+      "pronunciation": "",
+      "english_definition": "A hinge synovial joint formed by the tibia, fibula, and talus.",
+      "traditional_chinese_definition": "踝關節／距小腿關節；由脛骨、腓骨和距骨構成的鉸鏈型滑膜關節。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Subtalar joint",
+      "pronunciation": "",
+      "english_definition": "A synovial plane joint between the talus and calcaneus that permits inversion and eversion.",
+      "traditional_chinese_definition": "距下關節；距骨與跟骨之間的平面滑膜關節，容許內翻和外翻。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Dorsiflexion",
+      "pronunciation": "",
+      "english_definition": "Movement that lifts the foot upward toward the shin.",
+      "traditional_chinese_definition": "背屈；足部向上朝小腿方向抬起的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Plantarflexion",
+      "pronunciation": "",
+      "english_definition": "Movement that points the foot downward away from the shin.",
+      "traditional_chinese_definition": "蹠屈；足部向下遠離小腿方向伸展的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Inversion",
+      "pronunciation": "",
+      "english_definition": "Turning the sole of the foot inward toward the midline.",
+      "traditional_chinese_definition": "內翻；足底向內朝身體中線轉動的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Eversion",
+      "pronunciation": "",
+      "english_definition": "Turning the sole of the foot outward away from the midline.",
+      "traditional_chinese_definition": "外翻；足底向外遠離身體中線轉動的活動。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Metatarsal base / Base of metatarsal",
+      "pronunciation": "",
+      "english_definition": "The proximal end of a metatarsal that meets the tarsal bones.",
+      "traditional_chinese_definition": "蹠骨基底；蹠骨近端與跗骨相接的部分。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Metatarsal shaft",
+      "pronunciation": "",
+      "english_definition": "The elongated central portion of a metatarsal.",
+      "traditional_chinese_definition": "蹠骨幹；蹠骨中央延長的部分。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Metatarsal head / Head of metatarsal",
+      "pronunciation": "",
+      "english_definition": "The distal rounded end of a metatarsal that meets a proximal phalanx.",
+      "traditional_chinese_definition": "蹠骨頭；蹠骨遠端圓形部分，與近端趾骨相接。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Foot arch",
+      "pronunciation": "",
+      "english_definition": "A curved arrangement of foot bones supported by ligaments and tendons that helps bear weight and provide leverage during walking.",
+      "traditional_chinese_definition": "足弓；由足骨形成、由韌帶和肌腱支撐的弧形結構，有助承重及行走時提供槓桿。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Longitudinal arch",
+      "pronunciation": "",
+      "english_definition": "An arch running lengthwise along the foot; the foot has medial and lateral examples.",
+      "traditional_chinese_definition": "縱弓；沿足部長度方向延伸的足弓，包括內側和外側縱弓。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Medial longitudinal arch",
+      "pronunciation": "",
+      "english_definition": "The inner longitudinal arch of the foot.",
+      "traditional_chinese_definition": "內側縱弓；足部內側沿長度方向形成的足弓。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Lateral longitudinal arch",
+      "pronunciation": "",
+      "english_definition": "The outer longitudinal arch of the foot.",
+      "traditional_chinese_definition": "外側縱弓；足部外側沿長度方向形成的足弓。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Transverse arch",
+      "pronunciation": "",
+      "english_definition": "An arch running across the width of the foot.",
+      "traditional_chinese_definition": "橫弓；橫跨足部寬度方向的足弓。",
+      "context": "Topic: Knee, leg, and foot anatomy. These terms identify the lower-limb bones, joints, ligaments, and movement functions in the lecture.",
+      "academic_area": "Knee, leg, and foot anatomy"
+    },
+    {
+      "term": "Ring-like bone structure",
+      "pronunciation": "",
+      "english_definition": "A bony arrangement shaped like a ring; the pelvic girdle has this overall form.",
+      "traditional_chinese_definition": "環狀骨性結構；骨盆帶整體呈現此形狀。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Pubic symphysis",
+      "pronunciation": "",
+      "english_definition": "The fibrocartilaginous joint between the pubic bodies of the two hip bones.",
+      "traditional_chinese_definition": "恥骨聯合；兩側髖骨恥骨體之間的纖維軟骨關節。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Fusion",
+      "pronunciation": "",
+      "english_definition": "The joining of separate parts into one continuous structure; the three hip-bone parts begin to fuse during adolescence.",
+      "traditional_chinese_definition": "融合；原本分開的部分連成一體，髖骨三部分於青春期開始融合。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Intestines",
+      "pronunciation": "",
+      "english_definition": "The digestive organs in the abdomen and pelvis; the pelvis protects portions of the intestines.",
+      "traditional_chinese_definition": "腸道；位於腹部和骨盆的消化器官，骨盆可保護部分腸道。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Sciatic nerve",
+      "pronunciation": "",
+      "english_definition": "A large nerve passing through the greater sciatic notch toward the lower limb.",
+      "traditional_chinese_definition": "坐骨神經；經坐骨大切跡通往下肢的大型神經。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Hip disorder",
+      "pronunciation": "",
+      "english_definition": "A condition affecting the hip joint or nearby structures; some disorders can be associated with leg-length discrepancy.",
+      "traditional_chinese_definition": "髖部疾病；影響髖關節或附近結構的狀況，部分疾病可伴隨腿長差異。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Blood supply",
+      "pronunciation": "",
+      "english_definition": "The flow of blood to a tissue or organ; interruption can damage the femoral head.",
+      "traditional_chinese_definition": "血液供應；流向組織或器官的血液，受阻可損害股骨頭。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Elderly population",
+      "pronunciation": "",
+      "english_definition": "Older adults considered as a population group in clinical description.",
+      "traditional_chinese_definition": "長者群體；臨床描述中所指的年長成人群組。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Hemispherical",
+      "pronunciation": "",
+      "english_definition": "Shaped like one half of a sphere.",
+      "traditional_chinese_definition": "半球形的；形狀如球體的一半。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Calf",
+      "pronunciation": "",
+      "english_definition": "The posterior lower-leg region, containing muscles that connect to the heel through the Achilles tendon.",
+      "traditional_chinese_definition": "小腿後側；包含經跟腱連接至足跟的肌肉的小腿後方區域。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Palpable bony prominence",
+      "pronunciation": "",
+      "english_definition": "A projecting part of a bone that can be felt through the skin.",
+      "traditional_chinese_definition": "可觸及骨性突起；可隔著皮膚觸摸到的骨性突出部分。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Anterior tibial border",
+      "pronunciation": "",
+      "english_definition": "The sharp front edge of the tibial shaft that can be felt beneath the skin.",
+      "traditional_chinese_definition": "脛骨前緣；脛骨幹前方可在皮下觸摸到的銳利邊緣。",
+      "context": "Topic: Pelvic and clinical anatomy. The lecture uses these terms when describing pelvic joints, palpable landmarks, and hip-related clinical checks.",
+      "academic_area": "Pelvic and clinical anatomy"
+    },
+    {
+      "term": "Shock absorber",
+      "pronunciation": "",
+      "english_definition": "A structure that reduces the impact transmitted through a joint; the knee menisci perform this role.",
+      "traditional_chinese_definition": "減震結構；減少衝擊傳遞的結構，膝半月板具有此作用。",
+      "context": "Topic: Knee joint and movement. The lecture links these terms to knee support, load transfer, and movement control.",
+      "academic_area": "Knee joint and movement"
+    },
+    {
+      "term": "Knee stability",
+      "pronunciation": "",
+      "english_definition": "The ability of the knee joint to maintain alignment during movement and loading.",
+      "traditional_chinese_definition": "膝關節穩定性；膝關節在活動和負重時保持對位的能力。",
+      "context": "Topic: Knee joint and movement. The lecture links these terms to knee support, load transfer, and movement control.",
+      "academic_area": "Knee joint and movement"
+    },
+    {
+      "term": "Leverage",
+      "pronunciation": "",
+      "english_definition": "Mechanical advantage produced when a muscle acts on a bone around a joint.",
+      "traditional_chinese_definition": "槓桿作用；肌肉繞關節作用於骨骼時產生的機械優勢。",
+      "context": "Topic: Knee joint and movement. The lecture links these terms to knee support, load transfer, and movement control.",
+      "academic_area": "Knee joint and movement"
+    },
+    {
+      "term": "Non-weight-bearing",
+      "pronunciation": "",
+      "english_definition": "Not intended or required to support body weight.",
+      "traditional_chinese_definition": "非承重的；不承擔或不需要支撐身體重量的。",
+      "context": "Topic: Knee joint and movement. The lecture links these terms to knee support, load transfer, and movement control.",
+      "academic_area": "Knee joint and movement"
+    },
+    {
+      "term": "Calcaneus",
+      "pronunciation": "",
+      "english_definition": "The largest tarsal bone, below the talus, forming the heel and receiving the Achilles tendon.",
+      "traditional_chinese_definition": "跟骨；位於距骨下方、構成足跟並接受跟腱附著的最大跗骨。",
+      "context": "Topic: Foot and ankle anatomy. The lecture identifies the main foot bones and describes how the ankle transfers load and permits movement.",
+      "academic_area": "Foot and ankle anatomy"
+    },
+    {
+      "term": "Talus",
+      "pronunciation": "",
+      "english_definition": "The superior tarsal bone that receives body weight and articulates with the tibia and fibula.",
+      "traditional_chinese_definition": "距骨；承接身體重量並與脛骨、腓骨相接的上方跗骨。",
+      "context": "Topic: Foot and ankle anatomy. The lecture identifies the main foot bones and describes how the ankle transfers load and permits movement.",
+      "academic_area": "Foot and ankle anatomy"
+    },
+    {
+      "term": "Plane / Gliding joint / Plane (gliding) joint",
+      "pronunciation": "",
+      "english_definition": "A synovial joint with relatively flat surfaces that permit gliding movement, such as the subtalar joint.",
+      "traditional_chinese_definition": "平面／滑動關節；關節面相對平坦並容許滑動的滑膜關節，例如距下關節。",
+      "context": "Topic: Foot and ankle anatomy. The lecture identifies the main foot bones and describes how the ankle transfers load and permits movement.",
+      "academic_area": "Foot and ankle anatomy"
+    },
+    {
+      "term": "Walking leverage",
+      "pronunciation": "",
+      "english_definition": "Mechanical advantage provided by the foot arches as the body moves forward during walking.",
+      "traditional_chinese_definition": "步行槓桿作用；足弓在身體向前行走時提供的機械優勢。",
+      "context": "Topic: Foot arches and gait. The lecture relates the arches to body-weight support and the mechanics of walking.",
+      "academic_area": "Foot arches and gait"
+    }
+  ],
+  "course_short_title": "Anatomy",
+  "session_label": "Lecture 3",
+  "session_type": "Lecture",
+  "session_number": 3
+}
