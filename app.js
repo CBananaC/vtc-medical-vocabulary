@@ -7414,14 +7414,9 @@ setTimeout(() => {
     const repeatBtn = isLatestExactSession(s)
       ? `<button class="ip-action-btn primary" onclick="practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
       : `<button class="ip-action-btn primary" onclick="practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
-    const remainingKeys = remainingPoolKeysForSession(s);
-    const remainingBtn = remainingKeys.length
-      ? `<button class="ip-action-btn remaining" title="Practice untested words from this pool" aria-label="Practice ${remainingKeys.length} untested words from this pool" onclick="practiceStartRemainingFromSession('${escapeHtml(safeId)}')"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3.5 5h17l-6.7 7.4v5.3l-4.1 2v-7.3L3.5 5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg><span>Untested ${remainingKeys.length}</span></button>`
-      : "";
     const retryBtn = wrongKeys.length
       ? `<button class="ip-action-btn danger" onclick="practiceRetryFromSession('${escapeHtml(safeId)}')">Retry ${wrongKeys.length} wrong</button>`
       : "";
-    const actionCount = [repeatBtn, remainingBtn, retryBtn].filter(Boolean).length;
 
     const historyBody = document.getElementById("historyDetailBody");
     try { historyBody.dataset.kind = "session"; } catch {}
@@ -7436,9 +7431,8 @@ setTimeout(() => {
           <div class="ip-hero-sub strong">${escapeHtml(recencyLabel(s.endedAt || s.startedAt))}${s.completed === false ? " · ended early" : ""}</div>
         </div>
         ${wordList}
-        <div class="ip-action-bar ${actionCount === 1 ? "single" : actionCount === 3 ? "has-remaining" : ""}">
+        <div class="ip-action-bar ${retryBtn ? "" : "single"}">
           ${repeatBtn}
-          ${remainingBtn}
           ${retryBtn}
         </div>
       </div>
@@ -20828,25 +20822,42 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     window.renderGoalTab();
   };
 
-  // Aggregate by a legacy grouping dimension (level / topHeader / suggestedCombinedTitle)
-  // but using the applicable-skill model. Visual denominators contain only
-  // terms with a usable image asset.
-  function chartRowsByDimension(field, view) {
+  // Progress follows the same VTC course/session taxonomy as Practice.
+  // Course codes stay internal; rows use the short names shown in filters.
+  function chartRowsByDimension(group, view) {
     const buckets = new Map();
+    const taxonomy = window.vtcFilterTaxonomy || {};
+    const courseValueFor = p => taxonomy.courseFilterValue?.(p) || "";
+    const courseLabelFor = value => taxonomy.courseFilterLabel?.(value) || value || "Course";
+    const typeOrder = { lecture: 0, tutorial: 1, workshop: 2 };
     for (const w of words) {
       const paths = (typeof exactPracticePaths === "function") ? exactPracticePaths(w) : [];
-      const values = new Set();
+      const entries = new Map();
       for (const p of paths) {
-        if (field === "level") values.add(p.level);
-        else if (field === "topHeader") values.add(p.subject);
-        else if (field === "suggestedCombinedTitle") values.add(p.topic);
+        if (normP(p.level) !== "vtc") continue;
+        const courseValue = courseValueFor(p);
+        if (!courseValue) continue;
+        if (group === "course") {
+          entries.set(courseValue, { key: courseValue, label: courseLabelFor(courseValue), course: courseValue });
+        } else if (group === "session") {
+          const session = taxonomy.sessionInfoForPath?.(p);
+          if (!session) continue;
+          const key = JSON.stringify([courseValue, session.type, session.number]);
+          const typeLabel = session.type.charAt(0).toUpperCase() + session.type.slice(1);
+          entries.set(key, {
+            key,
+            label: `${courseLabelFor(courseValue)} · ${typeLabel} ${session.number}`,
+            course: courseValue,
+            type: session.type,
+            number: Number(session.number)
+          });
+        }
       }
       if (view === "visual" && !window.isVisualSkillWord?.(w)) continue;
       const st = skillStatusFor(w, view);
-      for (const v of values) {
-        if (!v) continue;
-        if (!buckets.has(v)) buckets.set(v, { mastered: 0, known: 0, learning: 0, bookmarked: 0, total: 0 });
-        const b = buckets.get(v);
+      for (const entry of entries.values()) {
+        if (!buckets.has(entry.key)) buckets.set(entry.key, { ...entry, mastered: 0, known: 0, learning: 0, bookmarked: 0, total: 0 });
+        const b = buckets.get(entry.key);
         b.total++;
         if (isWordBookmarked(w)) b.bookmarked++;
         if (st === "mastered") b.mastered++;
@@ -20854,44 +20865,70 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         else if (st === "learning") b.learning++;
       }
     }
-    const arr = [...buckets.entries()].map(([k, v]) => ({ name: k, ...v }));
-    if (field === "level") {
-      const order = { Entry: 0, Improver: 1, Advanced: 2 };
-      arr.sort((a, b) => (order[a.name] ?? 99) - (order[b.name] ?? 99) || a.name.localeCompare(b.name));
-    } else {
-      arr.sort((a, b) => a.name.localeCompare(b.name));
-    }
+    const arr = [...buckets.values()].map(({ key, ...row }) => ({ name: key, ...row }));
+    const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+    if (group === "course") arr.sort((a, b) => collator.compare(a.label, b.label));
+    else arr.sort((a, b) => collator.compare(courseLabelFor(a.course), courseLabelFor(b.course))
+      || (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99)
+      || a.number - b.number);
     return arr;
   }
 
   function chartRowsFor(view, group) {
     if (group === "all") return aggregateAll(view);
-    const field = group === "level" ? "level" : group === "subject" ? "topHeader" : "suggestedCombinedTitle";
-    return chartRowsByDimension(field, view);
+    return chartRowsByDimension(group, view);
   }
 
-  let progressGroup = "all"; // "all" | "level" | "subject" | "topic"
+  let progressGroup = "all"; // "all" | "course" | "session"
 
-  function chartGroupField(group) {
-    return group === "level" ? "level" : group === "subject" ? "topHeader" : group === "topic" ? "suggestedCombinedTitle" : "all";
+  function chartSessionParts(name) {
+    try {
+      const parts = JSON.parse(name);
+      if (Array.isArray(parts) && parts.length === 3) return { course: String(parts[0]), type: String(parts[1]), number: String(parts[2]) };
+    } catch {}
+    return null;
+  }
+
+  function chartGroupLabel(group, name) {
+    const taxonomy = window.vtcFilterTaxonomy || {};
+    if (group === "course") return taxonomy.courseFilterLabel?.(name) || name;
+    if (group === "session") {
+      const parts = chartSessionParts(name);
+      if (parts) {
+        const course = taxonomy.courseFilterLabel?.(parts.course) || parts.course;
+        const type = parts.type.charAt(0).toUpperCase() + parts.type.slice(1);
+        return `${course} · ${type} ${parts.number}`;
+      }
+    }
+    return name;
   }
 
   function chartGroupFilter(group, name) {
-    const f = { levels: [], subjectAreas: [], topicGroups: [], statuses: [] };
-    if (group === "level") f.levels = [name];
-    else if (group === "subject") f.subjectAreas = [name];
-    else if (group === "topic") f.topicGroups = [name];
+    const f = { levels: [], courses: [], lectures: [], tutorials: [], workshops: [], topicGroups: [], statuses: [] };
+    if (group === "course") f.courses = [name];
+    else if (group === "session") {
+      const parts = chartSessionParts(name);
+      if (parts && ["lecture", "tutorial", "workshop"].includes(parts.type)) {
+        f.courses = [parts.course];
+        f[`${parts.type}s`] = [parts.number];
+      }
+    }
     return f;
   }
 
   function wordInChartGroup(w, group, name) {
     if (group === "all") return true;
-    const field = chartGroupField(group);
+    const taxonomy = window.vtcFilterTaxonomy || {};
+    const sessionParts = group === "session" ? chartSessionParts(name) : null;
     return exactPracticePaths(w).some(p => {
-      if (field === "level") return p.level === name;
-      if (field === "topHeader") return p.subject === name;
-      if (field === "suggestedCombinedTitle") return p.topic === name;
-      return true;
+      if (normP(p.level) !== "vtc") return false;
+      const courseValue = taxonomy.courseFilterValue?.(p) || "";
+      if (group === "course") return courseValue === name;
+      if (group === "session" && sessionParts) {
+        const session = taxonomy.sessionInfoForPath?.(p);
+        return courseValue === sessionParts.course && session?.type === sessionParts.type && String(session?.number) === sessionParts.number;
+      }
+      return false;
     });
   }
 
@@ -20913,7 +20950,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       return `
         <div class="g-prog-row g-prog-row--tap" onclick="pgOpenChartRowPanel('${safeGroup}','${safeName}')">
           <div class="g-prog-head">
-            <span class="g-prog-name">${escapeHtml(r.name)}</span>
+            <span class="g-prog-name">${escapeHtml(r.label || r.name)}</span>
             <span class="g-prog-count">${done}/${r.total}</span>
           </div>
           <div class="g-prog-bar">
@@ -20942,10 +20979,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const bookmarked = within(words.filter(isWordBookmarked).map(w => w.key));
     const filter = chartGroupFilter(group, name);
     const total = groupSet.size;
-    const labelPrefix = group === "level" ? "Level"
-                      : group === "subject" ? "Subject"
-                      : group === "topic" ? "Topic"
+    const labelPrefix = group === "course" ? "Course"
+                      : group === "session" ? "Session"
                       : "";
+    const displayName = chartGroupLabel(group, name);
     const accKey = `chart:${group}:${name}`;
     // Default collapsed: chart panels can contain long lists.
     if (!ipAccordionState[accKey]) ipAccordionState[accKey] = [];
@@ -20953,7 +20990,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       kind: "chart",
       page: "mastered",
       accordionKey: accKey,
-      heroTitle: labelPrefix ? `${labelPrefix} · ${name}` : "All words",
+      heroTitle: labelPrefix ? `${labelPrefix} · ${displayName}` : "All words",
       heroCount: total,
     };
     pgPanelData = {
@@ -21072,9 +21109,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         </div>
         <div class="g-prog-chart-tabs tab-row" style="margin-top:6px;">
           <button class="${progressGroup === "all" ? "active" : ""}" onclick="progressGroupSet('all')">All</button>
-          <button class="${progressGroup === "level" ? "active" : ""}" onclick="progressGroupSet('level')">Level</button>
-          <button class="${progressGroup === "subject" ? "active" : ""}" onclick="progressGroupSet('subject')">Subject</button>
-          <button class="${progressGroup === "topic" ? "active" : ""}" onclick="progressGroupSet('topic')">Topic</button>
+          <button class="${progressGroup === "course" ? "active" : ""}" onclick="progressGroupSet('course')">Course</button>
+          <button class="${progressGroup === "session" ? "active" : ""}" onclick="progressGroupSet('session')">Session</button>
         </div>
         <div class="g-prog-chart-bars">${rowsHtml(rows, progressView)}</div>
       </div>
@@ -21094,6 +21130,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     pgRefreshAfterChartTab();
   };
   window.progressGroupSet = function(g) {
+    if (!["all", "course", "session"].includes(g)) g = "all";
     progressGroup = g;
     pgRefreshAfterChartTab();
   };
@@ -21725,7 +21762,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       return !!(last && last.sessionId === sessionId && Array.isArray(last.wordKeys) && last.wordKeys.length);
     } catch { return false; }
   }
-  function phRenderCard(s) {
+  function phRenderCard(s, isLatest) {
     const meta = PH_MODES[s.mode] || { ico: "🎮", name: s.mode || "Practice" };
     const correct = (typeof s.correctAnswered === "number") ? s.correctAnswered
                   : (Array.isArray(s.correctKeys) ? s.correctKeys.length : 0);
@@ -21744,7 +21781,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const repeatFn = exactPossible ? "practiceRepeatExactSession" : "practiceRepeatSetupFromSession";
     // The card itself is tappable to open View detail. Buttons stop propagation.
     return `
-      <div class="ph-card" onclick="practiceOpenSessionDetail('${sId}')">
+      <div class="ph-card ${isLatest ? "latest" : ""}" onclick="practiceOpenSessionDetail('${sId}')">
         <div class="ph-card-top">
           <div class="ph-mode">
             <span class="ph-mode-ico">${meta.ico}</span>
@@ -21757,7 +21794,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <div class="ph-actions">
           <button class="ph-btn" onclick="event.stopPropagation();practiceOpenSessionDetail('${sId}')">👁 View</button>
           <button class="ph-btn primary ph-btn-icon" title="${escapeHtml(repeatTitle)}" aria-label="${escapeHtml(repeatTitle)}" onclick="event.stopPropagation();${repeatFn}('${sId}')">${repeatLabel}</button>
-          ${wrong > 0 ? `<button class="ph-btn danger ph-btn-icon" title="Retry ${wrong} wrong words" aria-label="Retry ${wrong} wrong words" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">×</button>` : ""}
+          ${wrong > 0 ? `<button class="ph-btn danger" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">↩︎ ${wrong}</button>` : ""}
         </div>
       </div>
     `;
@@ -21773,23 +21810,26 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
           <div class="ph-sticky-head">
             <div class="ph-title">Practice History</div>
           </div>
-          <div class="ph-empty">No sessions yet. Tap New Practice below.</div>
+          <div class="ph-empty">No sessions yet. Tap + New Practice below.</div>
         </div>
-        <div class="ph-fab-bar"><button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice"><span aria-hidden="true">＋</span><span>New Practice</span></button></div>
+        <div class="ph-fab-bar"><button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button></div>
       `;
       return;
     }
-    const cardsHtml = history.map(s => phRenderCard(s)).join("");
+    const latest = history[0];
+    const rest = history.slice(1);
+    const restCardsHtml = rest.map(s => phRenderCard(s, false)).join("");
     root.innerHTML = `
       <div class="ph-page">
         <div class="ph-sticky-head">
           <div class="ph-title">Practice History</div>
+          ${phRenderCard(latest, true)}
         </div>
-        <div class="ph-feed">${cardsHtml}</div>
+        <div class="ph-feed">${restCardsHtml}</div>
         <div class="ph-feed-padding"></div>
       </div>
       <div class="ph-fab-bar">
-        <button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice"><span aria-hidden="true">＋</span><span>New Practice</span></button>
+        <button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button>
       </div>
     `;
   }
@@ -22529,8 +22569,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       padding: 0 16px 12px;
       box-sizing: border-box;
     }
-    /* Keep the title in normal flow. Avoid fixed-position height measurement
-       here: iPhone standalone safe-area can create a huge gap before the feed. */
+    /* Header and latest card stay in normal flow to avoid a false gap before
+       the remaining history cards on iPhone standalone. */
     .ph-sticky-head {
       position: relative;
       max-width: 480px;
@@ -22559,6 +22599,12 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       position: relative;
       transition: transform .15s, box-shadow .15s;
       cursor: pointer;
+    }
+    .ph-card.latest {
+      border-width: 1.5px;
+      border-color: var(--purple-deep, #7C3AED);
+      box-shadow: 0 10px 28px rgba(60, 30, 120, 0.18);
+      margin: 0;
     }
     .ph-card:active { transform: scale(.99); }
     .ph-card-top {
@@ -22612,34 +22658,28 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       min-width: 0;
     }
     .ph-btn-icon {
-      width: 40px;
-      height: 40px;
-      padding: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 19px;
+      font-size: 18px;
       line-height: 1;
       letter-spacing: 0;
     }
     .ph-btn:active { transform: scale(.96); }
     .ph-btn:hover { background: #F3E8FF; }
-    /* Repeat action — transparent light blue. */
+    /* Repeat action — soft mint. */
     .ph-btn.primary {
-      background: rgba(147, 197, 253, 0.20);
-      color: #3182CE;
-      border-color: rgba(96, 165, 250, 0.42);
+      background: #CCFBF1;
+      color: #115E59;
+      border-color: #99F6E4;
       box-shadow: none;
     }
-    .ph-btn.primary:hover { background: rgba(147, 197, 253, 0.32); }
-    /* Retry action — transparent light red. */
+    .ph-btn.primary:hover { background: #99F6E4; }
+    /* Retry action — soft coral. */
     .ph-btn.danger {
-      background: rgba(252, 165, 165, 0.18);
-      color: #E05252;
-      border-color: rgba(248, 113, 113, 0.40);
+      background: #FFE4E6;
+      color: #BE123C;
+      border-color: #FECDD3;
     }
-    .ph-btn.danger:hover { background: rgba(252, 165, 165, 0.30); }
-    .ph-feed-padding { height: calc(156px + env(safe-area-inset-bottom, 0px)); }
+    .ph-btn.danger:hover { background: #FECDD3; }
+    .ph-feed-padding { height: 110px; }
     .ph-empty {
       padding: 28px 16px;
       text-align: center;
@@ -22647,42 +22687,35 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
     .ph-fab-bar {
       position: fixed;
-      left: 0;
-      right: 0;
+      left: 0; right: 0;
       bottom: calc(82px + env(safe-area-inset-bottom, 0px));
-      width: 100%;
-      max-width: 480px;
-      margin: 0 auto;
+      max-width: 480px; margin: 0 auto;
       padding: 8px 18px;
-      box-sizing: border-box;
-      z-index: 55;
-      display: flex;
-      justify-content: center;
+      z-index: 50;
+      display: flex; justify-content: flex-end;
       pointer-events: none;
     }
     .ph-fab-btn {
       pointer-events: auto;
-      width: 100%;
-      min-width: 0;
-      height: 54px;
-      padding: 0 18px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 9px;
       background: linear-gradient(135deg, #A78BFA, #F472B6);
       color: white;
       border: none;
-      border-radius: 16px;
-      font-size: 16px;
-      font-weight: 900;
+      border-radius: 999px;
+      width: 58px;
+      height: 58px;
+      min-width: 58px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 34px; font-weight: 900;
       line-height: 1;
       font-family: inherit;
       box-shadow: 0 12px 30px rgba(60, 30, 120, 0.34);
       cursor: pointer;
       transition: transform .12s, box-shadow .12s;
     }
-    .ph-fab-btn:active { transform: scale(.98); }
+    .ph-fab-btn:active { transform: scale(.96); }
 
     /* Word sheet: per-skill chip row */
     .ws-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
@@ -22884,11 +22917,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const masteredCount = pgMasteredKeys().length;
     const meaningKnown = pgMeaningKnownOnly().length;
     const spellingKnown = pgSpellingKnownOnly().length;
-    const visualKnown = pgVisualKnownOnly().length;
     const meaningLearning = pgMeaningLearning().length;
     const spellingLearning = pgSpellingLearning().length;
-    const visualLearning = pgVisualLearning().length;
     const visualEligible = words.filter(w => window.isVisualSkillWord?.(w)).length;
+    const visualProgressed = words.filter(w => window.isVisualSkillWord?.(w) && window.__visualStatus(w) !== "not_practiced").length;
 
     root.innerHTML = `
       <div class="pg-page">
@@ -22922,10 +22954,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                 <div class="pg-num">${spellingKnown}</div>
                 <div class="pg-label">spelling</div>
               </div>
-              <div class="pg-rect-cell">
-                <div class="pg-num">${visualKnown}<span style="font-size:11px;opacity:.7">/${visualEligible}</span></div>
-                <div class="pg-label">visual known</div>
-              </div>
             </button>
 
             <button class="pg-rect pg-card-learning" onclick="pgOpenLearningPanel('meaning')">
@@ -22938,9 +22966,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                 <div class="pg-num">${spellingLearning}</div>
                 <div class="pg-label">spelling</div>
               </div>
+            </button>
+
+            <button class="pg-rect pg-card-visual" onclick="pgOpenVisualSummaryPanel()">
+              <div class="pg-rect-title">Visual</div>
               <div class="pg-rect-cell">
-                <div class="pg-num">${visualLearning}<span style="font-size:11px;opacity:.7">/${visualEligible}</span></div>
-                <div class="pg-label">visual learning</div>
+                <div class="pg-num">${visualProgressed}<span style="font-size:11px;opacity:.7">/${visualEligible}</span></div>
+                <div class="pg-label">started</div>
               </div>
             </button>
           </div>
@@ -23136,7 +23168,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (pageKey === "mastered" || isMastered) status = "mastered";
     else if (pageKey === "meaningKnown") status = isCalendar ? "meaning" : "known";
     else if (pageKey === "spellingKnown") status = isCalendar ? "spelling" : "known";
-    else if (pageKey === "meaningLearning" || pageKey === "spellingLearning") status = "learning";
+    else if (pageKey === "visualKnown") status = "known";
+    else if (pageKey === "meaningLearning" || pageKey === "spellingLearning" || pageKey === "visualLearning") status = "learning";
     else if (pageKey === "untouched") status = "untouched";
     else if (isKnown) status = "known";
     else if (isLearning) status = "learning";
@@ -23303,6 +23336,42 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                  practiceLabel: `Practice these ${v.length} visual-known`,
                  keys: v, chipClass: "ip-chip-known", chipText: "✓",
                  practicePool: v, practiceMode: "whoami" },
+    };
+    pgRenderPanel();
+  };
+  window.pgOpenVisualSummaryPanel = function() {
+    const known = words.filter(w => window.isVisualSkillWord?.(w) && window.__visualStatus(w) === "known")
+      .map(w => w.key).sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const learning = pgVisualLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const accKey = "summary:visual";
+    if (!ipAccordionState[accKey]) ipAccordionState[accKey] = [];
+    pgCurrentPanel = {
+      kind: "visual",
+      page: "visualKnown",
+      accordionKey: accKey,
+      heroTitle: "🖼 Visual",
+      heroCount: new Set([...known, ...learning]).size,
+      subtitle: "Visual skill progress",
+    };
+    pgPanelData = {
+      visualKnown: {
+        pageKey: "visualKnown",
+        accordionLabel: "Known",
+        practiceLabel: `Practice these ${known.length} visual-known`,
+        keys: known,
+        noChip: true,
+        practicePool: known,
+        practiceMode: "whoami",
+      },
+      visualLearning: {
+        pageKey: "visualLearning",
+        accordionLabel: "Learning",
+        practiceLabel: `Practice these ${learning.length} visual-learning`,
+        keys: learning,
+        practicePool: learning,
+        practiceMode: "whoami",
+        streakSkill: "visual",
+      },
     };
     pgRenderPanel();
   };
@@ -23504,6 +23573,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     .pg-card-learning .pg-num        { color: #BE123C; }
     .pg-card-learning .pg-rect-title { color: #881337; }
     .pg-card-learning .pg-label      { color: #E11D48; }
+    .pg-card-visual { background: #E0F2FE; border-color: #BAE6FD; }
+    .pg-card-visual .pg-num { color: #0369A1; }
+    .pg-card-visual .pg-rect-title,
+    .pg-card-visual .pg-label { color: #075985; }
 
     .pg-card-sessions .pg-num  { color: #7C3AED; }
     .pg-card-sessions .pg-label{ color: #8B5CF6; }
@@ -24091,8 +24164,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       z-index: 5;
     }
     .ip-action-bar.single { grid-template-columns: 1fr; }
-    .ip-action-bar.has-remaining { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-    .ip-action-bar.has-remaining .ip-action-btn { padding: 12px 4px; font-size: 11px; }
     .ip-action-btn {
       border-radius: 14px;
       padding: 14px 14px;
@@ -24114,17 +24185,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       color: #BE123C;
       border-color: #FECDD3;
     }
-    .ip-action-btn.remaining {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 5px;
-      background: #E0F2FE;
-      color: #0369A1;
-      border-color: #BAE6FD;
-    }
-    .ip-action-btn.remaining svg { flex: 0 0 18px; }
-
     /* === Tab strip on Known/Learning panels — reuse chart segmented look === */
     .ip-panel-tabs {
       margin: 0 0 14px;
@@ -24514,7 +24574,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   var LOG = "[sync v6]";
   var SCHEMA = "ielts-vocab-sync-v6";
-  window.__APP_BUILD = "v6-build-20260923-visual-skill-v1";
+  window.__APP_BUILD = "v6-build-20260923-progress-course-session-history-v1";
   try { console.log("%c[build] " + window.__APP_BUILD, "color:#16a34a;font-weight:bold"); } catch(e){}
 
   // ---- canonical localStorage keys ----------------------------------------
