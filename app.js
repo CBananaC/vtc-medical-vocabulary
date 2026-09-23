@@ -5948,19 +5948,24 @@ setTimeout(() => {
   // ── Layer 2: Practice type + inline options ──────────────────
   function renderLayer2(root) {
     const pool = wizardPool();
+    const isRemainingPool = Array.isArray(wizard.poolOverrideKeys);
     const exactRepeatWords = Array.isArray(wizard.repeatPoolKeys)
       ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
       : [];
-    const maxLen = wizard.repeatPoolKeys
+    const maxLen = isRemainingPool
+      ? Math.max(1, Math.min(10, pool.length))
+      : wizard.repeatPoolKeys
       ? Math.max(1, pool.length || exactRepeatWords.length)
       : pool.length;
-    if (wizard.length < 1 || wizard.length > maxLen) wizard.length = Math.min(DEFAULT_LENGTH, maxLen);
+    if (wizard.length < 1 || wizard.length > maxLen) wizard.length = Math.min(isRemainingPool ? 10 : DEFAULT_LENGTH, maxLen);
     const poolKeys = pool.map(w => w.key);
 
     const modeCards = MODES.map(m => {
       const modePool = practicePoolForMode(pool, m.id);
       const modePoolKeys = modePool.map(w => w.key);
-      const modeMaxLen = wizard.repeatPoolKeys
+      const modeMaxLen = isRemainingPool
+        ? Math.max(1, Math.min(10, modePool.length || exactRepeatWords.length))
+        : wizard.repeatPoolKeys
         ? Math.max(1, modePool.length || exactRepeatWords.length)
         : Math.max(1, modePool.length);
       const isSelected = wizard.mode === m.id;
@@ -6199,7 +6204,11 @@ setTimeout(() => {
       return;
     }
     const maxLen = Math.max(pool.length, exactRepeatWords.length);
-    const length = Math.min(Math.max(1, wizard.length), maxLen);
+    const remainingPoolLimit = Array.isArray(wizard.poolOverrideKeys) ? 10 : maxLen;
+    const length = Math.min(Math.max(1, wizard.length), maxLen, remainingPoolLimit);
+    const sourcePoolWords = Array.isArray(wizard.repeatPoolKeys) && exactRepeatWords.length
+      ? exactRepeatWords
+      : basePool;
 
     const cfg = {
       filter: wizard.filter,
@@ -6234,6 +6243,7 @@ setTimeout(() => {
       muteAudio: cfg.muteAudio === true,
       poolDescription: `${wizard.poolOverrideKeys ? "Remaining untested · " : ""}${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
       poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling, cfg.muteAudio),
+      poolWordKeys: sourcePoolWords.map(w => w.key),
       initialWords
     });
   };
@@ -6243,6 +6253,11 @@ setTimeout(() => {
   // ============================================================
   function startPracticeSession(opts) {
     const { mode, pool, length, studyUntilMastered, spellTillRemember, repeatWrongSpelling, muteAudio, poolDescription } = opts;
+    const sourcePoolWordKeys = [...new Set((Array.isArray(opts.poolWordKeys)
+      ? opts.poolWordKeys
+      : (Array.isArray(pool) ? pool.map(w => w && w.key) : []))
+      .map(String)
+      .filter(key => words.some(w => w.key === key)))];
     const initial = Array.isArray(opts.initialWords) && opts.initialWords.length
       ? opts.initialWords.slice(0, length)
       : sample(pool, length);
@@ -6255,6 +6270,7 @@ setTimeout(() => {
     window.game = {
       mode,
       pool,                // full pool (for distractor sampling)
+      sourcePoolWordKeys,  // candidate pool before mode-specific eligibility filtering
       queue: initial,      // ordered queue; SUM requeues wrong answers randomly later
       idx: 0,
       correct: 0,
@@ -6866,6 +6882,10 @@ setTimeout(() => {
     if (!g) return null;
     const wrongKeys = [...g.wrongFirstTry];
     const correctKeys = Object.keys(g.perWord || {}).filter(k => g.perWord[k]?.firstTryCorrect === true);
+    const sourcePoolWordKeys = [...new Set((Array.isArray(g.sourcePoolWordKeys)
+      ? g.sourcePoolWordKeys
+      : (Array.isArray(g.pool) ? g.pool.map(w => w && w.key) : []))
+      .filter(Boolean))];
     return {
       id: g.sessionId,
       startedAt: g.startedAt,
@@ -6873,11 +6893,11 @@ setTimeout(() => {
       mode: g.mode,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig || null,
-      poolSize: g.pool.length,
+      poolSize: sourcePoolWordKeys.length,
       sessionLength: g.sessionLength,
       loadedWordKeys: Object.keys(g.perWord || {}),
-      poolWordKeys: g.pool.length > g.sessionLength
-        ? [...new Set((Array.isArray(g.pool) ? g.pool : []).map(w => w && w.key).filter(Boolean))]
+      poolWordKeys: sourcePoolWordKeys.length > g.sessionLength
+        ? sourcePoolWordKeys
         : [],
       studyUntilMastered: g.studyUntilMastered,
       spellTillRemember: g.spellTillRemember,
@@ -7054,6 +7074,7 @@ setTimeout(() => {
       muteAudio: g.audioMuted === true,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig,
+      poolWordKeys: g.sourcePoolWordKeys,
       initialWords
     });
   };
@@ -7287,6 +7308,11 @@ setTimeout(() => {
       const status = s.completed === false ? " · ended early" : "";
       const wrongCount = (s.wrongKeys || []).length;
       const exact = isLatestExactSession(s);
+      const remainingCount = remainingPoolKeysForSession(s).length;
+      const filterIcon = `<svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="M3 5h18l-7 8v5l-4 2v-7L3 5z"></path></svg>`;
+      const remainingBtn = remainingCount > 0
+        ? `<button class="hv-session-btn remaining" title="Practice ${remainingCount} untested words from this pool" aria-label="Practice ${remainingCount} untested words from this pool" onclick="event.stopPropagation();practiceStartRemainingFromSession('${escapeHtml(safeId)}')">${filterIcon}<span>${remainingCount} left</span></button>`
+        : `<button class="hv-session-btn remaining" title="No untested words are available for this pool" aria-label="No untested words are available for this pool" disabled>${filterIcon}<span>0 left</span></button>`;
       const repeatBtn = exact
         ? `<button class="hv-session-btn repeat-exact" onclick="event.stopPropagation();practiceRepeatExactSession('${escapeHtml(safeId)}')">Repeat exact set</button>`
         : `<button class="hv-session-btn repeat-setup" onclick="event.stopPropagation();practiceRepeatSetupFromSession('${escapeHtml(safeId)}')">Repeat setup</button>`;
@@ -7302,7 +7328,7 @@ setTimeout(() => {
           <div class="hv-session-meta">${escapeHtml(sessionOptionLine(s))}${exact ? " · exact words saved" : ""}${status}</div>
           <div class="hv-session-foot"><span>${recencyLabel(s.endedAt || s.startedAt)}</span></div>
           <div class="hv-session-actions">
-            <button class="hv-session-btn view" onclick="event.stopPropagation();practiceOpenSessionDetail('${escapeHtml(safeId)}')">View</button>
+            ${remainingBtn}
             ${repeatBtn}
             ${redoBtn}
           </div>
@@ -7483,15 +7509,14 @@ setTimeout(() => {
     if (!remainingKeys.length) { toast("No untested words remain in this pool"); return; }
 
     const cfg = sessionPoolConfig(s);
-    const mode = cfg.mode || s.mode || "wordToMeaning";
     wizard = {
       step: 2,
       filter: cloneFilterConfig(cfg.filter || emptyFilter()),
-      mode,
-      length: Math.max(1, Math.min(Number(s.sessionLength || DEFAULT_LENGTH), remainingKeys.length)),
-      studyUntilMastered: mode === "spelling" ? false : !!cfg.studyUntilMastered,
+      mode: null,
+      length: Math.min(10, remainingKeys.length),
+      studyUntilMastered: cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
-      repeatWrongSpelling: mode === "spelling" && cfg.repeatWrongSpelling !== false,
+      repeatWrongSpelling: cfg.repeatWrongSpelling !== false,
       muteAudio: cfg.muteAudio === true,
       repeatPoolKeys: null,
       poolOverrideKeys: remainingKeys
