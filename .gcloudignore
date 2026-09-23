@@ -24,6 +24,12 @@ vocab_sync_tokens.local.json
 *.backup.json
 *.local.json
 
+data/_original/
+data/FILE_NAME_MAP.md
+whoami-assets/
+prototype-v1/
+sample_api_demo.html
+
 PROJECT_DESCRIPTION.md
 PROJECT_LOG.md
 AGENTS.md
