@@ -2170,11 +2170,13 @@ def _v6_merge_progress(a, b) -> Dict[str, Any]:
         ra = a.get(k) if _v6_is_obj(a.get(k)) else {}
         rb = b.get(k) if _v6_is_obj(b.get(k)) else {}
         merged: Dict[str, Any] = {}
-        for sk in ("matching", "wordToMeaning", "meaningToWord", "spelling"):
+        for sk in ("matching", "wordToMeaning", "meaningToWord", "spelling", "whoami"):
             if _v6_is_obj(ra.get(sk)) or _v6_is_obj(rb.get(sk)):
                 merged[sk] = _v6_merge_block(ra.get(sk), rb.get(sk))
         merged["_consecMeaning"] = max(int(ra.get("_consecMeaning") or 0), int(rb.get("_consecMeaning") or 0))
         merged["_consecSpelling"] = max(int(ra.get("_consecSpelling") or 0), int(rb.get("_consecSpelling") or 0))
+        merged["_consecWhoAmI"] = max(int(ra.get("_consecWhoAmI") or 0), int(rb.get("_consecWhoAmI") or 0))
+        merged["_whoamiKnown"] = bool(ra.get("_whoamiKnown") or rb.get("_whoamiKnown"))
         if _v6_progress_meaningful(merged):  # drop junk so Drive converges (no perpetual re-download)
             out[k] = merged
     return out
@@ -2229,7 +2231,7 @@ def _v6_merge_daily(a, b) -> Dict[str, Any]:
         m = {**ra, **rb}
         if _v6_is_obj(ra.get("events")) or _v6_is_obj(rb.get("events")):
             ev = {}
-            for f in ("meaningKnown", "spellingKnown", "mastered"):
+            for f in ("meaningKnown", "spellingKnown", "visualKnown", "mastered", "meaningLearning", "spellingLearning", "visualLearning"):
                 av = (ra.get("events") or {}).get(f) or []
                 bv = (rb.get("events") or {}).get(f) or []
                 ev[f] = sorted(set(_sync_arr(av)) | set(_sync_arr(bv)))
@@ -2309,6 +2311,7 @@ def api_sync_merge():
         merged["syncInfo"] = {
             "knownMeaningCount": len(merged.get("knownMeaning") or {}),
             "knownSpellingCount": len(merged.get("knownSpelling") or {}),
+            "knownVisualCount": sum(1 for row in (merged.get("progress") or {}).values() if _v6_is_obj(row) and row.get("_whoamiKnown")),
             "learningCount": len(merged.get("progress") or {}),
             "sessionCount": len((merged.get("practice") or {}).get("sessions") or []),
             "lifetimeSessions": (merged.get("practice") or {}).get("lifetimeSessions"),
