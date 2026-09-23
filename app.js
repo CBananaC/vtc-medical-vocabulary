@@ -5653,84 +5653,16 @@ setTimeout(() => {
     return false;
   };
 
-  // ── Layer 0: Compact history quicklook + Previous Practice + New Practice ──
-  // Shown only when the user has previous activity (history sessions or last cfg).
+  // ── Layer 0: Practice history list + New Practice ──
+  // Shown only when the learner has previous activity or a saved setup.
   function renderLayer0(root) {
     const hist = [...loadHistory()].reverse(); // newest first
-    const review = wordsToReview();
-    const mastered = masteredWords();
-
-    // === Compact history quicklook (3 stats, tappable) ===
-    const historyQuicklook = `
-      <div class="l0-history-card" onclick="practiceOpenHistoryPanel()">
-        <div class="l0-history-head">
-          <div class="l0-history-title">📊 Practice history</div>
-          <div class="l0-history-arrow">›</div>
-        </div>
-        <div class="l0-history-stats">
-          <div class="l0-history-stat">
-            <div class="v">${hist.length}</div>
-            <div class="l">Sessions</div>
-          </div>
-          <div class="l0-history-stat warn">
-            <div class="v">${review.length}</div>
-            <div class="l">Learning</div>
-          </div>
-          <div class="l0-history-stat good">
-            <div class="v">${mastered.length}</div>
-            <div class="l">Mastered</div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    // === Previous Practice card with View + Retry buttons ===
-    const cfg = preferredPreviousPracticeConfig();
-    let prevPracticeHtml = "";
-    if (cfg && cfg.mode) {
-      const pool = resolvePool(cfg.filter || emptyFilter());
-      const modeMeta = MODES.find(m => m.id === cfg.mode);
-      if (modeMeta && pool.length > 0) {
-        const length = Math.min(cfg.length || DEFAULT_LENGTH, pool.length);
-        const last = hist[0];
-        const scoreHtml = last
-          ? `<span class="l0-prev-score">${last.correctAnswered}/${last.sessionLength} · ${Math.round(last.correctAnswered / last.sessionLength * 100)}%</span>`
-          : "";
-        const lastSessionId = last ? String(last.id || "").replace(/'/g, "\\'") : "";
-        const viewBtn = last
-          ? `<button class="l0-prev-btn view" onclick="practiceOpenSessionDetail('${escapeHtml(lastSessionId)}')">👁 View</button>`
-          : `<button class="l0-prev-btn view" disabled>👁 View</button>`;
-        const wrongCount = last ? (last.wrongKeys || []).length : 0;
-        const repeatPrevBtn = last
-          ? (isLatestExactSession(last)
-            ? `<button class="l0-prev-btn repeat-exact" onclick="practiceRepeatExactSession('${escapeHtml(lastSessionId)}')">Repeat exact set</button>`
-            : `<button class="l0-prev-btn repeat-setup" onclick="practiceRepeatSetupFromSession('${escapeHtml(lastSessionId)}')">Repeat setup</button>`)
-          : `<button class="l0-prev-btn retry" onclick="practiceQuickStart()">▶ Repeat</button>`;
-        const retryBtn = wrongCount > 0
-          ? `<button class="l0-prev-btn retry" onclick="practiceRetryFromSession('${escapeHtml(lastSessionId)}')">↻ Retry ${wrongCount} wrong</button>`
-          : "";
-        prevPracticeHtml = `
-          <div class="l0-prev">
-            <div class="l0-prev-label">Previous Practice</div>
-            <div class="l0-prev-title">${modeMeta.ico} ${escapeHtml(modeMeta.name)} · ${length} words ${scoreHtml}</div>
-            <div class="l0-prev-meta">${escapeHtml(displayPracticeDescription(cfg))}${cfg.studyUntilMastered ? " · 🔁 Until mastered" : ""}${cfg.spellTillRemember ? " · Spell till know" : ""}</div>
-            <div class="l0-prev-actions">
-              ${viewBtn}
-              ${repeatPrevBtn}
-              ${retryBtn}
-            </div>
-          </div>
-        `;
-      }
-    }
-
     root.innerHTML = `
       <div class="pw-page">
         <div class="pw-hero">
-          <div class="pw-title">Practice</div>
+          <div class="pw-title">Practice History</div>
         </div>
-        ${historyQuicklook}
-        ${prevPracticeHtml}
+        <div class="l0-session-feed">${renderSessionsTab(hist, true)}</div>
         <div class="l0-newbtn-wrap">
           <button class="l0-new-btn" onclick="practiceStartFresh()">＋ New Practice</button>
         </div>
@@ -7283,11 +7215,11 @@ setTimeout(() => {
 
 
   // --- Tab renderers (used by renderLayer0 inline history) ---
-  function renderSessionsTab(hist) {
+  function renderSessionsTab(hist, showAll = false) {
     if (hist.length === 0) {
       return `<div style="padding:16px 20px"><div class="hv-empty">No sessions yet. Start practicing to build your history.</div></div>`;
     }
-    const sessionsShown = hist.slice(0, historyPageCount * HISTORY_PAGE_SIZE);
+    const sessionsShown = showAll ? hist : hist.slice(0, historyPageCount * HISTORY_PAGE_SIZE);
     const sessionItems = sessionsShown.map(s => {
       const m = modeMetaFor(s.mode);
       const acc = s.sessionLength > 0 ? Math.round((s.correctAnswered / s.sessionLength) * 100) : 0;
@@ -7316,7 +7248,7 @@ setTimeout(() => {
           </div>
         </div>`;
     }).join("");
-    const moreBtn = hist.length > sessionsShown.length
+    const moreBtn = !showAll && hist.length > sessionsShown.length
       ? `<button class="hv-loadmore" onclick="practiceLoadMoreHistory()">Load more (${hist.length - sessionsShown.length} left)</button>`
       : "";
     return `<div class="hv-tabbody"><div class="hv-session-list" style="padding:8px 20px 0">${sessionItems}</div>${moreBtn}</div>`;
@@ -21623,9 +21555,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   window.__myPracticeOpenSessionDetail = window.practiceOpenSessionDetail;
 
   // ---- 10a2. Practice History page redesign --------------------------------
-  // Replaces the legacy Layer 0 (history quicklook + previous practice + new
-  // practice button) with a flat list of session cards: latest emphasized,
-  // others with a tight 12px deck-overlap. A fixed [+ New Practice] floats
+  // Replaces the legacy Layer 0 with one uniform card for every session.
+  // A fixed [+ New Practice] floats
   // above the navbar. View / Repeat / Retry-wrong actions live inline on each
   // card. We hook by wrapping window.renderPracticeRoot: call the original to
   // let it dispatch wizard step, then if it rendered Layer 0 (detected by the
@@ -21656,7 +21587,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       return !!(last && last.sessionId === sessionId && Array.isArray(last.wordKeys) && last.wordKeys.length);
     } catch { return false; }
   }
-  function phRenderCard(s, isLatest) {
+  function phRenderCard(s) {
     const meta = PH_MODES[s.mode] || { ico: "🎮", name: s.mode || "Practice" };
     const correct = (typeof s.correctAnswered === "number") ? s.correctAnswered
                   : (Array.isArray(s.correctKeys) ? s.correctKeys.length : 0);
@@ -21675,7 +21606,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const repeatFn = exactPossible ? "practiceRepeatExactSession" : "practiceRepeatSetupFromSession";
     // The card itself is tappable to open View detail. Buttons stop propagation.
     return `
-      <div class="ph-card ${isLatest ? "latest" : ""}" onclick="practiceOpenSessionDetail('${sId}')">
+      <div class="ph-card" onclick="practiceOpenSessionDetail('${sId}')">
         <div class="ph-card-top">
           <div class="ph-mode">
             <span class="ph-mode-ico">${meta.ico}</span>
@@ -21710,16 +21641,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       `;
       return;
     }
-    const latest = history[0];
-    const rest = history.slice(1);
-    const restCardsHtml = rest.map(s => phRenderCard(s, false)).join("");
+    const cardsHtml = history.map(s => phRenderCard(s)).join("");
     root.innerHTML = `
       <div class="ph-page">
         <div class="ph-sticky-head">
           <div class="ph-title">Practice History</div>
-          ${phRenderCard(latest, true)}
         </div>
-        <div class="ph-feed">${restCardsHtml}</div>
+        <div class="ph-feed">${cardsHtml}</div>
         <div class="ph-feed-padding"></div>
       </div>
       <div class="ph-fab-bar">
@@ -22460,9 +22388,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       padding: 0 16px 12px;
       box-sizing: border-box;
     }
-    /* Header + latest card stay in normal flow. Avoid fixed-position height
-       measurement here: iPhone standalone safe-area makes that create a huge
-       fake gap between the latest card and the next card. */
+    /* Keep the title in normal flow. Avoid fixed-position height measurement
+       here: iPhone standalone safe-area can create a huge gap before the feed. */
     .ph-sticky-head {
       position: relative;
       max-width: 480px;
@@ -22491,12 +22418,6 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       position: relative;
       transition: transform .15s, box-shadow .15s;
       cursor: pointer;
-    }
-    .ph-card.latest {
-      border-width: 1.5px;
-      border-color: var(--purple-deep, #7C3AED);
-      box-shadow: 0 10px 28px rgba(60, 30, 120, 0.18);
-      margin: 0;
     }
     .ph-card:active { transform: scale(.99); }
     .ph-card-top {
