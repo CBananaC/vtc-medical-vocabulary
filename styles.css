@@ -372,14 +372,29 @@
   .spell-input.is-repeat-cooling {
     opacity: 1;
     cursor: wait;
-    background-color: #d1d5db;
-    background-image: linear-gradient(to right, var(--spelling-repeat-cooldown-color, #fff), var(--spelling-repeat-cooldown-color, #fff));
+    caret-color: var(--purple);
+    border-color: #A78BFA;
+    background-color: #F3E8FF;
+    background-image:
+      linear-gradient(to right, var(--spelling-repeat-cooldown-color, #fff) 0%, var(--spelling-repeat-cooldown-color, #fff) calc(100% - 18px), rgba(255, 255, 255, .95) calc(100% - 8px), #C4B5FD 100%),
+      linear-gradient(110deg, #FBF9FF 0%, #F3E8FF 55%, #E9D5FF 100%);
     background-repeat: no-repeat;
-    background-size: 0% 100%;
-    animation: spelling-repeat-cooldown-fill var(--spelling-repeat-cooldown-duration, 1s) linear forwards;
+    background-size: 0% 100%, 100% 100%;
+    animation:
+      spelling-repeat-cooldown-fill var(--spelling-repeat-cooldown-duration, 1s) linear forwards,
+      spelling-repeat-cooldown-border var(--spelling-repeat-cooldown-duration, 1s) linear forwards,
+      spelling-repeat-cooldown-glow var(--spelling-repeat-cooldown-duration, 1s) ease-out forwards;
   }
   @keyframes spelling-repeat-cooldown-fill {
-    to { background-size: 100% 100%; }
+    from { background-size: 0% 100%, 100% 100%; }
+    to { background-size: 100% 100%, 100% 100%; }
+  }
+  @keyframes spelling-repeat-cooldown-border {
+    to { border-color: var(--spelling-repeat-cooldown-border, var(--line)); }
+  }
+  @keyframes spelling-repeat-cooldown-glow {
+    from { box-shadow: 0 0 0 4px rgba(167, 139, 250, .28), 0 4px 14px rgba(139, 92, 246, .16); }
+    to { box-shadow: 0 0 0 2px rgba(167, 139, 250, .1), 0 1px 4px rgba(139, 92, 246, .05); }
   }
   .game-bottom { padding: 16px 20px calc(20px + var(--safe-bottom)); display: flex; gap: 10px; }
   .game-btn { flex: 1; padding: 16px; border-radius: 14px; font-weight: 800; font-size: 15px; cursor: pointer; border: none; }
