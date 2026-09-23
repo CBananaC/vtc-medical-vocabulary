@@ -5124,7 +5124,8 @@ setTimeout(() => {
   const SKILL_VIEW_LABELS = {
     all: "All",
     meaning: "Meaning",
-    spelling: "Spelling"
+    spelling: "Spelling",
+    visual: "Visual"
   };
 
   const SOURCE_TYPE_LABELS = {
@@ -5239,6 +5240,7 @@ setTimeout(() => {
     return mode === "whoami" ? pool.filter(isWhoAmIWord) : pool;
   }
 
+  window.isVisualSkillWord = isWhoAmIWord;
   window.whoAmIAssetsForWord = whoAmIAssetsForWord;
 
   function emptyFilter() {
@@ -5275,18 +5277,32 @@ setTimeout(() => {
     return correct > 0 ? "known" : "not_practiced";
   }
 
+  function visualPracticeStatus(w) {
+    if (!w || !w.key || !isWhoAmIWord(w)) return "not_practiced";
+    const r = progress[w.key] || {};
+    if (r._whoamiKnown) return "known";
+    const attempts = r.whoami?.attempts || 0;
+    const correct = r.whoami?.correct || 0;
+    const streak = r._consecWhoAmI || 0;
+    if (attempts <= 0) return "not_practiced";
+    if (attempts > correct) return streak >= 3 ? "known" : "learning";
+    return correct > 0 ? "known" : "not_practiced";
+  }
+
   function overallPracticeStatus(w) {
     const m = meaningPracticeStatus(w);
     const s = spellingPracticeStatus(w);
-    if (m === "known" && s === "known") return "mastered";
-    if (m === "known" || s === "known") return "known";
-    if (m === "learning" || s === "learning") return "learning";
+    const v = isWhoAmIWord(w) ? visualPracticeStatus(w) : "not_applicable";
+    const statuses = [m, s, ...(v === "not_applicable" ? [] : [v])];
+    if (statuses.every(status => status === "known")) return "mastered";
+    if (statuses.includes("known")) return "known";
+    if (statuses.includes("learning")) return "learning";
     return "not_practiced";
   }
 
   function selectedPracticeSkillView(filter) {
     const v = (filter?.skillViews || [])[0];
-    return v === "meaning" || v === "spelling" ? v : "all";
+    return v === "meaning" || v === "spelling" || v === "visual" ? v : "all";
   }
 
   function selectedPracticeSourceType(filter) {
@@ -5297,13 +5313,14 @@ setTimeout(() => {
   function practiceStatusForView(w, view) {
     if (view === "meaning") return meaningPracticeStatus(w);
     if (view === "spelling") return spellingPracticeStatus(w);
+    if (view === "visual") return visualPracticeStatus(w);
     return overallPracticeStatus(w);
   }
 
   function wordMatchesPracticeStatus(w, status, view) {
     if (!status || status === "__all") return true;
     if (status === "bookmarked") return isWordBookmarked(w);
-    if (view === "meaning" || view === "spelling") {
+    if (view === "meaning" || view === "spelling" || view === "visual") {
       const axisStatus = practiceStatusForView(w, view);
       const overall = overallPracticeStatus(w);
       if (status === "mastered") return overall === "mastered";
@@ -5513,6 +5530,7 @@ setTimeout(() => {
 
   function wordMatchesMultiFilter(w, filter) {
     const skillView = selectedPracticeSkillView(filter);
+    if (skillView === "visual" && !isWhoAmIWord(w)) return false;
     if (filter.statuses?.length && !filter.statuses.some(st => wordMatchesPracticeStatus(w, st, skillView))) return false;
     return wordMatchesPathFilter(w, filter);
   }
@@ -5543,6 +5561,7 @@ setTimeout(() => {
 
     const view = selectedPracticeSkillView(temp);
     const passesBase = (word, { ignoreStatus = false, ignoreSkill = false } = {}) => {
+      if (!ignoreSkill && view === "visual" && !isWhoAmIWord(word)) return false;
       if (!ignoreStatus && temp.statuses.length) {
         const statusView = ignoreSkill ? "all" : view;
         if (!temp.statuses.some(status => wordMatchesPracticeStatus(word, status, statusView))) return false;
@@ -5557,7 +5576,8 @@ setTimeout(() => {
 
     if (field === "skillView") {
       const count = words.filter(word => passesBase(word, { ignoreSkill: true })).length;
-      return [["all", count], ["meaning", count], ["spelling", count]];
+      const visualCount = words.filter(word => isWhoAmIWord(word) && passesBase(word, { ignoreSkill: true })).length;
+      return [["all", count], ["meaning", count], ["spelling", count], ["visual", visualCount]];
     }
 
     if (field === "status") {
@@ -6363,16 +6383,21 @@ setTimeout(() => {
 
   function recordAttempt(key, mode, ok, options = {}) {
     // PER-SKILL MASTERY MODEL (test model)
-    // - Skill axes: "meaning" (wordToMeaning + meaningToWord) and "spelling".
+    // - Skill axes: Meaning, Spelling, and Visual (Who Am I, image-bearing terms only).
     // - Promotion (per-skill): first-attempt-correct in THAT skill OR 3 consecutive correct in THAT skill.
     // - Demotion (per-skill): a wrong answer demotes only the tested skill back to Learning.
-    // - Mastered = Meaning Known AND Spelling Known.
-    const skill = mode === "spelling" ? "spelling" : (mode === "whoami" ? "whoami" : "meaning");
+    // - Mastered = every skill applicable to the term is Known.
+    const skill = mode === "spelling" ? "spelling" : (mode === "whoami" ? "visual" : "meaning");
     const isMeaningMode = (skill === "meaning");
-    const isWhoAmIMode = (skill === "whoami");
+    const isVisualMode = (skill === "visual");
+    const word = words.find(x => x.key === key);
+    if (isVisualMode && !window.isVisualSkillWord?.(word)) {
+      console.warn("[per-skill] ignored a Visual attempt for a term without a usable image", key);
+      return;
+    }
 
     // Detect first-ever attempt in THIS skill BEFORE we mutate counters.
-    const priorSkillAttempts = isWhoAmIMode
+    const priorSkillAttempts = isVisualMode
       ? ((progress[key]?.whoami?.attempts) || 0)
       : isMeaningMode
       ? ((progress[key]?.wordToMeaning?.attempts) || 0) +
@@ -6387,7 +6412,7 @@ setTimeout(() => {
     const attemptTs = new Date().toISOString();
     bucket.lastAttemptAt = attemptTs;
     if (ok) bucket.lastCorrectAt = bucket.lastAttemptAt;
-    if (!isWhoAmIMode && typeof window.touchSkillAxisState === "function") {
+    if (typeof window.touchSkillAxisState === "function") {
       window.touchSkillAxisState(key, skill, attemptTs);
     }
 
@@ -6400,29 +6425,31 @@ setTimeout(() => {
 
     // Ensure root structure + per-skill streak counters
     if (!progress[key]) progress[key] = { matching: { attempts: 0, correct: 0 }, spelling: { attempts: 0, correct: 0 } };
-    const streakField = isMeaningMode ? "_consecMeaning" : (isWhoAmIMode ? "_consecWhoAmI" : "_consecSpelling");
+    const streakField = isMeaningMode ? "_consecMeaning" : (isVisualMode ? "_consecWhoAmI" : "_consecSpelling");
     if (typeof progress[key][streakField] !== "number") progress[key][streakField] = 0;
 
     const km = (window.knownMeaning ||= {});
     const ks = (window.knownSpelling ||= {});
 
-    const wasMastered = isWhoAmIMode ? !!progress[key]._whoamiKnown : !!(km[key] && ks[key]);
+    const hasVisualSkill = !!window.isVisualSkillWord?.(word);
+    const isFullyMastered = () => !!km[key] && !!ks[key] && (!hasVisualSkill || !!progress[key]._whoamiKnown);
+    const wasMastered = isFullyMastered();
 
     if (ok && options.allowKnownPromotion !== false) {
       progress[key][streakField]++;
-      const alreadyKnown = isMeaningMode ? !!km[key] : (isWhoAmIMode ? !!progress[key]._whoamiKnown : !!ks[key]);
+      const alreadyKnown = isMeaningMode ? !!km[key] : (isVisualMode ? !!progress[key]._whoamiKnown : !!ks[key]);
       const shouldPromote = !alreadyKnown && (isFirstAttemptInSkill || progress[key][streakField] >= 3);
       if (shouldPromote) {
         if (isMeaningMode) km[key] = true;
-        else if (!isWhoAmIMode) ks[key] = true;
+        else if (!isVisualMode) ks[key] = true;
         else progress[key]._whoamiKnown = true;
-        // Mirror to legacy global "known" flag (Mastered means both Known).
-        const nowMastered = !isWhoAmIMode && km[key] && ks[key];
+        // Mirror full mastery back to the legacy global map.
+        const nowMastered = isFullyMastered();
         if (nowMastered) {
           known[key] = true;
           if (typeof saveKnown === "function") saveKnown();
         }
-        if (!isWhoAmIMode && typeof saveSkillState === "function") saveSkillState();
+        if (typeof saveSkillState === "function") saveSkillState();
         // Notify per-skill listener (multi-goal, calendar, etc.)
         if (typeof window.onSkillPromotion === "function") {
           try { window.onSkillPromotion(key, skill); } catch (e) { console.warn("onSkillPromotion failed:", e); }
@@ -6432,7 +6459,7 @@ setTimeout(() => {
         }
         if (typeof toast === "function") {
           const w = words.find(x => x.key === key);
-          const label = nowMastered ? "🏆 Mastered" : (isMeaningMode ? "✓ Meaning Known" : (isWhoAmIMode ? "✓ Visual Known" : "✓ Spelling Known"));
+          const label = nowMastered ? "🏆 Mastered" : (isMeaningMode ? "✓ Meaning Known" : (isVisualMode ? "✓ Visual Known" : "✓ Spelling Known"));
           toast(`${label}: ${w?.word || key}`);
         }
       }
@@ -6441,16 +6468,15 @@ setTimeout(() => {
       progress[key][streakField] = 0;
       let demoted = false;
       if (isMeaningMode && km[key]) { delete km[key]; demoted = true; }
-      if (!isMeaningMode && !isWhoAmIMode && ks[key]) { delete ks[key]; demoted = true; }
-      if (isWhoAmIMode && progress[key]._whoamiKnown) { delete progress[key]._whoamiKnown; demoted = true; }
+      if (!isMeaningMode && !isVisualMode && ks[key]) { delete ks[key]; demoted = true; }
+      if (isVisualMode && progress[key]._whoamiKnown) { delete progress[key]._whoamiKnown; demoted = true; }
       // If word was Mastered, the legacy "known" flag must drop too.
-      if (demoted && wasMastered) {
+      if (demoted && (wasMastered || !isFullyMastered())) {
         if (known[key]) { delete known[key]; if (typeof saveKnown === "function") saveKnown(); }
       }
-      if (demoted && !isWhoAmIMode && typeof saveSkillState === "function") saveSkillState();
+      if (demoted && typeof saveSkillState === "function") saveSkillState();
       if (demoted && typeof toast === "function") {
-        const w = words.find(x => x.key === key);
-        toast(`↩︎ ${isMeaningMode ? "Meaning" : (isWhoAmIMode ? "Visual" : "Spelling")} back to Learning: ${w?.word || key}`);
+        toast(`↩︎ ${isMeaningMode ? "Meaning" : (isVisualMode ? "Visual" : "Spelling")} back to Learning: ${word?.word || key}`);
       }
     }
 
@@ -6854,7 +6880,9 @@ setTimeout(() => {
       masteredWords: g.mode === "whoami"
         ? [...g.mastered]
         : [...g.mastered].filter(k => known && known[k]),
-      learningWords: Object.keys(g.perWord || {}).filter(k => !(known && known[k])),
+      learningWords: Object.keys(g.perWord || {}).filter(k => g.mode === "whoami"
+        ? !progress[k]?._whoamiKnown
+        : !(known && known[k])),
       wrongKeys,
       completed: !!completed
     };
@@ -7095,18 +7123,16 @@ setTimeout(() => {
       for (const k of (s.wrongKeys || [])) wrongKeys.add(k);
     }
     return [...wrongKeys]
-      .filter(k => !known[k])
       .map(k => words.find(w => w.key === k))
-      .filter(Boolean);
+      .filter(w => w && (typeof window.overallSkillStatus === "function"
+        ? window.overallSkillStatus(w) !== "mastered"
+        : !known[w.key]));
   }
 
   function masteredWords() {
-    // "Mastered" uses the existing Known flag: manually right-swiped OR
-    // auto-promoted after 5 consecutive correct in practice.
-    return Object.keys(known)
-      .filter(k => known[k])
-      .map(k => words.find(w => w.key === k))
-      .filter(Boolean);
+    return words.filter(w => typeof window.overallSkillStatus === "function"
+      ? window.overallSkillStatus(w) === "mastered"
+      : !!known[w.key]);
   }
 
   function recencyLabel(iso) {
@@ -20078,11 +20104,12 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 /* ============================================================================
    PER-SKILL MASTERY + MULTI-GOAL TEST MODULE  (test model — simplified app)
    ============================================================================
-   Implements the two-axis word mastery model:
+  Implements the applicable-skill mastery model:
      - Meaning axis  (sources: wordToMeaning, meaningToWord)
      - Spelling axis (source: spelling)
+     - Visual axis   (source: Who Am I; terms with images only)
    With per-skill promotion (first-attempt-correct OR 3-in-a-row), per-skill
-   demotion on wrong answer, and "Mastered = meaning Known AND spelling Known".
+   demotion on wrong answer, and mastery across every skill applicable to a term.
    Plus multi-goal daily goals, calendar 3-tier color, Progress tab skill toggle,
    session-detail per-skill rows, words-filter skill selector, migration, and
    retirement of needsReview. CSS injected at the bottom.
@@ -20099,23 +20126,26 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     KNOWN_SPELLING: "ielts_vocab_known_spelling_v1",
     MEANING_TS:     "ielts_vocab_meaning_state_updated_at_v1",
     SPELLING_TS:    "ielts_vocab_spelling_state_updated_at_v1",
+    VISUAL_TS:      "ielts_vocab_visual_state_updated_at_v1",
     MIGRATION:      "ielts_vocab_mastery_migration_v1",
     GOAL_V2:        "ielts_vocab_goal_v2",
     DAILY_RECORD_V2:"ielts_vocab_daily_record_v2",
-    PROGRESS_VIEW:  "ielts_vocab_progress_view_v1", // "all" | "meaning" | "spelling"
-    WORDS_SKILL:    "ielts_vocab_words_skill_v1",   // "all" | "meaning" | "spelling"
+    PROGRESS_VIEW:  "ielts_vocab_progress_view_v1", // "all" | "meaning" | "spelling" | "visual"
+    WORDS_SKILL:    "ielts_vocab_words_skill_v1",   // "all" | "meaning" | "spelling" | "visual"
   };
 
   try { window.knownMeaning  = JSON.parse(localStorage.getItem(LS_KEYS.KNOWN_MEANING)  || "{}"); } catch { window.knownMeaning  = {}; }
   try { window.knownSpelling = JSON.parse(localStorage.getItem(LS_KEYS.KNOWN_SPELLING) || "{}"); } catch { window.knownSpelling = {}; }
   try { window.meaningStateUpdatedAt  = JSON.parse(localStorage.getItem(LS_KEYS.MEANING_TS)  || "{}"); } catch { window.meaningStateUpdatedAt  = {}; }
   try { window.spellingStateUpdatedAt = JSON.parse(localStorage.getItem(LS_KEYS.SPELLING_TS) || "{}"); } catch { window.spellingStateUpdatedAt = {}; }
+  try { window.visualStateUpdatedAt = JSON.parse(localStorage.getItem(LS_KEYS.VISUAL_TS) || "{}"); } catch { window.visualStateUpdatedAt = {}; }
 
   window.saveSkillState = function() {
     try { localStorage.setItem(LS_KEYS.KNOWN_MEANING,  JSON.stringify(window.knownMeaning  || {})); } catch {}
     try { localStorage.setItem(LS_KEYS.KNOWN_SPELLING, JSON.stringify(window.knownSpelling || {})); } catch {}
     try { localStorage.setItem(LS_KEYS.MEANING_TS,  JSON.stringify(window.meaningStateUpdatedAt  || {})); } catch {}
     try { localStorage.setItem(LS_KEYS.SPELLING_TS, JSON.stringify(window.spellingStateUpdatedAt || {})); } catch {}
+    try { localStorage.setItem(LS_KEYS.VISUAL_TS, JSON.stringify(window.visualStateUpdatedAt || {})); } catch {}
   };
 
   window.touchSkillAxisState = function(key, skill, ts = new Date().toISOString()) {
@@ -20123,6 +20153,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (skill === "spelling") {
       window.spellingStateUpdatedAt = window.spellingStateUpdatedAt || {};
       window.spellingStateUpdatedAt[key] = ts;
+    } else if (skill === "visual") {
+      window.visualStateUpdatedAt = window.visualStateUpdatedAt || {};
+      window.visualStateUpdatedAt[key] = ts;
     } else {
       window.meaningStateUpdatedAt = window.meaningStateUpdatedAt || {};
       window.meaningStateUpdatedAt[key] = ts;
@@ -20226,12 +20259,32 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (att > cor) return streak >= 3 ? "known" : "learning";
     return cor > 0 ? "known" : "not_practiced";
   };
+  window.__visualStatus = function(w) {
+    if (!w || !w.key || !window.isVisualSkillWord?.(w)) return "not_practiced";
+    const p = progress[w.key] || {};
+    if (p._whoamiKnown) return "known";
+    const att = p.whoami?.attempts || 0;
+    const cor = p.whoami?.correct || 0;
+    const streak = p._consecWhoAmI || 0;
+    if (att <= 0) return "not_practiced";
+    if (att > cor) return streak >= 3 ? "known" : "learning";
+    return cor > 0 ? "known" : "not_practiced";
+  };
   window.meaningStreak  = function(w) { return progress[w?.key]?._consecMeaning  || 0; };
   window.spellingStreak = function(w) { return progress[w?.key]?._consecSpelling || 0; };
+  window.visualStreak = function(w) { return progress[w?.key]?._consecWhoAmI || 0; };
+  window.overallSkillStatus = function(w) {
+    const statuses = [window.__meaningStatus(w), window.__spellingStatus(w)];
+    if (window.isVisualSkillWord?.(w)) statuses.push(window.__visualStatus(w));
+    if (statuses.every(status => status === "known")) return "mastered";
+    if (statuses.includes("known")) return "known";
+    if (statuses.includes("learning")) return "learning";
+    return "not_practiced";
+  };
 
   // ---- 4. Multi-goal data --------------------------------------------------
   // goal = { items: [{ id, type, count }] }
-  //   type ∈ "meaningKnown" | "spellingKnown"
+  //   type ∈ "meaningKnown" | "spellingKnown" | "visualKnown"
   // record[date] = {
   //   events: { meaningKnown:[keys], spellingKnown:[keys], mastered:[keys] },
   //   subGoalsMet: { <itemId>: bool }, goalMet: bool,
@@ -20242,7 +20295,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     try {
       const g = JSON.parse(localStorage.getItem(LS_KEYS.GOAL_V2) || "null");
       if (!g || typeof g !== "object") return g;
-      return { ...g, items: normaliseGoalItems(g.items) };
+      const items = normaliseGoalItems(g.items)
+        .map(it => it.type === "visualKnown" ? { ...it, count: Math.min(it.count, visualTermCount()) } : it)
+        .filter(it => it.count > 0);
+      return { ...g, items };
     }
     catch { return null; }
   };
@@ -20287,14 +20343,16 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   const GOAL_TYPE_LABELS = {
     meaningKnown:  "Meaning Known",
     spellingKnown: "Spelling Known",
-    mastered:      "Mastered (both)",
+    visualKnown:   "Visual Known",
+    mastered:      "Mastered (all applicable skills)",
   };
-  const GOAL_TYPES = ["meaningKnown", "spellingKnown"];
+  const GOAL_TYPES = ["meaningKnown", "spellingKnown", "visualKnown"];
   window.GOAL_TYPE_LABELS = GOAL_TYPE_LABELS;
   window.GOAL_TYPES = GOAL_TYPES;
 
   function normaliseGoalType(type) {
     if (type === "mastered") return "mastered";
+    if (type === "visualKnown") return "visualKnown";
     return type === "spellingKnown" ? "spellingKnown" : "meaningKnown";
   }
 
@@ -20316,7 +20374,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   function ensureRecordDay(rec, dateK) {
     if (!rec[dateK]) {
       rec[dateK] = {
-        events: { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] },
+        events: { meaningKnown: [], spellingKnown: [], visualKnown: [], mastered: [], meaningLearning: [], spellingLearning: [], visualLearning: [] },
         subGoalsMet: {},
         goalMet: false,
         newWordsMastered: [],
@@ -20324,9 +20382,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         totalMinutes: 0,
       };
     }
-    if (!rec[dateK].events) rec[dateK].events = { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] };
-    if (!Array.isArray(rec[dateK].events.meaningLearning)) rec[dateK].events.meaningLearning = [];
-    if (!Array.isArray(rec[dateK].events.spellingLearning)) rec[dateK].events.spellingLearning = [];
+    if (!rec[dateK].events) rec[dateK].events = { meaningKnown: [], spellingKnown: [], visualKnown: [], mastered: [], meaningLearning: [], spellingLearning: [], visualLearning: [] };
+    for (const field of ["meaningKnown", "spellingKnown", "visualKnown", "mastered", "meaningLearning", "spellingLearning", "visualLearning"]) {
+      if (!Array.isArray(rec[dateK].events[field])) rec[dateK].events[field] = [];
+    }
     if (!rec[dateK].subGoalsMet) rec[dateK].subGoalsMet = {};
     return rec[dateK];
   }
@@ -20336,6 +20395,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const e = day.events || {};
     if (type === "meaningKnown")  return (e.meaningKnown  || []).length;
     if (type === "spellingKnown") return (e.spellingKnown || []).length;
+    if (type === "visualKnown")   return (e.visualKnown   || []).length;
     if (type === "mastered")      return (e.mastered      || []).length;
     return 0;
   }
@@ -20382,12 +20442,14 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         ...(Array.isArray(row?.wordsToReview) ? row.wordsToReview : []),
       ].map(k => normalizeKey(k)).filter(Boolean);
       const day = {
-        events: {
-          meaningKnown: [],
-          spellingKnown: [],
-          mastered,
-          meaningLearning: [...new Set(legacyLearning)],
-          spellingLearning: [],
+          events: {
+            meaningKnown: [],
+            spellingKnown: [],
+            visualKnown: [],
+            mastered,
+            meaningLearning: [...new Set(legacyLearning)],
+            spellingLearning: [],
+            visualLearning: [],
         },
         subGoalsMet: {},
         goalMet: false,
@@ -20407,7 +20469,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       const dateK = dateKey(t);
       if (!nextDaily[dateK]) {
         nextDaily[dateK] = {
-          events: { meaningKnown: [], spellingKnown: [], mastered: [], meaningLearning: [], spellingLearning: [] },
+          events: { meaningKnown: [], spellingKnown: [], visualKnown: [], mastered: [], meaningLearning: [], spellingLearning: [], visualLearning: [] },
           subGoalsMet: {},
           goalMet: false,
           newWordsMastered: [],
@@ -20422,7 +20484,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         ...(Array.isArray(s.reviewWords) ? s.reviewWords : []),
       ].map(k => normalizeKey(k)).filter(Boolean);
       const day = nextDaily[dateK];
-      day.events.meaningLearning = [...new Set([...(day.events.meaningLearning || []), ...learning])];
+      const visualSession = /whoami|visual/i.test(String(s.mode || ""));
+      const learningField = visualSession ? "visualLearning" : /spell/i.test(String(s.mode || "")) ? "spellingLearning" : "meaningLearning";
+      day.events[learningField] = [...new Set([...(day.events[learningField] || []), ...learning])];
       day.practiceSessions = Number(day.practiceSessions || 0) + 1;
       if (target) {
         day.subGoalsMet[itemId] = !!day.goalMet || (day.events.mastered || []).length >= target;
@@ -20452,7 +20516,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   window.onSkillPromotion = function(key, skill) {
     const rec = window.loadDailyRecordV2();
     const day = ensureRecordDay(rec, todayKey());
-    const list = skill === "spelling" ? day.events.spellingKnown : day.events.meaningKnown;
+    const listKey = skill === "spelling" ? "spellingKnown" : (skill === "visual" ? "visualKnown" : "meaningKnown");
+    const list = day.events[listKey] || (day.events[listKey] = []);
     // Per user: events-style counting — re-promotion on different days re-counts.
     list.push(key);
     day.updatedAt = new Date().toISOString();
@@ -20466,7 +20531,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
 
   // Override the legacy onMasteryPromotion: it fires only when a word reaches
-  // FULL Mastered (both skills Known). We log the mastered event and update
+  // FULL Mastered (all applicable skills Known). We log the mastered event and update
   // the legacy newWordsMastered for backup compatibility.
   window.onMasteryPromotion = function(key) {
     const rec = window.loadDailyRecordV2();
@@ -20488,7 +20553,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
 
   // ---- 6. Goal setup (multi-goal builder) ----------------------------------
-  // Mounts a setup overlay with two fixed skill goals. A count of 0 disables
+  // Mounts a setup overlay with fixed skill goals. A count of 0 disables
   // that skill, which avoids duplicate sub-goals while keeping editing simple.
   function ensureGoalSetupV2() {
     let el = document.getElementById("goalSetupOverlayV2");
@@ -20521,7 +20586,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     return [
       { id: newItemId(), type: "meaningKnown", count: 5 },
       { id: newItemId(), type: "spellingKnown", count: 5 },
+      { id: newItemId(), type: "visualKnown", count: Math.min(5, visualTermCount()) },
     ];
+  }
+  function visualTermCount() {
+    return (Array.isArray(words) ? words : []).filter(w => window.isVisualSkillWord?.(w)).length;
   }
   function fixedGoalDraft(items) {
     const clean = normaliseGoalItems(items);
@@ -20531,7 +20600,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       return {
         id: existing?.id || newItemId(),
         type,
-        count: existing ? Math.max(0, parseInt(existing.count, 10) || 0) : 0,
+        count: existing
+          ? Math.min(type === "visualKnown" ? visualTermCount() : 200, Math.max(0, parseInt(existing.count, 10) || 0))
+          : 0,
       };
     });
   }
@@ -20543,9 +20614,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       <div class="g2-item g2-fixed-item" data-id="${it.id}">
         <div class="g2-fixed-copy">
           <div class="g2-fixed-label">${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)}</div>
-          <div class="g2-fixed-sub">${it.type === "meaningKnown" ? "Recognize meanings" : "Spell words correctly"}</div>
+          <div class="g2-fixed-sub">${it.type === "meaningKnown" ? "Recognize meanings" : it.type === "spellingKnown" ? "Spell words correctly" : "Identify and spell image terms · " + visualTermCount() + " available"}</div>
         </div>
-        <input class="g2-count" type="number" min="0" max="200" value="${it.count}" oninput="goalSetupChangeCount('${it.id}', this.value)" aria-label="${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)} target" />
+        <input class="g2-count" type="number" min="0" max="${it.type === "visualKnown" ? visualTermCount() : 200}" value="${it.count}" oninput="goalSetupChangeCount('${it.id}', this.value)" aria-label="${escapeHtml(GOAL_TYPE_LABELS[it.type] || it.type)} target" />
       </div>
     `).join("");
   }
@@ -20557,7 +20628,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
   window.goalSetupChangeCount = function(id, val) {
     const it = pendingGoalItems.find(x => x.id === id);
-    if (it) it.count = Math.max(0, parseInt(val, 10) || 0);
+    if (it) it.count = Math.min(it.type === "visualKnown" ? visualTermCount() : 200, Math.max(0, parseInt(val, 10) || 0));
   };
   window.goalSetupConfirmV2 = function() {
     const activeItems = pendingGoalItems
@@ -20642,18 +20713,19 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   // ---- 7. renderGoalTab override -------------------------------------------
   let calCursor = new Date();
   let progressView = (localStorage.getItem(LS_KEYS.PROGRESS_VIEW) || "all");
-  if (!["all","meaning","spelling"].includes(progressView)) progressView = "all";
+    if (!["all","meaning","spelling","visual"].includes(progressView)) progressView = "all";
 
   function skillStatusFor(w, view) {
     if (view === "meaning")  return window.__meaningStatus(w);
     if (view === "spelling") return window.__spellingStatus(w);
-    // "all" = use overall wordStatus (Mastered = both Known)
-    return wordStatus(w);
+    if (view === "visual") return window.__visualStatus(w);
+    return window.overallSkillStatus(w);
   }
 
   function aggregateAll(view) {
     let mastered = 0, known = 0, learning = 0, bookmarked = 0, total = 0;
     for (const w of words) {
+      if (view === "visual" && !window.isVisualSkillWord?.(w)) continue;
       const st = skillStatusFor(w, view);
       total++;
       if (isWordBookmarked(w)) bookmarked++;
@@ -20661,7 +20733,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       else if (st === "known") known++;
       else if (st === "learning") learning++;
     }
-    return [{ name: view === "all" ? "All words" : (view === "meaning" ? "Meaning" : "Spelling"), mastered, known, learning, bookmarked, total }];
+    const name = view === "all" ? "All words" : (view === "meaning" ? "Meaning" : view === "spelling" ? "Spelling" : "Visual");
+    return [{ name, mastered, known, learning, bookmarked, total }];
   }
 
   function calendarHtmlV2() {
@@ -20679,7 +20752,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const dayHasProgress = (key, day) => {
       if (day) {
         const ev = day.events || {};
-        if ((ev.meaningKnown || []).length || (ev.spellingKnown || []).length || (ev.mastered || []).length) return true;
+        if ((ev.meaningKnown || []).length || (ev.spellingKnown || []).length || (ev.visualKnown || []).length || (ev.mastered || []).length) return true;
+        if ((ev.meaningLearning || []).length || (ev.spellingLearning || []).length || (ev.visualLearning || []).length) return true;
         if (goal && Array.isArray(goal.items) && goal.items.some(it => countEvent(day, it.type) > 0)) return true;
       }
       try {
@@ -20755,8 +20829,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
 
   // Aggregate by a legacy grouping dimension (level / topHeader / suggestedCombinedTitle)
-  // but using the new four-state model.
-  // Mastered = both Known, Known = one Known, Learning = neither but has attempts, Untouched = no attempts.
+  // but using the applicable-skill model. Visual denominators contain only
+  // terms with a usable image asset.
   function chartRowsByDimension(field, view) {
     const buckets = new Map();
     for (const w of words) {
@@ -20767,6 +20841,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         else if (field === "topHeader") values.add(p.subject);
         else if (field === "suggestedCombinedTitle") values.add(p.topic);
       }
+      if (view === "visual" && !window.isVisualSkillWord?.(w)) continue;
       const st = skillStatusFor(w, view);
       for (const v of values) {
         if (!v) continue;
@@ -20821,12 +20896,12 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   }
 
   function chartGroupKeys(group, name) {
-    return words.filter(w => wordInChartGroup(w, group, name)).map(w => w.key);
+    return words.filter(w => wordInChartGroup(w, group, name) && (progressView !== "visual" || window.isVisualSkillWord?.(w))).map(w => w.key);
   }
 
   function rowsHtml(rows, view) {
     if (!rows.length) return `<div class="g-empty">No data yet</div>`;
-    const masteredLabel = view === "all" ? "mastered" : (view === "meaning" ? "meaning known" : "spelling known");
+    const masteredLabel = view === "all" ? "mastered" : (view === "meaning" ? "meaning known" : view === "spelling" ? "spelling known" : "visual known");
     return rows.map(r => {
       const pctM = r.total ? (r.mastered / r.total) * 100 : 0;
       const pctK = r.total ? ((r.known || 0) / r.total) * 100 : 0;
@@ -20861,6 +20936,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const meaningLearning = within(pgMeaningLearning());
     const spellingKnown = within(pgSpellingKnownOnly());
     const spellingLearning = within(pgSpellingLearning());
+    const visualKnown = within(pgVisualKnownOnly());
+    const visualLearning = within(pgVisualLearning());
     const untouched = within(pgUntouchedKeys());
     const bookmarked = within(words.filter(isWordBookmarked).map(w => w.key));
     const filter = chartGroupFilter(group, name);
@@ -20935,6 +21012,28 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         streakSkill: "spelling",
         practiceFilter: filter,
       },
+      visualKnown: {
+        pageKey: "visualKnown",
+        tabLabel: `Known Visual · ${visualKnown.length}`,
+        accordionLabel: "Known Visual",
+        practiceLabel: `▶ Practice these ${visualKnown.length} visual-known`,
+        keys: visualKnown,
+        noChip: true,
+        practicePool: visualKnown,
+        practiceMode: "whoami",
+        practiceFilter: filter,
+      },
+      visualLearning: {
+        pageKey: "visualLearning",
+        tabLabel: `Learning Visual · ${visualLearning.length}`,
+        accordionLabel: "Learning Visual",
+        practiceLabel: `▶ Practice these ${visualLearning.length} visual-learning`,
+        keys: visualLearning,
+        practicePool: visualLearning,
+        practiceMode: "whoami",
+        streakSkill: "visual",
+        practiceFilter: filter,
+      },
       untouched: {
         pageKey: "untouched",
         tabLabel: `Untouched · ${untouched.length}`,
@@ -20969,6 +21068,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
           <button class="${progressView === "all" ? "active" : ""}" onclick="progressViewSet('all')">All skills</button>
           <button class="${progressView === "meaning" ? "active" : ""}" onclick="progressViewSet('meaning')">Meaning</button>
           <button class="${progressView === "spelling" ? "active" : ""}" onclick="progressViewSet('spelling')">Spelling</button>
+          <button class="${progressView === "visual" ? "active" : ""}" onclick="progressViewSet('visual')">Visual</button>
         </div>
         <div class="g-prog-chart-tabs tab-row" style="margin-top:6px;">
           <button class="${progressGroup === "all" ? "active" : ""}" onclick="progressGroupSet('all')">All</button>
@@ -20988,6 +21088,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
   }
   window.progressViewSet = function(v) {
+    if (!["all", "meaning", "spelling", "visual"].includes(v)) v = "all";
     progressView = v;
     try { localStorage.setItem(LS_KEYS.PROGRESS_VIEW, v); } catch {}
     pgRefreshAfterChartTab();
@@ -21079,7 +21180,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   }
   window.openGoalDayDetailV2 = function(key) {
     const rec = window.loadDailyRecordV2();
-    const day = rec[key] || { events: { meaningKnown: [], spellingKnown: [], mastered: [] }, subGoalsMet: {} };
+    const day = rec[key] || { events: { meaningKnown: [], spellingKnown: [], visualKnown: [], mastered: [], meaningLearning: [], spellingLearning: [], visualLearning: [] }, subGoalsMet: {} };
     // Use the goal that was active on THIS day (snapshot) so changing the goal
     // later doesn't rewrite past dates. Fall back to the current goal only when
     // no snapshot exists (e.g. today, before any promotion).
@@ -21118,8 +21219,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         mastered:        new Set((events.mastered || []).map(N).filter(Boolean)),
         meaningKnown:    new Set((events.meaningKnown || []).map(N).filter(Boolean)),
         spellingKnown:   new Set((events.spellingKnown || []).map(N).filter(Boolean)),
+        visualKnown:     new Set((events.visualKnown || []).map(N).filter(Boolean)),
         meaningLearning: new Set((events.meaningLearning || []).map(N).filter(Boolean)),
         spellingLearning:new Set((events.spellingLearning || []).map(N).filter(Boolean)),
+        visualLearning:  new Set((events.visualLearning || []).map(N).filter(Boolean)),
       };
       const add = (set, list) => (list || []).forEach(k => { const n = N(k); if (n) set.add(n); });
       try {
@@ -21138,19 +21241,23 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
             add(out.mastered, s.masteredWords);
           } else {
             const sp = /spell/i.test(mode);
-            add(sp ? out.spellingLearning : out.meaningLearning, s.wrongKeys);
-            add(sp ? out.spellingLearning : out.meaningLearning, s.learningWords);
-            add(sp ? out.spellingKnown : out.meaningKnown, s.correctKeys);
+            const visual = /whoami|visual/i.test(mode);
+            const learningSet = visual ? out.visualLearning : sp ? out.spellingLearning : out.meaningLearning;
+            const knownSet = visual ? out.visualKnown : sp ? out.spellingKnown : out.meaningKnown;
+            add(learningSet, s.wrongKeys);
+            add(learningSet, s.learningWords);
+            add(knownSet, s.correctKeys);
             add(out.mastered, s.masteredWords);
           }
         });
       } catch (e) {}
       // A word known/mastered that day shouldn't also appear as learning.
-      out.mastered.forEach(k => { out.meaningKnown.delete(k); out.spellingKnown.delete(k); out.meaningLearning.delete(k); out.spellingLearning.delete(k); });
+      out.mastered.forEach(k => { out.meaningKnown.delete(k); out.spellingKnown.delete(k); out.visualKnown.delete(k); out.meaningLearning.delete(k); out.spellingLearning.delete(k); out.visualLearning.delete(k); });
       out.meaningKnown.forEach(k => out.meaningLearning.delete(k));
       out.spellingKnown.forEach(k => out.spellingLearning.delete(k));
+      out.visualKnown.forEach(k => out.visualLearning.delete(k));
       const arr = (s) => [...s].sort();
-      return { mastered: arr(out.mastered), meaningKnown: arr(out.meaningKnown), spellingKnown: arr(out.spellingKnown), meaningLearning: arr(out.meaningLearning), spellingLearning: arr(out.spellingLearning) };
+      return { mastered: arr(out.mastered), meaningKnown: arr(out.meaningKnown), spellingKnown: arr(out.spellingKnown), visualKnown: arr(out.visualKnown), meaningLearning: arr(out.meaningLearning), spellingLearning: arr(out.spellingLearning), visualLearning: arr(out.visualLearning) };
     })();
 
     // 5 sections — known/mastered/learning for this date.
@@ -21158,8 +21265,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       ["mastered", "Mastered", dayLists.mastered, null, null],
       ["meaningKnown", "Meaning known", dayLists.meaningKnown, "wordToMeaning", null],
       ["spellingKnown", "Spelling known", dayLists.spellingKnown, "spelling", null],
+      ["visualKnown", "Visual known", dayLists.visualKnown, "whoami", null],
       ["meaningLearning", "Meaning learning", dayLists.meaningLearning, "wordToMeaning", null],
       ["spellingLearning", "Spelling learning", dayLists.spellingLearning, "spelling", null],
+      ["visualLearning", "Visual learning", dayLists.visualLearning, "whoami", "visual"],
     ];
     const accKey = `calendar:${key}`;
     // Default collapsed: users can expand only the section they want.
@@ -21229,7 +21338,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   // ---- 9. Words tab filter: skill selector ---------------------------------
   let wordsSkill = (localStorage.getItem(LS_KEYS.WORDS_SKILL) || "all");
-  if (!["all","meaning","spelling"].includes(wordsSkill)) wordsSkill = "all";
+  if (!["all","meaning","spelling","visual"].includes(wordsSkill)) wordsSkill = "all";
   window.wordsSkill = function() { return wordsSkill; };
 
   const WORDS_SOURCE_FILTER_KEY = "ielts_vocab_words_source_filter_v1";
@@ -21243,21 +21352,18 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   window.wordsSourceFilter = function() { return wordsSourceFilter; };
 
   function overallSkillStatus(w) {
-    const m = window.__meaningStatus(w);
-    const s = window.__spellingStatus(w);
-    if (m === "known" && s === "known") return "mastered";
-    if (m === "known" || s === "known") return "known";
-    if (m === "not_practiced" && s === "not_practiced") return "not_practiced";
-    return "learning";
+    return window.overallSkillStatus(w);
   }
 
   function selectedSkillStatus(w) {
     if (wordsSkill === "meaning") return window.__meaningStatus(w);
     if (wordsSkill === "spelling") return window.__spellingStatus(w);
+    if (wordsSkill === "visual") return window.__visualStatus(w);
     return overallSkillStatus(w);
   }
 
   function wordMatchesStatusFilterV2(w, status) {
+    if (wordsSkill === "visual" && !window.isVisualSkillWord?.(w)) return false;
     if (!status || status === "__all") return true;
     if (status === "bookmarked") return isWordBookmarked(w);
     if (wordsSkill === "all") return overallSkillStatus(w) === status;
@@ -21328,8 +21434,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   try { wordStatus = window.wordStatus; } catch {}
 
   window.setWordsSkill = function(s) {
-    wordsSkill = s;
-    try { localStorage.setItem(LS_KEYS.WORDS_SKILL, s); } catch {}
+    wordsSkill = ["all", "meaning", "spelling", "visual"].includes(s) ? s : "all";
+    try { localStorage.setItem(LS_KEYS.WORDS_SKILL, wordsSkill); } catch {}
     if (typeof window.renderFilterPanel === "function") window.renderFilterPanel();
     if (typeof renderWords === "function") renderWords();
     window.updateHeaderButtons?.();
@@ -21386,6 +21492,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   function wordsCountBase(exceptField = "", ignoreStatus = false) {
     return (typeof words !== "undefined" ? words : []).filter(word =>
       wordHasVisiblePathV2(word, exceptField) &&
+      (wordsSkill !== "visual" || window.isVisualSkillWord?.(word)) &&
       (ignoreStatus || currentStatusFilter === "__all" || wordMatchesStatusFilterV2(word, currentStatusFilter))
     );
   }
@@ -21445,6 +21552,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (!body) return;
     const allCount = wordsCountBase("level").length;
     const visibleWords = wordsCountBase("", true);
+    const visualCount = (Array.isArray(words) ? words : []).filter(word =>
+      window.isVisualSkillWord?.(word) && wordHasVisiblePathV2(word)
+    ).length;
     const statusCount = status => visibleWords.filter(word => wordMatchesStatusFilterV2(word, status)).length;
     const selectedCourses = selectedWordsCourses();
     const sessionGroup = (courseValue, type, title) => {
@@ -21477,6 +21587,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <button class="filter-chip ${wordsSkill === "all" ? "active" : ""}" onclick="setWordsSkill('all')">All</button>
         <button class="filter-chip ${wordsSkill === "meaning" ? "active" : ""}" onclick="setWordsSkill('meaning')">Meaning</button>
         <button class="filter-chip ${wordsSkill === "spelling" ? "active" : ""}" onclick="setWordsSkill('spelling')">Spelling</button>
+        <button class="filter-chip ${wordsSkill === "visual" ? "active" : ""}" onclick="setWordsSkill('visual')">Visual <span class="n">${visualCount}</span></button>
       </div></div>`,
       `<div class="filter-group"><div class="filter-group-title">Practice Status</div><div class="filter-chip-row">${[
         ["__all", "All", visibleWords.length],
@@ -21494,12 +21605,15 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   };
 
   window.hasActiveWordFilters = function() {
-    return currentStatusFilter !== "__all"
+    return wordsSkill !== "all"
+      || currentStatusFilter !== "__all"
       || selectedWordsCourses().length > 0
       || ["lecture", "tutorial", "workshop"].some(field => wordsTaxonomyFilter[field] !== "__all");
   };
   try { hasActiveWordFilters = window.hasActiveWordFilters; } catch {}
   window.resetWordFilters = function() {
+    wordsSkill = "all";
+    try { localStorage.setItem(LS_KEYS.WORDS_SKILL, "all"); } catch {}
     wordsTaxonomyFilter.course = [];
     for (const field of ["lecture", "tutorial", "workshop"]) wordsTaxonomyFilter[field] = "__all";
     currentLevelFilter = currentTopHeaderFilter = currentBoxedBoldFilter = currentBoldTitleFilter = "__all";
@@ -21522,6 +21636,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const summary = document.getElementById("activeFilterSummary");
     if (summary) {
       const chips = [];
+      if (wordsSkill !== "all") chips.push(wordsSkill[0].toUpperCase() + wordsSkill.slice(1));
       for (const courseValue of selectedWordsCourses()) chips.push(taxonomy.courseFilterLabel?.(courseValue) || "Course");
       for (const field of ["lecture", "tutorial", "workshop"]) {
         if (wordsTaxonomyFilter[field] !== "__all") chips.push(`${field[0].toUpperCase()}${field.slice(1)} ${wordsTaxonomyFilter[field]}`);
@@ -21587,6 +21702,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     wordToMeaning: { ico: "💕", name: "Word → Meaning" },
     meaningToWord: { ico: "🔁", name: "Meaning → Word" },
     spelling:      { ico: "✏️", name: "Spelling" },
+    whoami:        { ico: "🦴", name: "Visual · Who am I?" },
   };
   function phRelative(iso) {
     if (!iso) return "";
@@ -21623,7 +21739,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       : "";
     const sId = String(s.id || "").replace(/'/g, "\\'");
     const exactPossible = phIsExactPossible(s.id);
-    const repeatLabel = exactPossible ? "↻" : "↻";
+    const repeatLabel = "↻";
     const repeatTitle = exactPossible ? "Repeat exact set" : "Repeat setup";
     const repeatFn = exactPossible ? "practiceRepeatExactSession" : "practiceRepeatSetupFromSession";
     // The card itself is tappable to open View detail. Buttons stop propagation.
@@ -21641,7 +21757,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <div class="ph-actions">
           <button class="ph-btn" onclick="event.stopPropagation();practiceOpenSessionDetail('${sId}')">👁 View</button>
           <button class="ph-btn primary ph-btn-icon" title="${escapeHtml(repeatTitle)}" aria-label="${escapeHtml(repeatTitle)}" onclick="event.stopPropagation();${repeatFn}('${sId}')">${repeatLabel}</button>
-          ${wrong > 0 ? `<button class="ph-btn danger" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">↩︎ ${wrong}</button>` : ""}
+          ${wrong > 0 ? `<button class="ph-btn danger ph-btn-icon" title="Retry ${wrong} wrong words" aria-label="Retry ${wrong} wrong words" onclick="event.stopPropagation();practiceRetryFromSession('${sId}')">×</button>` : ""}
         </div>
       </div>
     `;
@@ -21657,9 +21773,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
           <div class="ph-sticky-head">
             <div class="ph-title">Practice History</div>
           </div>
-          <div class="ph-empty">No sessions yet. Tap + New Practice below.</div>
+          <div class="ph-empty">No sessions yet. Tap New Practice below.</div>
         </div>
-        <div class="ph-fab-bar"><button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button></div>
+        <div class="ph-fab-bar"><button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice"><span aria-hidden="true">＋</span><span>New Practice</span></button></div>
       `;
       return;
     }
@@ -21673,7 +21789,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <div class="ph-feed-padding"></div>
       </div>
       <div class="ph-fab-bar">
-        <button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice">+</button>
+        <button class="ph-fab-btn" onclick="practiceStartFresh()" aria-label="New Practice"><span aria-hidden="true">＋</span><span>New Practice</span></button>
       </div>
     `;
   }
@@ -21733,21 +21849,24 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   // ---- 10c. Word info panel per-skill chip row ------------------------------
   // The word sheet (#sheet) doesn't show any per-skill state today. After the
   // original showWord renders, append a small status row inside the hero so
-  // the user can see Meaning/Spelling Known + streak progress at a glance.
+  // the user can see applicable-skill state + streak progress at a glance.
   function renderWordSkillChips(w) {
     if (!w || !w.key) return "";
     const mSt = window.__meaningStatus(w);
     const sSt = window.__spellingStatus(w);
     const mStreak = window.meaningStreak(w);
     const sStreak = window.spellingStreak(w);
+    const visualEligible = !!window.isVisualSkillWord?.(w);
+    const vSt = visualEligible ? window.__visualStatus(w) : "not_practiced";
+    const vStreak = window.visualStreak(w);
     function chip(label, st, streak) {
       if (st === "known")        return `<span class="ws-chip ok">${label} ✓</span>`;
       if (st === "not_practiced") return `<span class="ws-chip dim">${label} —</span>`;
       return `<span class="ws-chip mid">${label} ${Math.max(0, Math.min(3, streak))}/3</span>`;
     }
-    const mastered = (mSt === "known" && sSt === "known");
+    const mastered = window.overallSkillStatus(w) === "mastered";
     const banner = mastered ? `<span class="ws-mastered">🏆 Mastered</span>` : "";
-    return `<div class="ws-row">${chip("Meaning", mSt, mStreak)}${chip("Spelling", sSt, sStreak)}${banner}</div>`;
+    return `<div class="ws-row">${chip("Meaning", mSt, mStreak)}${chip("Spelling", sSt, sStreak)}${visualEligible ? chip("Visual", vSt, vStreak) : ""}${banner}</div>`;
   }
 
   // Override tabBottomHtml so the per-skill chips REPLACE the legacy
@@ -22493,28 +22612,34 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       min-width: 0;
     }
     .ph-btn-icon {
-      font-size: 18px;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 19px;
       line-height: 1;
       letter-spacing: 0;
     }
     .ph-btn:active { transform: scale(.96); }
     .ph-btn:hover { background: #F3E8FF; }
-    /* Primary action — Repeat. Soft mint, mint-ink text. */
+    /* Repeat action — transparent light blue. */
     .ph-btn.primary {
-      background: #CCFBF1;
-      color: #115E59;
-      border-color: #99F6E4;
+      background: rgba(147, 197, 253, 0.20);
+      color: #3182CE;
+      border-color: rgba(96, 165, 250, 0.42);
       box-shadow: none;
     }
-    .ph-btn.primary:hover { background: #99F6E4; }
-    /* Danger — Retry wrong. Soft coral. */
+    .ph-btn.primary:hover { background: rgba(147, 197, 253, 0.32); }
+    /* Retry action — transparent light red. */
     .ph-btn.danger {
-      background: #FFE4E6;
-      color: #BE123C;
-      border-color: #FECDD3;
+      background: rgba(252, 165, 165, 0.18);
+      color: #E05252;
+      border-color: rgba(248, 113, 113, 0.40);
     }
-    .ph-btn.danger:hover { background: #FECDD3; }
-    .ph-feed-padding { height: 110px; }
+    .ph-btn.danger:hover { background: rgba(252, 165, 165, 0.30); }
+    .ph-feed-padding { height: calc(156px + env(safe-area-inset-bottom, 0px)); }
     .ph-empty {
       padding: 28px 16px;
       text-align: center;
@@ -22522,36 +22647,42 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
     .ph-fab-bar {
       position: fixed;
-      left: 0; right: 0;
-      /* Sit clearly above the bottom navbar with breathing room. */
+      left: 0;
+      right: 0;
       bottom: calc(82px + env(safe-area-inset-bottom, 0px));
-      max-width: 480px; margin: 0 auto;
+      width: 100%;
+      max-width: 480px;
+      margin: 0 auto;
       padding: 8px 18px;
-      z-index: 50;
-      display: flex; justify-content: flex-end;
+      box-sizing: border-box;
+      z-index: 55;
+      display: flex;
+      justify-content: center;
       pointer-events: none;
     }
     .ph-fab-btn {
       pointer-events: auto;
-      background: linear-gradient(135deg, #A78BFA, #F472B6);
-      color: white;
-      border: none;
-      border-radius: 999px;
-      width: 58px;
-      height: 58px;
-      min-width: 58px;
-      padding: 0;
+      width: 100%;
+      min-width: 0;
+      height: 54px;
+      padding: 0 18px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      font-size: 34px; font-weight: 900;
+      gap: 9px;
+      background: linear-gradient(135deg, #A78BFA, #F472B6);
+      color: white;
+      border: none;
+      border-radius: 16px;
+      font-size: 16px;
+      font-weight: 900;
       line-height: 1;
       font-family: inherit;
       box-shadow: 0 12px 30px rgba(60, 30, 120, 0.34);
       cursor: pointer;
       transition: transform .12s, box-shadow .12s;
     }
-    .ph-fab-btn:active { transform: scale(.96); }
+    .ph-fab-btn:active { transform: scale(.98); }
 
     /* Word sheet: per-skill chip row */
     .ws-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
@@ -22673,9 +22804,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   // Words grouped by mastery for the info panels
   function pgKeyExists(k) { return !!pgWordFor(k); }
-  function pgMasteredKeys()       { return Object.keys(window.knownMeaning || {}).filter(k => pgKeyExists(k) && (window.knownSpelling || {})[k]); }
-  function pgMeaningKnownOnly()   { return Object.keys(window.knownMeaning || {}).filter(k => pgKeyExists(k) && !(window.knownSpelling || {})[k]); }
-  function pgSpellingKnownOnly()  { return Object.keys(window.knownSpelling || {}).filter(k => pgKeyExists(k) && !(window.knownMeaning || {})[k]); }
+  function pgMasteredKeys()       { return words.filter(w => window.overallSkillStatus(w) === "mastered").map(w => w.key); }
+  function pgMeaningKnownOnly()   { return words.filter(w => window.__meaningStatus(w) === "known" && window.overallSkillStatus(w) !== "mastered").map(w => w.key); }
+  function pgSpellingKnownOnly()  { return words.filter(w => window.__spellingStatus(w) === "known" && window.overallSkillStatus(w) !== "mastered").map(w => w.key); }
+  function pgVisualKnownOnly()    { return words.filter(w => window.isVisualSkillWord?.(w) && window.__visualStatus(w) === "known" && window.overallSkillStatus(w) !== "mastered").map(w => w.key); }
   function pgMeaningLearning() {
     const out = [];
     for (const key of Object.keys(progress || {})) {
@@ -22693,15 +22825,24 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
     return out;
   }
+  function pgVisualLearning() {
+    const out = [];
+    for (const key of Object.keys(progress || {})) {
+      const w = pgWordFor(key);
+      const att = progress[key]?.whoami?.attempts || 0;
+      if (w && window.isVisualSkillWord?.(w) && att > 0 && window.__visualStatus(w) !== "known") out.push(key);
+    }
+    return out;
+  }
   function pgUntouchedKeys() {
     return (Array.isArray(words) ? words : []).filter(w => {
       const key = w?.key;
       if (!key || !pgKeyExists(key)) return false;
-      if ((window.knownMeaning || {})[key] || (window.knownSpelling || {})[key] || (known || {})[key]) return false;
-      const p = progress[key] || {};
-      const m = p.matching?.attempts || 0;
-      const s = p.spelling?.attempts || 0;
-      return m === 0 && s === 0;
+      if ((known || {})[key]) return false;
+      const visualUntouched = !window.isVisualSkillWord?.(w) || window.__visualStatus(w) === "not_practiced";
+      return window.__meaningStatus(w) === "not_practiced"
+        && window.__spellingStatus(w) === "not_practiced"
+        && visualUntouched;
     }).map(w => w.key);
   }
   function pgWordFor(k) { return (typeof words !== "undefined") ? words.find(w => w.key === k) : null; }
@@ -22743,8 +22884,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const masteredCount = pgMasteredKeys().length;
     const meaningKnown = pgMeaningKnownOnly().length;
     const spellingKnown = pgSpellingKnownOnly().length;
+    const visualKnown = pgVisualKnownOnly().length;
     const meaningLearning = pgMeaningLearning().length;
     const spellingLearning = pgSpellingLearning().length;
+    const visualLearning = pgVisualLearning().length;
+    const visualEligible = words.filter(w => window.isVisualSkillWord?.(w)).length;
 
     root.innerHTML = `
       <div class="pg-page">
@@ -22778,6 +22922,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                 <div class="pg-num">${spellingKnown}</div>
                 <div class="pg-label">spelling</div>
               </div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${visualKnown}<span style="font-size:11px;opacity:.7">/${visualEligible}</span></div>
+                <div class="pg-label">visual known</div>
+              </div>
             </button>
 
             <button class="pg-rect pg-card-learning" onclick="pgOpenLearningPanel('meaning')">
@@ -22789,6 +22937,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
               <div class="pg-rect-cell">
                 <div class="pg-num">${spellingLearning}</div>
                 <div class="pg-label">spelling</div>
+              </div>
+              <div class="pg-rect-cell">
+                <div class="pg-num">${visualLearning}<span style="font-size:11px;opacity:.7">/${visualEligible}</span></div>
+                <div class="pg-label">visual learning</div>
               </div>
             </button>
           </div>
@@ -22889,7 +23041,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (opts.streakSkill) {
       const streak = opts.streakSkill === "meaning"
         ? (progress[k]?._consecMeaning || 0)
-        : (progress[k]?._consecSpelling || 0);
+        : opts.streakSkill === "visual"
+          ? (progress[k]?._consecWhoAmI || 0)
+          : (progress[k]?._consecSpelling || 0);
       return `<span class="ip-word-chip ip-chip-streak">${Math.max(0, Math.min(3, streak))}/3</span>`;
     }
     if (opts.chipClass || opts.chipText) {
@@ -23101,7 +23255,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       accordionKey: accKey,
       heroTitle: "🏆 Mastered",
       heroCount: keys.length,
-      subtitle: "Both meaning and spelling known",
+      subtitle: "Every applicable skill known",
     };
     pgPanelData = {
       all: {
@@ -23121,12 +23275,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   window.pgOpenKnownPanel = function(defaultPage) {
     const m = pgMeaningKnownOnly().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
     const s = pgSpellingKnownOnly().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const v = pgVisualKnownOnly().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
     const accKey = "summary:known";
     // Default collapsed: open only when the user taps a subtitle.
     if (!ipAccordionState[accKey]) {
       ipAccordionState[accKey] = [];
     }
-    const total = new Set([...m, ...s]).size;
+    const total = new Set([...m, ...s, ...v]).size;
     pgCurrentPanel = {
       kind: "known",
       page: defaultPage || "meaning",
@@ -23144,17 +23299,22 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                  practiceLabel: `Practice these ${s.length} spelling-known`,
                  keys: s, chipClass: "ip-chip-known", chipText: "✓",
                  practicePool: s, practiceMode: "spelling" },
+      visual:  { pageKey: "visual", accordionLabel: "Visual",
+                 practiceLabel: `Practice these ${v.length} visual-known`,
+                 keys: v, chipClass: "ip-chip-known", chipText: "✓",
+                 practicePool: v, practiceMode: "whoami" },
     };
     pgRenderPanel();
   };
   window.pgOpenLearningPanel = function(defaultPage) {
     const m = pgMeaningLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
     const s = pgSpellingLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
+    const v = pgVisualLearning().sort((a, b) => pgWordDisplay(a).localeCompare(pgWordDisplay(b)));
     const accKey = "summary:learning";
     if (!ipAccordionState[accKey]) {
       ipAccordionState[accKey] = [];
     }
-    const total = new Set([...m, ...s]).size;
+    const total = new Set([...m, ...s, ...v]).size;
     pgCurrentPanel = {
       kind: "learning",
       page: defaultPage || "meaning",
@@ -23172,6 +23332,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
                  practiceLabel: `Practice these ${s.length} spelling-learning`,
                  keys: s,
                  practicePool: s, practiceMode: "spelling", streakSkill: "spelling" },
+      visual:  { pageKey: "visual", accordionLabel: "Visual",
+                 practiceLabel: `Practice these ${v.length} visual-learning`,
+                 keys: v,
+                 practicePool: v, practiceMode: "whoami", streakSkill: "visual" },
     };
     pgRenderPanel();
   };
@@ -24350,7 +24514,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   var LOG = "[sync v6]";
   var SCHEMA = "ielts-vocab-sync-v6";
-  window.__APP_BUILD = "v6-build-20260613";
+  window.__APP_BUILD = "v6-build-20260923-visual-skill-v1";
   try { console.log("%c[build] " + window.__APP_BUILD, "color:#16a34a;font-weight:bold"); } catch(e){}
 
   // ---- canonical localStorage keys ----------------------------------------
@@ -24549,11 +24713,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     var out = {};
     Object.keys(keys).forEach(function(k){
       var ra = a[k], rb = b[k]; var merged = {};
-      ["matching","wordToMeaning","meaningToWord","spelling"].forEach(function(sk){
+      ["matching","wordToMeaning","meaningToWord","spelling","whoami"].forEach(function(sk){
         var m = mergeSkillBlock(sk, ra, rb); if (m) merged[sk] = m;
       });
       merged._consecMeaning = Math.max((ra&&ra._consecMeaning)||0, (rb&&rb._consecMeaning)||0);
       merged._consecSpelling = Math.max((ra&&ra._consecSpelling)||0, (rb&&rb._consecSpelling)||0);
+      merged._consecWhoAmI = Math.max((ra&&ra._consecWhoAmI)||0, (rb&&rb._consecWhoAmI)||0);
+      merged._whoamiKnown = !!((ra&&ra._whoamiKnown) || (rb&&rb._whoamiKnown));
       if (isMeaningfulProg(merged)) out[k] = merged;   // drop junk so it can't ping-pong
     });
     return out;
@@ -24584,7 +24750,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       if (!isObj(ra) || !isObj(rb)) { out[d] = ra || rb; return; }
       var m = Object.assign({}, ra, rb);
       var ev = {};
-      ["meaningKnown","spellingKnown","mastered"].forEach(function(f){
+      ["meaningKnown","spellingKnown","visualKnown","mastered","meaningLearning","spellingLearning","visualLearning"].forEach(function(f){
         var av = (ra.events&&ra.events[f])||[], bv = (rb.events&&rb.events[f])||[];
         ev[f] = Array.from(new Set(asArr(av).concat(asArr(bv))));
       });
@@ -24661,9 +24827,18 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
       if (isObj(p.progress)) { try { progress = p.progress; } catch(e){} writeJson(K.PROGRESS, p.progress); }
 
-      // legacy known = mastered (both sides known), unioned with explicit legacyKnown
+      // Legacy known = fully mastered. Older V6 payloads only knew Meaning and
+      // Spelling, so an image-bearing term also needs the synced Who Am I flag.
       var legacy = isObj(p.legacyKnown) ? Object.assign({}, p.legacyKnown) : {};
-      Object.keys(km).forEach(function(k){ if (ks[k]) legacy[k] = true; });
+      function visualEligibleKey(k){
+        try {
+          var list = Array.isArray(window.words) ? window.words : (typeof words !== "undefined" ? words : []);
+          var w = list.find(function(item){ return item && item.key === k; });
+          return !!(w && window.isVisualSkillWord && window.isVisualSkillWord(w));
+        } catch(e){ return false; }
+      }
+      Object.keys(km).forEach(function(k){ if (ks[k] && (!visualEligibleKey(k) || p.progress?.[k]?._whoamiKnown)) legacy[k] = true; });
+      Object.keys(legacy).forEach(function(k){ if (visualEligibleKey(k) && !(p.progress?.[k]?._whoamiKnown)) delete legacy[k]; });
       try { known = legacy; } catch(e){} writeJson(K.LEGACY_KNOWN, legacy);
 
       if (p.goal && p.goal.v2) writeJson(K.GOAL_V2, p.goal.v2);
@@ -24733,6 +24908,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     p = upgradeToV6(p) || {};
     return { knownMeaning: Object.keys(p.knownMeaning||{}).length,
              knownSpelling: Object.keys(p.knownSpelling||{}).length,
+             knownVisual: Object.keys(p.progress||{}).filter(function(k){ return !!(p.progress[k]||{})._whoamiKnown; }).length,
              learningWords: Object.keys(p.progress||{}).length,
              sessions: asArr(p.practice&&p.practice.sessions).length,
              lifetime: (p.practice&&p.practice.lifetimeSessions)||0 };
@@ -24747,7 +24923,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       var r = prog[k] || {};
       function blk(name){ var b = r[name] || {}; return (b.attempts||0) + "/" + (b.correct||0); }
       return k + ":" + blk("matching") + "," + blk("wordToMeaning") + "," + blk("meaningToWord") + "," +
-             blk("spelling") + ",cm" + (r._consecMeaning||0) + ",cs" + (r._consecSpelling||0);
+             blk("spelling") + "," + blk("whoami") + ",cm" + (r._consecMeaning||0) + ",cs" + (r._consecSpelling||0) +
+             ",cv" + (r._consecWhoAmI||0) + ",vk" + (r._whoamiKnown ? 1 : 0);
     }).join("|");
   }
   function payloadSig(p){
