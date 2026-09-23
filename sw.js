@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v52-20260923-progress-course-session-history-fix";
+const CACHE_NAME = "ielts-vocab-pwa-v53-20260924-whoami-answer-panel";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260923-progress-course-session-history-v2",
-  "/styles.css?v=20260923-progress-course-session-history-v2"
+  "/app.js?v=20260924-whoami-answer-panel-v1",
+  "/styles.css?v=20260924-whoami-answer-panel-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
