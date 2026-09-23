@@ -4039,3 +4039,44 @@ body.filter-panel-open {
   background: rgba(250, 247, 255, 0.72);
 }
 .pw-filter-empty-note { padding: 0 2px 4px; }
+
+.pw-course-sessions-section {
+  padding-bottom: 12px;
+}
+.pw-course-session-group {
+  margin-top: 12px;
+  padding: 10px 0 2px;
+  border-top: 1px solid var(--line, #E8E2F1);
+}
+.pw-course-session-title,
+.words-course-session-title {
+  color: var(--ink-soft, #514A6B);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .02em;
+  margin-bottom: 7px;
+}
+.pw-course-session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 7px 0;
+}
+.pw-course-session-label {
+  flex: 0 0 68px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.pw-course-session-row .pw-chip-row {
+  flex: 1;
+  margin: 0;
+}
+.words-course-session-group {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line, #E8E2F1);
+}
+.words-course-session-group .filter-group {
+  margin: 8px 0 0;
+}
