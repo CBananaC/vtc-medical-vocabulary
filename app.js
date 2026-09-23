@@ -260,6 +260,9 @@ async function loadBundledVocabularyLists() {
 
     const token = Number(g.spellingRepeatCooldownToken || 0) + 1;
     g.spellingRepeatCooldownToken = token;
+    input.style.setProperty("--spelling-repeat-cooldown-color", getComputedStyle(input).backgroundColor || "white");
+    input.style.setProperty("--spelling-repeat-cooldown-duration", `${remaining}ms`);
+    input.classList.add("is-repeat-cooling");
     input.disabled = true;
     check.disabled = true;
 
@@ -276,6 +279,9 @@ async function loadBundledVocabularyLists() {
         || !document.contains(input) || !document.contains(check)) return;
       input.disabled = false;
       check.disabled = false;
+      input.classList.remove("is-repeat-cooling");
+      input.style.removeProperty("--spelling-repeat-cooldown-color");
+      input.style.removeProperty("--spelling-repeat-cooldown-duration");
       status.remove();
       input.focus();
     }, remaining);
