@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v42-20260923-repeat-wrong-cooldown";
+const CACHE_NAME = "ielts-vocab-pwa-v43-20260923-remaining-pool";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,7 +10,7 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260923-repeat-wrong-cooldown-v1",
+  "/app.js?v=20260923-remaining-pool-v1",
   "/styles.css?v=20260921-taxonomy-filters-v1"
 ];
 
