@@ -3930,7 +3930,7 @@ body.filter-panel-open {
   transform: scale(0.94) !important;
 }
 
-/* Practice History redesigned page: keep the latest card in normal flow.
+/* Practice History page: keep the title in normal flow above the session feed.
    Fixed header measurement caused a huge gap in iPhone standalone webapp mode. */
 #practiceRoot .ph-sticky-head {
   position: relative !important;
@@ -3943,10 +3943,6 @@ body.filter-panel-open {
 #practiceRoot .ph-feed {
   padding-top: 14px !important;
   gap: 14px !important;
-}
-
-#practiceRoot .ph-card.latest {
-  margin: 0 !important;
 }
 
 #practiceRoot .ph-btn-icon {
