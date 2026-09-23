@@ -6206,9 +6206,7 @@ setTimeout(() => {
     const maxLen = Math.max(pool.length, exactRepeatWords.length);
     const remainingPoolLimit = Array.isArray(wizard.poolOverrideKeys) ? 10 : maxLen;
     const length = Math.min(Math.max(1, wizard.length), maxLen, remainingPoolLimit);
-    const sourcePoolWords = Array.isArray(wizard.repeatPoolKeys) && exactRepeatWords.length
-      ? exactRepeatWords
-      : basePool;
+    const sourcePoolWords = basePool;
 
     const cfg = {
       filter: wizard.filter,
@@ -6893,7 +6891,7 @@ setTimeout(() => {
       mode: g.mode,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig || null,
-      poolSize: sourcePoolWordKeys.length,
+      poolSize: g.pool.length,
       sessionLength: g.sessionLength,
       loadedWordKeys: Object.keys(g.perWord || {}),
       poolWordKeys: sourcePoolWordKeys.length > g.sessionLength
@@ -7239,7 +7237,10 @@ setTimeout(() => {
 
     poolKeys = [...new Set(poolKeys)];
     const expectedSize = Number(s.poolSize || 0);
-    if (expectedSize && poolKeys.length !== expectedSize) return [];
+    const poolSizeIsConsistent = s.mode === "whoami"
+      ? poolKeys.length >= expectedSize
+      : poolKeys.length === expectedSize;
+    if (expectedSize && !poolSizeIsConsistent) return [];
     const availableKeys = new Set(words.map(w => w.key));
     if (poolKeys.some(key => !availableKeys.has(key))) return [];
 
