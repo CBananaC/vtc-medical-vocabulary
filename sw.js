@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v48-20260923-spell-cooldown-lavender";
+const CACHE_NAME = "ielts-vocab-pwa-v49-20260923-spell-cooldown-lavender-visual";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260923-spell-cooldown-lavender-v2",
-  "/styles.css?v=20260923-spell-cooldown-lavender-v2"
+  "/app.js?v=20260923-spell-cooldown-lavender-visual-v1",
+  "/styles.css?v=20260923-spell-cooldown-lavender-visual-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
