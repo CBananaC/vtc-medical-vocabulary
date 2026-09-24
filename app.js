@@ -5959,18 +5959,18 @@ setTimeout(() => {
       ? wizard.repeatPoolKeys.map(k => words.find(w => w.key === k)).filter(Boolean)
       : [];
     const maxLen = isRemainingPool
-      ? Math.max(1, Math.min(10, pool.length))
+      ? Math.max(1, pool.length)
       : wizard.repeatPoolKeys
       ? Math.max(1, pool.length || exactRepeatWords.length)
       : pool.length;
-    if (wizard.length < 1 || wizard.length > maxLen) wizard.length = Math.min(isRemainingPool ? 10 : DEFAULT_LENGTH, maxLen);
+    if (wizard.length < 1 || wizard.length > maxLen) wizard.length = Math.min(isRemainingPool ? pool.length : DEFAULT_LENGTH, maxLen);
     const poolKeys = pool.map(w => w.key);
 
     const modeCards = MODES.map(m => {
       const modePool = practicePoolForMode(pool, m.id);
       const modePoolKeys = modePool.map(w => w.key);
       const modeMaxLen = isRemainingPool
-        ? Math.max(1, Math.min(10, modePool.length || exactRepeatWords.length))
+        ? Math.max(1, modePool.length || exactRepeatWords.length)
         : wizard.repeatPoolKeys
         ? Math.max(1, modePool.length || exactRepeatWords.length)
         : Math.max(1, modePool.length);
@@ -6210,8 +6210,7 @@ setTimeout(() => {
       return;
     }
     const maxLen = Math.max(pool.length, exactRepeatWords.length);
-    const remainingPoolLimit = Array.isArray(wizard.poolOverrideKeys) ? 10 : maxLen;
-    const length = Math.min(Math.max(1, wizard.length), maxLen, remainingPoolLimit);
+    const length = Math.min(Math.max(1, wizard.length), maxLen);
     // Keep the exact candidate set used by this mode. For a continued batch,
     // preserve the full remaining parent pool even if the selected mode has a
     // narrower eligibility filter (for example, Who Am I needs images).
@@ -7538,7 +7537,7 @@ setTimeout(() => {
       step: 2,
       filter: cloneFilterConfig(cfg.filter || emptyFilter()),
       mode: null,
-      length: Math.min(10, remainingKeys.length),
+      length: remainingKeys.length,
       studyUntilMastered: cfg.mode === "spelling" ? false : !!cfg.studyUntilMastered,
       spellTillRemember: cfg.spellTillRemember !== false,
       repeatWrongSpelling: cfg.repeatWrongSpelling !== false,
