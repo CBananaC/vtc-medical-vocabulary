@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v55-20260924-pool-remainder-v2";
+const CACHE_NAME = "ielts-vocab-pwa-v56-20260924-practice-pool-v3";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260924-pool-remainder-v2",
-  "/styles.css?v=20260924-pool-remainder-v2"
+  "/app.js?v=20260924-practice-pool-v3",
+  "/styles.css?v=20260924-practice-pool-v3"
 ];
 
 function manifestDatasetPaths(manifest) {
