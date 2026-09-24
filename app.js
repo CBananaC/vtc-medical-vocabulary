@@ -3466,6 +3466,11 @@ function normalizeBackupSession(s) {
   const correctKeys = arrFromLookup(s.correctKeys || []);
   const loadedWordKeys = arrFromLookup(s.loadedWordKeys || s.wordKeys || s.poolKeys || []);
   const poolWordKeys = arrFromLookup(s.poolWordKeys || s.fullPoolWordKeys || []);
+  const testedWordKeys = arrFromLookup(s.testedWordKeys || (
+    Array.isArray(s.correctKeys) && Array.isArray(s.wrongKeys)
+      ? [...s.correctKeys, ...s.wrongKeys]
+      : loadedWordKeys
+  ));
   const id = String(s.id || s.sessionId || s.startedAt || ("s_" + Date.now() + "_" + Math.random().toString(36).slice(2))).trim();
   return {
     id,
@@ -3479,6 +3484,7 @@ function normalizeBackupSession(s) {
     learningWords,
     correctKeys,
     loadedWordKeys,
+    testedWordKeys,
     poolWordKeys,
     poolDescription: s.poolDescription || "",
     poolConfig: s.poolConfig || null,
@@ -6206,7 +6212,12 @@ setTimeout(() => {
     const maxLen = Math.max(pool.length, exactRepeatWords.length);
     const remainingPoolLimit = Array.isArray(wizard.poolOverrideKeys) ? 10 : maxLen;
     const length = Math.min(Math.max(1, wizard.length), maxLen, remainingPoolLimit);
-    const sourcePoolWords = basePool;
+    // Keep the exact candidate set used by this mode. For a continued batch,
+    // preserve the full remaining parent pool even if the selected mode has a
+    // narrower eligibility filter (for example, Who Am I needs images).
+    const historyPoolWordKeys = Array.isArray(wizard.poolOverrideKeys)
+      ? [...new Set(wizard.poolOverrideKeys.map(String))]
+      : pool.map(w => w.key);
 
     const cfg = {
       filter: wizard.filter,
@@ -6241,7 +6252,7 @@ setTimeout(() => {
       muteAudio: cfg.muteAudio === true,
       poolDescription: `${wizard.poolOverrideKeys ? "Remaining untested · " : ""}${describeFilter(wizard.filter)}${wizard.mode === "whoami" ? " · Who Am I" : ""}`,
       poolConfig: practicePoolConfig(wizard.filter, length, cfg.mode, cfg.studyUntilMastered, cfg.spellTillRemember, cfg.repeatWrongSpelling, cfg.muteAudio),
-      poolWordKeys: sourcePoolWords.map(w => w.key),
+      poolWordKeys: historyPoolWordKeys,
       initialWords
     });
   };
@@ -6891,12 +6902,11 @@ setTimeout(() => {
       mode: g.mode,
       poolDescription: g.poolDescription,
       poolConfig: g.poolConfig || null,
-      poolSize: g.pool.length,
+      poolSize: sourcePoolWordKeys.length || g.pool.length,
       sessionLength: g.sessionLength,
       loadedWordKeys: Object.keys(g.perWord || {}),
-      poolWordKeys: sourcePoolWordKeys.length > g.sessionLength
-        ? sourcePoolWordKeys
-        : [],
+      testedWordKeys: Object.keys(g.perWord || {}).filter(k => Number(g.perWord[k]?.attempts || 0) > 0),
+      poolWordKeys: sourcePoolWordKeys,
       studyUntilMastered: g.studyUntilMastered,
       spellTillRemember: g.spellTillRemember,
       repeatWrongSpelling: g.repeatWrongSpelling,
@@ -7227,28 +7237,46 @@ setTimeout(() => {
   }
 
   function remainingPoolKeysForSession(s) {
-    if (!s || s.completed === false) return [];
+    if (!s) return [];
 
     let poolKeys = arrFromLookup(s.poolWordKeys || []);
-    // Older records did not retain the full candidate keys, and current
-    // filters can produce a different pool after progress or dataset changes.
-    // Only offer this action when the original pool was saved with the session.
+    const expectedSize = Number(s.poolSize || 0);
+    const filter = s.poolConfig?.filter || s.filter;
+    const modePoolFromSavedFilter = () => {
+      if (!filter || typeof filter !== "object") return [];
+      const filteredWords = resolvePool(cloneFilterConfig(filter));
+      return practicePoolForMode(filteredWords, s.mode).map(w => w.key);
+    };
+    // Recover older sessions only when their saved filter still produces the
+    // exact original mode pool size. A changed dataset must not silently widen
+    // an old pool to unrelated words.
+    if (!poolKeys.length) poolKeys = modePoolFromSavedFilter();
     if (!poolKeys.length) return [];
 
     poolKeys = [...new Set(poolKeys)];
-    const expectedSize = Number(s.poolSize || 0);
-    const poolSizeIsConsistent = s.mode === "whoami"
-      ? poolKeys.length >= expectedSize
-      : poolKeys.length === expectedSize;
-    if (expectedSize && !poolSizeIsConsistent) return [];
     const availableKeys = new Set(words.map(w => w.key));
     if (poolKeys.some(key => !availableKeys.has(key))) return [];
 
-    const testedKeys = new Set([
-      ...arrFromLookup(s.loadedWordKeys || []),
-      ...arrFromLookup(s.correctKeys || []),
-      ...arrFromLookup(s.wrongKeys || [])
-    ]);
+    if (expectedSize && poolKeys.length !== expectedSize) {
+      // Earlier releases saved the pre-mode pool for Who Am I sessions. Reduce
+      // it to the original mode-eligible set when the saved size confirms an
+      // exact match; otherwise the old pool cannot be reconstructed safely.
+      const modeKeys = s.mode === "whoami"
+        ? poolKeys.filter(key => isWhoAmIWord(words.find(w => w.key === key)))
+        : poolKeys;
+      if (modeKeys.length !== expectedSize) return [];
+      poolKeys = modeKeys;
+    }
+
+    const hasRecordedTestedKeys = Array.isArray(s.testedWordKeys);
+    const hasAnswerKeyLists = Array.isArray(s.correctKeys) && Array.isArray(s.wrongKeys);
+    const testedKeys = new Set(arrFromLookup(
+      hasRecordedTestedKeys
+        ? s.testedWordKeys
+        : hasAnswerKeyLists
+        ? [...s.correctKeys, ...s.wrongKeys]
+        : s.loadedWordKeys || []
+    ));
     const poolKeySet = new Set(poolKeys);
     if ([...testedKeys].some(key => !poolKeySet.has(key))) return [];
 
@@ -11549,6 +11577,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   function cleanSession(s) {
     const wrong = uniqueList(s.wrongKeys || []);
     const correctKeys = uniqueList(s.correctKeys || []);
+    const loadedWordKeys = uniqueList(s.loadedWordKeys || []);
+    const testedWordKeys = uniqueList(s.testedWordKeys || (
+      Array.isArray(s.correctKeys) && Array.isArray(s.wrongKeys)
+        ? [...s.correctKeys, ...s.wrongKeys]
+        : loadedWordKeys
+    ));
+    const poolWordKeys = uniqueList(s.poolWordKeys || s.fullPoolWordKeys || []);
     const masteredWords = uniqueList(s.masteredWords || []);
     const learningWords = uniqueList(s.learningWords || wrong);
     return {
@@ -11567,6 +11602,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       masteredWords,
       learningWords,
       correctKeys,
+      loadedWordKeys,
+      testedWordKeys,
+      poolWordKeys,
       poolConfig: s.poolConfig || null,
       poolDescription: s.poolDescription || "",
       poolSize: Number(s.poolSize || 0),
@@ -12254,6 +12292,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       wrongKeys,
       correctKeys,
       loadedWordKeys: uniqueList(s.loadedWordKeys || []),
+      testedWordKeys: uniqueList(s.testedWordKeys || (
+        Array.isArray(s.correctKeys) && Array.isArray(s.wrongKeys)
+          ? [...s.correctKeys, ...s.wrongKeys]
+          : s.loadedWordKeys || []
+      )),
       poolWordKeys: uniqueList(s.poolWordKeys || s.fullPoolWordKeys || []),
       poolConfig: s.poolConfig || null,
 
