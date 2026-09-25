@@ -6691,11 +6691,11 @@ setTimeout(() => {
       <figure class="whoami-figure">
         <img class="whoami-image" src="${escapeHtml(asset.src)}" alt="Visual anatomy clue" />
       </figure>
-      <div class="whoami-question-audio">
-        <button class="practice-question-audio-btn" id="whoamiPronunciationBtn" type="button" aria-label="Play pronunciation" title="Play pronunciation">🔊</button>
-      </div>
       <div class="game-spell whoami-spell">
-        <input class="spell-input whoami-input" id="whoamiInput" aria-label="Type the full vocabulary name" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
+        <div class="whoami-input-row">
+          <button class="practice-question-audio-btn" id="whoamiPronunciationBtn" type="button" aria-label="Play pronunciation" title="Play pronunciation">🔊</button>
+          <input class="spell-input whoami-input" id="whoamiInput" aria-label="Type the full vocabulary name" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
+        </div>
         <button class="game-btn primary" id="whoamiCheckBtn" type="button">Check</button>
       </div>
     `;
@@ -6820,8 +6820,8 @@ setTimeout(() => {
 
     $("gameBody").innerHTML = `
       <div class="practice-question-audio-row">
-        <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
         <button class="practice-question-audio-btn" id="spellPronunciationBtn" type="button" aria-label="Play pronunciation" title="Play pronunciation">🔊</button>
+        <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
       </div>
       <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
       <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;white-space:pre-line;">
