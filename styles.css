@@ -361,7 +361,6 @@
   .practice-question-audio-btn:active { transform: scale(.92); }
   .practice-question-audio-btn.playing { animation: practice-question-audio-pulse .85s ease-in-out infinite; }
   @keyframes practice-question-audio-pulse { 50% { box-shadow: 0 0 0 5px rgba(167, 139, 250, .2), 0 4px 12px rgba(124, 58, 237, .24); } }
-  .whoami-question-audio { display: flex; justify-content: flex-end; margin: -9px 0 8px; }
   .game-prompt { font-family: 'Fraunces', serif; font-weight: 700; font-size: 32px; line-height: 1.2; color: var(--ink); margin: 8px 0 24px; }
   .game-prompt.small { font-size: 22px; }
   .game-options { display: flex; flex-direction: column; gap: 12px; }
@@ -416,6 +415,8 @@
   .whoami-image { display: block; width: 100%; max-height: min(56vh, 520px); object-fit: contain; border-radius: 16px; background: white; }
   .whoami-spell { gap: 10px; }
   .whoami-spell .whoami-input { margin: 0; }
+  .whoami-input-row { display: flex; align-items: center; gap: 10px; }
+  .whoami-input-row .whoami-input { flex: 1; min-width: 0; width: auto; box-sizing: border-box; }
   .whoami-spell #whoamiCheckBtn { width: 100%; }
   .whoami-result { margin-top: 16px; padding: 14px; background: white; border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-sm); }
   .whoami-result.is-correct { border-color: var(--green); background: #F7FEE7; }
