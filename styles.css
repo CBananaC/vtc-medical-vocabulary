@@ -354,6 +354,14 @@
 
   .game-body { flex: 1; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
   .game-prompt-label { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .practice-question-audio-row { display: flex; align-items: center; gap: 10px; }
+  .practice-question-audio-row .game-prompt-label { flex: 1; min-width: 0; }
+  .practice-question-audio-btn { width: 36px; height: 36px; flex: 0 0 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #DDD6FE; border-radius: 50%; background: #F5F0FF; color: #7C3AED; font-size: 15px; line-height: 1; cursor: pointer; box-shadow: 0 2px 8px rgba(124, 58, 237, .13); transition: transform .16s ease, background .16s ease, box-shadow .16s ease; }
+  .practice-question-audio-btn:hover { background: #EDE5FF; box-shadow: 0 4px 12px rgba(124, 58, 237, .2); }
+  .practice-question-audio-btn:active { transform: scale(.92); }
+  .practice-question-audio-btn.playing { animation: practice-question-audio-pulse .85s ease-in-out infinite; }
+  @keyframes practice-question-audio-pulse { 50% { box-shadow: 0 0 0 5px rgba(167, 139, 250, .2), 0 4px 12px rgba(124, 58, 237, .24); } }
+  .whoami-question-audio { display: flex; justify-content: flex-end; margin: -9px 0 8px; }
   .game-prompt { font-family: 'Fraunces', serif; font-weight: 700; font-size: 32px; line-height: 1.2; color: var(--ink); margin: 8px 0 24px; }
   .game-prompt.small { font-size: 22px; }
   .game-options { display: flex; flex-direction: column; gap: 12px; }
