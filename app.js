@@ -6663,6 +6663,17 @@ setTimeout(() => {
     return asset;
   }
 
+  function bindPracticeQuestionAudioButton(buttonId, inputId, wordKey) {
+    const button = $(buttonId);
+    if (!button) return;
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      try { playAudioFor(wordKey, button); }
+      catch (err) { console.warn("Practice pronunciation failed:", err); }
+      $(inputId)?.focus({ preventScroll: true });
+    });
+  }
+
   function renderWhoAmIV2(w) {
     const asset = chooseWhoAmIAsset(w);
     if (!asset) {
@@ -6680,6 +6691,9 @@ setTimeout(() => {
       <figure class="whoami-figure">
         <img class="whoami-image" src="${escapeHtml(asset.src)}" alt="Visual anatomy clue" />
       </figure>
+      <div class="whoami-question-audio">
+        <button class="practice-question-audio-btn" id="whoamiPronunciationBtn" type="button" aria-label="Play pronunciation" title="Play pronunciation">🔊</button>
+      </div>
       <div class="game-spell whoami-spell">
         <input class="spell-input whoami-input" id="whoamiInput" aria-label="Type the full vocabulary name" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Type full form…" />
         <button class="game-btn primary" id="whoamiCheckBtn" type="button">Check</button>
@@ -6688,6 +6702,7 @@ setTimeout(() => {
 
     const input = $("whoamiInput");
     input?.focus();
+    bindPracticeQuestionAudioButton("whoamiPronunciationBtn", "whoamiInput", w.key);
     $("whoamiCheckBtn").onclick = () => window.answerWhoAmIV2(w);
     input?.addEventListener("keydown", event => {
       if (event.key === "Enter") window.answerWhoAmIV2(w);
@@ -6804,7 +6819,10 @@ setTimeout(() => {
     const hint = spellingHintForWord(w);
 
     $("gameBody").innerHTML = `
-      <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
+      <div class="practice-question-audio-row">
+        <div class="game-prompt-label">${spellingQuestionLabelHtml(w, q, entry)}</div>
+        <button class="practice-question-audio-btn" id="spellPronunciationBtn" type="button" aria-label="Play pronunciation" title="Play pronunciation">🔊</button>
+      </div>
       <div class="game-prompt small">${escapeHtml(q.prompt)}</div>
       <div id="spellHintBox" style="display:none;margin:-8px 0 14px;padding:10px 12px;border-radius:12px;background:var(--yellow-soft);color:#854D0E;font-size:13px;font-weight:700;line-height:1.45;white-space:pre-line;">
         ${escapeHtml(hint)}
@@ -6819,6 +6837,7 @@ setTimeout(() => {
     `;
 
     $("spellInput").focus();
+    bindPracticeQuestionAudioButton("spellPronunciationBtn", "spellInput", w.key);
     $("spellHintBtn").onclick = () => { const b = $("spellHintBox"); if (b) b.style.display = "block"; };
     $("checkSpellBtn").onclick = () => window.answerSpellV2(w);
     $("spellInput").addEventListener("keydown", e => { if (e.key === "Enter") window.answerSpellV2(w); });
