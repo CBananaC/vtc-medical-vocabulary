@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v59-20260925-question-audio-v2";
+const CACHE_NAME = "ielts-vocab-pwa-v60-20261002-audio-mix-presets-v1";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20260925-question-audio-v2",
-  "/styles.css?v=20260925-question-audio-v2"
+  "/app.js?v=20261002-audio-mix-presets-v1",
+  "/styles.css?v=20261002-audio-mix-presets-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
