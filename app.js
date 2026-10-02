@@ -2433,12 +2433,25 @@ let currentAudio = null;
 const vtcAudioCache = {};
 
 function createInlineAudio(url) {
+  preferBackgroundAudioMixing();
   const audio = document.createElement("audio");
   audio.src = url;
   audio.preload = "auto";
   audio.playsInline = true;
   audio.setAttribute("playsinline", "");
   return audio;
+}
+
+// Pronunciation clips are brief, non-primary sounds. On browsers that expose
+// the Audio Session API, request ambient playback so they can mix with music
+// or video already playing elsewhere on the device. Unsupported browsers keep
+// their normal media-focus behavior.
+function preferBackgroundAudioMixing() {
+  try {
+    if (navigator.audioSession && "type" in navigator.audioSession) {
+      navigator.audioSession.type = "ambient";
+    }
+  } catch (e) {}
 }
 
 function activePracticeGame() {
@@ -2535,6 +2548,7 @@ function playAudio() {
   playAudioFor(currentWord.key, $("audioBtn"));
 }
 async function playAudioFor(key, sourceBtn) {
+  preferBackgroundAudioMixing();
   const w = words.find(x => x.key === key);
   if (!w) return;
   let entry = dictCache[key];
@@ -5951,6 +5965,37 @@ setTimeout(() => {
     `;
   }
 
+  function sessionLengthPresetValues(maxLength) {
+    const max = Math.max(1, Math.floor(Number(maxLength) || 1));
+    const targetCount = Math.min(5, max);
+    const values = [...new Set([5, 10, 15, 20, 25].filter(n => n <= max))];
+    if (max <= 25 && !values.includes(max)) values.push(max);
+
+    while (values.length < targetCount) {
+      const sorted = [...values].sort((a, b) => a - b);
+      const boundaries = [0, ...sorted, max + 1];
+      let candidate = null;
+      let widestGap = 0;
+      for (let i = 1; i < boundaries.length; i++) {
+        const low = boundaries[i - 1];
+        const high = boundaries[i];
+        if (high - low <= 1) continue;
+        const middle = Math.floor((low + high) / 2);
+        if (middle > 0 && middle <= max && !values.includes(middle) && high - low > widestGap) {
+          candidate = middle;
+          widestGap = high - low;
+        }
+      }
+      if (candidate === null) {
+        candidate = Array.from({ length: max }, (_, i) => i + 1).find(n => !values.includes(n));
+      }
+      if (candidate === undefined) break;
+      values.push(candidate);
+    }
+
+    return values.sort((a, b) => a - b).slice(0, 5);
+  }
+
   // ── Layer 2: Practice type + inline options ──────────────────
   function renderLayer2(root) {
     const pool = wizardPool();
@@ -5977,6 +6022,8 @@ setTimeout(() => {
       const isSelected = wizard.mode === m.id;
       if (isSelected && wizard.length > modeMaxLen) wizard.length = modeMaxLen;
       const modeLength = Math.max(1, Math.min(wizard.length, modeMaxLen));
+      const lengthPresets = sessionLengthPresetValues(modeMaxLen);
+      const lengthUnit = m.id === "whoami" ? "visual cards" : "words";
       const acc = poolModeAccuracy(modePoolKeys, m.id);
       const stat = acc
         ? `Pool accuracy: ${acc.pct}% · ${acc.attempts} attempts`
@@ -5987,6 +6034,9 @@ setTimeout(() => {
           <input type="range" class="pw-slider" min="1" max="${modeMaxLen}" value="${modeLength}"
             oninput="practiceSliderChange(this.value)" />
           <div class="l2-slider-ends"><span>1</span><span>${modeMaxLen}</span></div>
+          <div class="l2-length-presets" role="group" aria-label="Quick session length">
+            ${lengthPresets.map(n => `<button type="button" class="l2-length-preset ${n === modeLength ? "active" : ""} ${String(n).length > 3 ? "compact" : ""}" data-length="${n}" aria-label="Set session length to ${n} ${lengthUnit}" aria-pressed="${n === modeLength}" onclick="practiceSelectLengthPreset(${n})">${n.toLocaleString()}</button>`).join("")}
+          </div>
           ${m.id !== "spelling" ? `
             <div class="l2-toggle-row">
               <div class="l2-toggle-body">
@@ -6057,11 +6107,31 @@ setTimeout(() => {
     `;
   }
 
-  // Slider update without full re-render
+  function syncPracticeLengthControls(value) {
+    const label = document.getElementById("pwSliderVal");
+    if (label) label.textContent = String(value);
+    document.querySelectorAll(".l2-length-presets .l2-length-preset").forEach(button => {
+      const isActive = Number(button.dataset.length) === Number(value);
+      button.classList.toggle("active", isActive);
+      button.setAttribute("aria-pressed", String(isActive));
+    });
+  }
+
+  // Slider and quick presets update each other without re-rendering the card.
   window.practiceSliderChange = function(val) {
     wizard.length = parseInt(val, 10);
-    const label = document.getElementById("pwSliderVal");
-    if (label) label.textContent = val;
+    syncPracticeLengthControls(wizard.length);
+  };
+
+  window.practiceSelectLengthPreset = function(value) {
+    const n = parseInt(value, 10);
+    if (!Number.isFinite(n)) return;
+    const slider = document.querySelector("#practiceRoot .l2-options .pw-slider");
+    const min = slider ? parseInt(slider.min, 10) : 1;
+    const max = slider ? parseInt(slider.max, 10) : n;
+    wizard.length = Math.max(min, Math.min(n, max));
+    if (slider) slider.value = String(wizard.length);
+    syncPracticeLengthControls(wizard.length);
   };
 
   // ---------- Wizard actions (window-exposed) ----------
