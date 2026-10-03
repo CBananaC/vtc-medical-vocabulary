@@ -15,7 +15,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 
-<link rel="stylesheet" href="/styles.css?v=20261002-audio-mix-presets-v1">
+<link rel="stylesheet" href="/styles.css?v=20261003-pronunciation-volume-v1">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -162,7 +162,29 @@
       <button class="game-close" onclick="exitGame()">✕</button>
       <div class="progress-dots" id="progressDots"></div>
       <div class="game-streak" id="gameStreak">🔥0</div>
-      <button class="game-sound-toggle" id="gameSoundToggle" type="button" onclick="togglePracticeAudio()" aria-label="Audio on; tap to mute" aria-pressed="false">🔊</button>
+      <div class="game-audio-control">
+        <button class="game-sound-toggle" id="gameSoundToggle" type="button"
+          onclick="handlePracticeAudioToggleClick(event)"
+          onpointerdown="beginPracticeAudioButtonHold(event)"
+          onpointerup="endPracticeAudioButtonHold(event)"
+          onpointercancel="cancelPracticeAudioButtonHold()"
+          oncontextmenu="return false"
+          aria-label="Audio on; tap to mute; hold to adjust pronunciation volume"
+          aria-controls="practicePronunciationVolumePanel" aria-expanded="false" aria-pressed="false">🔊</button>
+        <div class="practice-pronunciation-volume" id="practicePronunciationVolumePanel" hidden>
+          <div class="practice-pronunciation-volume-heading">
+            <span>Pronunciation volume</span>
+            <button type="button" aria-label="Close pronunciation volume" onclick="closePracticePronunciationVolumePanel()">×</button>
+          </div>
+          <div class="practice-pronunciation-volume-control">
+            <span>Low</span>
+            <input id="practicePronunciationVolume" type="range" min="0.1" max="4" step="0.05" value="1"
+              aria-label="Test pronunciation volume" oninput="setPracticePronunciationVolume(this.value)" />
+            <span>High</span>
+          </div>
+          <output id="practicePronunciationVolumeOutput" for="practicePronunciationVolume">100%</output>
+        </div>
+      </div>
     </div>
     <div class="game-body" id="gameBody"></div>
   </div>
@@ -178,6 +200,6 @@
   </nav>
 </div>
 
-<script src="/app.js?v=20261002-audio-mix-presets-v1"></script>
+<script src="/app.js?v=20261003-pronunciation-volume-v1"></script>
 </body>
 </html>
