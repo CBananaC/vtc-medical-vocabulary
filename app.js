@@ -2432,6 +2432,223 @@ function toggleKnown() {
 let currentAudio = null;
 const vtcAudioCache = {};
 
+const practicePronunciationVolumeStorageKey = "vtc_vocab_test_pronunciation_volume_v1";
+const practicePronunciationVolumeMin = 0.1;
+const practicePronunciationVolumeMax = 4;
+const practicePronunciationAudioRoutes = new WeakMap();
+const practiceTestPronunciationCache = new Map();
+let practicePronunciationVolume = 1;
+let practicePronunciationAudioContext = null;
+let practiceAudioHoldTimer = null;
+let practiceAudioHoldTriggered = false;
+let consumePracticeAudioToggleClick = false;
+try {
+  const storedPracticeVolume = localStorage.getItem(practicePronunciationVolumeStorageKey);
+  if (storedPracticeVolume !== null && Number.isFinite(Number(storedPracticeVolume))) {
+    practicePronunciationVolume = Math.max(practicePronunciationVolumeMin, Math.min(practicePronunciationVolumeMax, Number(storedPracticeVolume)));
+  }
+} catch (e) {}
+
+function practiceTestAudioIsOpen() {
+  return !!document.getElementById("gameOverlay")?.classList.contains("show");
+}
+
+function preparePracticePronunciationAudio() {
+  preferBackgroundAudioMixing();
+  try {
+    const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!practicePronunciationAudioContext && AudioContextConstructor) {
+      practicePronunciationAudioContext = new AudioContextConstructor();
+    }
+    if (practicePronunciationAudioContext?.state === "suspended") {
+      practicePronunciationAudioContext.resume().catch(() => {});
+    }
+  } catch (e) {}
+  return practicePronunciationAudioContext;
+}
+
+function practiceAudioSourceSupportsBoost(audio) {
+  const source = String(audio?.currentSrc || audio?.src || "");
+  if (/^data:audio\//i.test(source)) return true;
+  try {
+    return new URL(source, window.location.href).origin === window.location.origin;
+  } catch (e) {
+    return false;
+  }
+}
+
+function practiceAudioUrlSupportsBoost(url) {
+  return practiceAudioSourceSupportsBoost({ src: String(url || ""), currentSrc: String(url || "") });
+}
+
+function configurePracticePronunciationAudio(audio) {
+  if (!audio) return false;
+  preferBackgroundAudioMixing();
+  const context = preparePracticePronunciationAudio();
+  if (!context || !practiceAudioSourceSupportsBoost(audio)) {
+    audio.volume = Math.min(1, practicePronunciationVolume);
+    return false;
+  }
+  try {
+    let route = practicePronunciationAudioRoutes.get(audio);
+    if (!route) {
+      const source = context.createMediaElementSource(audio);
+      const gain = context.createGain();
+      const compressor = context.createDynamicsCompressor();
+      compressor.threshold.value = -4;
+      compressor.knee.value = 4;
+      compressor.ratio.value = 10;
+      compressor.attack.value = 0.004;
+      compressor.release.value = 0.14;
+      source.connect(gain);
+      gain.connect(compressor);
+      compressor.connect(context.destination);
+      route = { gain };
+      practicePronunciationAudioRoutes.set(audio, route);
+    }
+    route.gain.gain.setTargetAtTime(practicePronunciationVolume, context.currentTime, 0.015);
+    audio.volume = 1;
+    if (context.state === "suspended") context.resume().catch(() => {});
+    return true;
+  } catch (e) {
+    audio.volume = Math.min(1, practicePronunciationVolume);
+    return false;
+  }
+}
+
+function syncPracticePronunciationVolumeUi() {
+  const slider = document.getElementById("practicePronunciationVolume");
+  const output = document.getElementById("practicePronunciationVolumeOutput");
+  const panel = document.getElementById("practicePronunciationVolumePanel");
+  const button = document.getElementById("gameSoundToggle");
+  const activeAudio = window.currentAudio || currentAudio;
+  const contextAvailable = !!(window.AudioContext || window.webkitAudioContext);
+  const max = activeAudio && (!contextAvailable || !practiceAudioSourceSupportsBoost(activeAudio))
+    ? 1 : practicePronunciationVolumeMax;
+  const visibleValue = Math.min(practicePronunciationVolume, max);
+  if (slider) {
+    slider.max = String(max);
+    if (document.activeElement !== slider) slider.value = String(visibleValue);
+  }
+  if (output) output.value = `${Math.round(visibleValue * 100)}%`;
+  if (button) button.setAttribute("aria-expanded", panel && !panel.hidden ? "true" : "false");
+}
+
+function setPracticePronunciationVolume(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return;
+  practicePronunciationVolume = Math.max(practicePronunciationVolumeMin, Math.min(practicePronunciationVolumeMax, parsed));
+  try { localStorage.setItem(practicePronunciationVolumeStorageKey, String(practicePronunciationVolume)); } catch (e) {}
+  const activeAudios = new Set([currentAudio, window.currentAudio].filter(Boolean));
+  activeAudios.forEach(audio => {
+    const route = practicePronunciationAudioRoutes.get(audio);
+    if (route && practicePronunciationAudioContext) {
+      route.gain.gain.setTargetAtTime(practicePronunciationVolume, practicePronunciationAudioContext.currentTime, 0.015);
+      audio.volume = 1;
+    } else if (practiceTestAudioIsOpen()) {
+      configurePracticePronunciationAudio(audio);
+    }
+  });
+  syncPracticePronunciationVolumeUi();
+}
+
+function showPracticePronunciationVolumePanel() {
+  const panel = document.getElementById("practicePronunciationVolumePanel");
+  if (!panel || !practiceTestAudioIsOpen()) return;
+  panel.hidden = false;
+  syncPracticePronunciationVolumeUi();
+}
+
+function closePracticePronunciationVolumePanel() {
+  const panel = document.getElementById("practicePronunciationVolumePanel");
+  if (panel) panel.hidden = true;
+  syncPracticePronunciationVolumeUi();
+}
+
+function beginPracticeAudioButtonHold(event) {
+  if (event && event.button !== undefined && event.button !== 0) return;
+  consumePracticeAudioToggleClick = false;
+  if (practiceAudioHoldTimer) clearTimeout(practiceAudioHoldTimer);
+  practiceAudioHoldTriggered = false;
+  practiceAudioHoldTimer = setTimeout(() => {
+    practiceAudioHoldTimer = null;
+    practiceAudioHoldTriggered = true;
+    showPracticePronunciationVolumePanel();
+  }, 450);
+}
+
+function endPracticeAudioButtonHold() {
+  if (practiceAudioHoldTimer) clearTimeout(practiceAudioHoldTimer);
+  practiceAudioHoldTimer = null;
+  if (practiceAudioHoldTriggered) {
+    consumePracticeAudioToggleClick = true;
+    setTimeout(() => { consumePracticeAudioToggleClick = false; }, 900);
+  }
+}
+
+function cancelPracticeAudioButtonHold() {
+  if (practiceAudioHoldTimer) clearTimeout(practiceAudioHoldTimer);
+  practiceAudioHoldTimer = null;
+}
+
+function handlePracticeAudioToggleClick(event) {
+  if (consumePracticeAudioToggleClick) {
+    consumePracticeAudioToggleClick = false;
+    event?.preventDefault();
+    return;
+  }
+  togglePracticeAudio();
+}
+
+window.setPracticePronunciationVolume = setPracticePronunciationVolume;
+window.beginPracticeAudioButtonHold = beginPracticeAudioButtonHold;
+window.endPracticeAudioButtonHold = endPracticeAudioButtonHold;
+window.cancelPracticeAudioButtonHold = cancelPracticeAudioButtonHold;
+window.handlePracticeAudioToggleClick = handlePracticeAudioToggleClick;
+window.closePracticePronunciationVolumePanel = closePracticePronunciationVolumePanel;
+
+document.addEventListener("pointerdown", () => {
+  if (practiceTestAudioIsOpen()) preparePracticePronunciationAudio();
+}, true);
+
+async function fetchPracticeTestPronunciation(w) {
+  if (!w?.word) return null;
+  if (w.vtc) return fetchVtcAudio(w);
+  if (practiceTestPronunciationCache.has(w.key)) return practiceTestPronunciationCache.get(w.key);
+
+  const request = (async () => {
+    const res = await fetch(`/api/audio?text=${encodeURIComponent(w.word)}`);
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(msg);
+    }
+    const data = await res.json();
+    if (!data.audioDataUri) throw new Error("Google Cloud TTS returned no audio");
+    return { source: "google-cloud-tts", audioUrl: data.audioDataUri, audioMimeType: data.mimeType || "audio/mpeg" };
+  })();
+  practiceTestPronunciationCache.set(w.key, request);
+  try {
+    const entry = await request;
+    practiceTestPronunciationCache.set(w.key, entry);
+    return entry;
+  } catch (err) {
+    practiceTestPronunciationCache.delete(w.key);
+    throw err;
+  }
+}
+
+async function practicePronunciationUrlForTest(w, url) {
+  if (!practiceTestAudioIsOpen() || !url || practiceAudioUrlSupportsBoost(url)) return url;
+  try {
+    const generated = await fetchPracticeTestPronunciation(w);
+    return generated?.audioUrl || url;
+  } catch (err) {
+    console.warn("Adjustable test pronunciation fallback failed:", err);
+    return url;
+  }
+}
+
 function createInlineAudio(url) {
   preferBackgroundAudioMixing();
   const audio = document.createElement("audio");
@@ -2439,6 +2656,7 @@ function createInlineAudio(url) {
   audio.preload = "auto";
   audio.playsInline = true;
   audio.setAttribute("playsinline", "");
+  if (practiceTestAudioIsOpen()) configurePracticePronunciationAudio(audio);
   return audio;
 }
 
@@ -2579,13 +2797,31 @@ async function playAudioFor(key, sourceBtn) {
       return;
     }
   }
-  if (!entry?.audioUrl) {
+  let audioUrl = entry?.audioUrl || "";
+  if (practiceTestAudioIsOpen()) {
+    if (!audioUrl) {
+      try {
+        const generated = await fetchPracticeTestPronunciation(w);
+        audioUrl = generated?.audioUrl || "";
+      } catch (err) {
+        console.warn("Test pronunciation generation failed:", err);
+      }
+    } else {
+      audioUrl = await practicePronunciationUrlForTest(w, audioUrl);
+    }
+  }
+  if (!audioUrl) {
     if (btn) btn.classList.remove("playing");
     toast("No audio available");
     return;
   }
   if (currentAudio) { try { currentAudio.pause(); } catch (e) { } }
-  currentAudio = createInlineAudio(entry.audioUrl);
+  if (window.currentAudio && window.currentAudio !== currentAudio) {
+    try { window.currentAudio.pause(); } catch (e) { }
+  }
+  currentAudio = createInlineAudio(audioUrl);
+  window.currentAudio = currentAudio;
+  syncPracticePronunciationVolumeUi();
   const activeBtn = btn || $("audioBtn");
   if (activeBtn) activeBtn.classList.add("playing");
   currentAudio.addEventListener("ended", () => activeBtn && activeBtn.classList.remove("playing"));
@@ -2759,10 +2995,19 @@ function practicePlayPronunciationAndThen(key, sourceBtn, done) {
       "";
 
     if (audioUrl) {
-      const audio = createInlineAudio(audioUrl);
-      audio.onended = finish;
-      audio.onerror = finish;
-      audio.play().catch(() => finish());
+      (async () => {
+        const playableUrl = await practicePronunciationUrlForTest(w, audioUrl);
+        const audio = createInlineAudio(playableUrl);
+        currentAudio = audio;
+        window.currentAudio = audio;
+        syncPracticePronunciationVolumeUi();
+        audio.onended = finish;
+        audio.onerror = finish;
+        audio.play().catch(() => finish());
+      })().catch(err => {
+        console.warn("Practice pronunciation playback failed:", err);
+        finish();
+      });
       return;
     }
 
@@ -6456,8 +6701,13 @@ setTimeout(() => {
       const muted = g.audioMuted === true;
       soundToggle.textContent = muted ? "🔇" : "🔊";
       soundToggle.setAttribute("aria-pressed", muted ? "true" : "false");
-      soundToggle.setAttribute("aria-label", muted ? "Audio muted; tap to unmute" : "Audio on; tap to mute");
-      soundToggle.title = muted ? "Audio muted · use Play sound buttons when needed" : "Audio on · tap to mute";
+      soundToggle.setAttribute("aria-label", muted
+        ? "Audio muted; tap to unmute; hold to adjust pronunciation volume"
+        : "Audio on; tap to mute; hold to adjust pronunciation volume");
+      soundToggle.title = muted
+        ? "Audio muted · use Play sound buttons when needed · hold to adjust pronunciation volume"
+        : "Audio on · tap to mute · hold to adjust pronunciation volume";
+      syncPracticePronunciationVolumeUi();
     }
 
     // Recycle counter below topbar
@@ -11495,19 +11745,27 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         "";
 
       if (audioUrl) {
-        if (window.currentAudio) {
+        if (currentAudio) {
+          try { currentAudio.pause(); } catch {}
+        }
+        if (window.currentAudio && window.currentAudio !== currentAudio) {
           try { window.currentAudio.pause(); } catch {}
         }
-
-        const audio = createInlineAudio(audioUrl);
-        window.currentAudio = audio;
-
         if (sourceBtn && sourceBtn.classList) sourceBtn.classList.add("playing");
 
-        audio.addEventListener("ended", finish, { once: true });
-        audio.addEventListener("error", finish, { once: true });
-
-        audio.play().catch(() => finish());
+        (async () => {
+          const playableUrl = await practicePronunciationUrlForTest(w, audioUrl);
+          const audio = createInlineAudio(playableUrl);
+          currentAudio = audio;
+          window.currentAudio = audio;
+          syncPracticePronunciationVolumeUi();
+          audio.addEventListener("ended", finish, { once: true });
+          audio.addEventListener("error", finish, { once: true });
+          audio.play().catch(() => finish());
+        })().catch(err => {
+          console.warn("Practice pronunciation playback failed:", err);
+          finish();
+        });
         return;
       }
 
