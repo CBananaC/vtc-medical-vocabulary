@@ -349,7 +349,22 @@
   .pdot.current { background: var(--grad); }
   .game-streak { font-size: 14px; font-weight: 800; color: var(--ink-soft); display: flex; align-items: center; gap: 4px; min-width: 38px; justify-content: flex-end; }
   .game-sound-toggle { width: 36px; height: 36px; flex: none; border-radius: 999px; background: white; border: 1px solid var(--line); color: var(--ink-soft); display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; box-shadow: var(--shadow-sm); transition: transform 0.15s, border-color 0.15s, background 0.15s; }
+  .game-audio-control { position: relative; flex: 0 0 36px; z-index: 3; }
   .game-sound-toggle:active { transform: scale(0.94); }
+  .game-sound-toggle { -webkit-touch-callout: none; user-select: none; }
+  .practice-pronunciation-volume {
+    position: absolute; top: 44px; right: 0; z-index: 20;
+    width: min(246px, calc(100vw - 40px)); box-sizing: border-box;
+    padding: 11px 13px 9px; border: 1px solid #DDD6FE; border-radius: 14px;
+    background: #FFF; box-shadow: 0 10px 28px rgba(45, 35, 75, .18);
+    color: var(--ink); touch-action: manipulation;
+  }
+  .practice-pronunciation-volume[hidden] { display: none; }
+  .practice-pronunciation-volume-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 800; }
+  .practice-pronunciation-volume-heading button { width: 26px; height: 26px; border: 0; border-radius: 50%; background: var(--bg); color: var(--ink-soft); font-size: 18px; line-height: 1; }
+  .practice-pronunciation-volume-control { display: flex; align-items: center; gap: 8px; margin-top: 7px; color: var(--muted); font-size: 10px; font-weight: 800; }
+  .practice-pronunciation-volume-control input { flex: 1; min-width: 0; margin: 0; accent-color: var(--purple); touch-action: pan-y; }
+  .practice-pronunciation-volume output { display: block; margin-top: 3px; text-align: right; color: var(--purple-deep); font-size: 10px; font-weight: 900; }
   .game-sound-toggle[aria-pressed="true"] { background: var(--purple-soft); border-color: #D8C9FF; color: var(--purple-deep); }
 
   .game-body { flex: 1; padding: 20px; display: flex; flex-direction: column; overflow-y: auto; }
