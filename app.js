@@ -7468,10 +7468,24 @@ setTimeout(() => {
 
     // After Done on a completed/summary practice, always show Practice Layer 0.
     wizard.step = 0;
-    window.scrollTo(0, 0);
 
-    if (typeof renderAll === "function") renderAll();
-    else if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+    // Refresh only the page underneath the game overlay. `renderAll()` rebuilds
+    // Goal, Words, and Practice even though only one page is visible, which can
+    // make a completed practice feel like the whole app restarted.
+    const activePage = document.querySelector(".page.active")?.dataset.page;
+    if (activePage === "practice") {
+      if (typeof window.renderPracticeRoot === "function") window.renderPracticeRoot();
+      else if (typeof renderPracticeRoot === "function") renderPracticeRoot();
+      window.scrollTo(0, 0);
+    } else if (activePage === "home") {
+      if (typeof window.renderHome === "function") window.renderHome();
+      else if (typeof renderHome === "function") renderHome();
+    } else if (activePage === "words") {
+      if (typeof window.renderWords === "function") window.renderWords();
+      else if (typeof renderWords === "function") renderWords();
+    } else if (activePage === "progress" && typeof window.renderProgressTab === "function") {
+      window.renderProgressTab();
+    }
   };
 
   // Override the practice-tab render so the legacy `renderPracticeAcc` (which
