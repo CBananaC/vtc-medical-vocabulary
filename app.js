@@ -1550,6 +1550,31 @@ function aggregateRecords(type, list = words) {
    ============================================================ */
 function renderAll() { renderHome(); renderWords(); renderPracticeAcc(); }
 
+// Applying merged state must not rebuild the whole app shell. In particular,
+// a sync that completes while a practice overlay is open must leave the live
+// question and its answer state mounted. The practice exit handler refreshes
+// Practice History after the overlay closes.
+function refreshVisiblePageAfterDataChange() {
+  if (window.game || document.querySelector(".game-overlay.show")) return false;
+
+  const page = document.querySelector(".page.active")?.dataset.page;
+  const renderer = page === "home" ? (window.renderHome || renderHome)
+    : page === "words" ? (window.renderWords || renderWords)
+    : page === "practice" ? (window.renderPracticeRoot || renderPracticeAcc)
+    : page === "progress" ? window.renderProgressTab
+    : null;
+
+  if (typeof renderer !== "function") return false;
+  try {
+    renderer();
+    return true;
+  } catch (err) {
+    console.warn("Could not refresh the visible page after cloud merge:", err);
+    return false;
+  }
+}
+window.refreshVisiblePageAfterDataChange = refreshVisiblePageAfterDataChange;
+
 function renderHome() {
   // Home tab replaced by Goal tab. renderGoalTab() is defined in the Goal IIFE.
   // Keep word-list cleanup here since some callers rely on it running.
@@ -12058,12 +12083,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     try { known = knownObj; } catch {}
     try { needsReview = reviewObj; } catch {}
 
-    if (typeof renderAll === "function") renderAll();
-    else {
-      try { renderWords(); } catch {}
-      try { renderPracticeRoot(); } catch {}
-      try { renderGoalTab(); } catch {}
-    }
+    refreshVisiblePageAfterDataChange();
   }
 
   async function backendSyncStatus() {
@@ -12205,11 +12225,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       goalMet: nextGoalMet
     });
 
-    try {
-      if (typeof renderGoalTab === "function") renderGoalTab();
-      if (typeof renderHome === "function") renderHome();
-      if (typeof renderAll === "function") renderAll();
-    } catch {}
+    refreshVisiblePageAfterDataChange();
 
     try {
       if (typeof window.cloudMarkChanged === "function") {
@@ -12250,7 +12266,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   localStorage.setItem = function(key, value) {
     const result = prevSetItem(key, value);
     try {
-      if (key === LS.GOAL) {
+      if (key === LS.GOAL && !window.__cloudApplyingRemotePayloadV4 && !window.__v6Applying) {
         setTimeout(() => recalcTodayGoalMet("LS.GOAL"), 0);
       }
     } catch {}
@@ -12869,22 +12885,14 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
     try { known = knownObj; } catch {}
     try { needsReview = reviewObj; } catch {}
-    if (sessions.length && typeof window.preparePracticeHistoryHome === "function") {
+    if (!window.game && sessions.length && typeof window.preparePracticeHistoryHome === "function") {
       try { window.preparePracticeHistoryHome("drive-apply"); } catch {}
     }
 
     try { localStorage.setItem(LS.CLOUD_DATA_UPDATED_AT, payload.meta?.updatedAt || nowIso()); } catch {}
     try { localStorage.removeItem(LS.CLOUD_PENDING_SYNC); } catch {}
 
-    try {
-      if (typeof renderAll === "function") renderAll();
-      else {
-        try { renderGoalTab(); } catch {}
-        try { renderPracticeRoot(); } catch {}
-        try { renderWordList(); } catch {}
-      }
-      try { if (typeof window.renderProgressTab === "function") window.renderProgressTab(); } catch {}
-    } catch {}
+    refreshVisiblePageAfterDataChange();
 
     return true;
   }
@@ -25397,11 +25405,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
       lsSet(K.DATA_UPDATED, (p.meta && p.meta.updatedAt) || nowIso());
 
-      // re-render every tab
+      // Refresh only the visible page. A cloud merge can finish while practice
+      // is running; rebuilding every tab here used to discard the mounted
+      // question and make the app appear to restart.
       window.__skillStateReady = true;
-      [ "renderAll","renderGoalTab","renderProgressTab","renderProgress","renderPracticeRoot",
-        "renderPracticeHistory","renderWordList","renderWords","renderHome","updateStats","renderCalendar"
-      ].forEach(function(fn){ try { if (typeof window[fn] === "function") window[fn](); else if (typeof eval(fn) === "function") eval(fn+"()"); } catch(e){} });
+      refreshVisiblePageAfterDataChange();
       return true;
     } finally {
       setTimeout(function(){ window.__v6Applying = false; }, 0);
