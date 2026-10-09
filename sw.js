@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v62-20261005-session-exit-render-v1";
+const CACHE_NAME = "ielts-vocab-pwa-v63-20261009-practice-sync-no-global-render-v1";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20261005-session-exit-render-v1",
-  "/styles.css?v=20261005-session-exit-render-v1"
+  "/app.js?v=20261009-practice-sync-no-global-render-v1",
+  "/styles.css?v=20261009-practice-sync-no-global-render-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
