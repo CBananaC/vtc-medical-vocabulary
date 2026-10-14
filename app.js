@@ -2456,6 +2456,63 @@ function toggleKnown() {
    ============================================================ */
 let currentAudio = null;
 const vtcAudioCache = {};
+const inlineAudioPlayers = new Set();
+const pronunciationCacheLimit = 24;
+const pronunciationCacheByteLimit = 2 * 1024 * 1024;
+
+// Audio is re-fetchable. Bound each cache by both clips and encoded bytes;
+// study progress and the complete Drive backup are never evicted here.
+function trimPronunciationCaches() {
+  const keys = Object.keys(vtcAudioCache);
+  let bytes = keys.reduce((n, key) => n + (vtcAudioCache[key]?.audioUrl?.length || 0) * 2, 0);
+  while (keys.length > pronunciationCacheLimit || bytes > pronunciationCacheByteLimit) {
+    const key = keys.shift();
+    const entry = vtcAudioCache[key];
+    bytes -= (entry?.audioUrl?.length || 0) * 2;
+    delete vtcAudioCache[key];
+    if (dictCache[key]?.audioUrl === entry?.audioUrl) {
+      // Keep the supplied definition; release only the encoded clip.
+      delete dictCache[key].audioUrl;
+    }
+  }
+  let testBytes = [...practiceTestPronunciationCache.values()]
+    .reduce((n, entry) => n + (entry?.audioUrl?.length || 0) * 2, 0);
+  while (practiceTestPronunciationCache.size > pronunciationCacheLimit || testBytes > pronunciationCacheByteLimit) {
+    const key = practiceTestPronunciationCache.keys().next().value;
+    const entry = practiceTestPronunciationCache.get(key);
+    testBytes -= (entry?.audioUrl?.length || 0) * 2;
+    practiceTestPronunciationCache.delete(key);
+  }
+}
+
+function releaseInlineAudio(audio) {
+  if (!audio) return;
+  const route = practicePronunciationAudioRoutes.get(audio);
+  if (route) {
+    [route.source, route.gain, route.compressor].forEach(node => {
+      try { node.disconnect(); } catch {}
+    });
+    practicePronunciationAudioRoutes.delete(audio);
+  }
+  inlineAudioPlayers.delete(audio);
+  try { audio.pause(); audio.removeAttribute("src"); audio.load(); } catch {}
+  if (currentAudio === audio) currentAudio = null;
+  if (window.currentAudio === audio) window.currentAudio = null;
+}
+
+function releasePracticeResources() {
+  stopPracticeAudio();
+  [...inlineAudioPlayers].forEach(releaseInlineAudio);
+  vtcAudioCache && Object.keys(vtcAudioCache).forEach(key => {
+    const entry = vtcAudioCache[key];
+    if (dictCache[key]?.audioUrl === entry?.audioUrl) delete dictCache[key].audioUrl;
+    delete vtcAudioCache[key];
+  });
+  practiceTestPronunciationCache.clear();
+  if (practicePronunciationAudioContext?.state === "running") {
+    practicePronunciationAudioContext.suspend().catch(() => {});
+  }
+}
 
 const practicePronunciationVolumeStorageKey = "vtc_vocab_test_pronunciation_volume_v1";
 const practicePronunciationVolumeMin = 0.1;
@@ -2528,7 +2585,7 @@ function configurePracticePronunciationAudio(audio) {
       source.connect(gain);
       gain.connect(compressor);
       compressor.connect(context.destination);
-      route = { gain };
+      route = { source, gain, compressor };
       practicePronunciationAudioRoutes.set(audio, route);
     }
     route.gain.gain.setTargetAtTime(practicePronunciationVolume, context.currentTime, 0.015);
@@ -2653,9 +2710,11 @@ async function fetchPracticeTestPronunciation(w) {
     return { source: "google-cloud-tts", audioUrl: data.audioDataUri, audioMimeType: data.mimeType || "audio/mpeg" };
   })();
   practiceTestPronunciationCache.set(w.key, request);
+  trimPronunciationCaches();
   try {
     const entry = await request;
     practiceTestPronunciationCache.set(w.key, entry);
+    trimPronunciationCaches();
     return entry;
   } catch (err) {
     practiceTestPronunciationCache.delete(w.key);
@@ -2676,7 +2735,14 @@ async function practicePronunciationUrlForTest(w, url) {
 
 function createInlineAudio(url) {
   preferBackgroundAudioMixing();
+  // One pronunciation player at a time; paused Web Audio sources must also
+  // be disconnected so the context cannot retain every earlier clip.
+  [...inlineAudioPlayers].forEach(releaseInlineAudio);
   const audio = document.createElement("audio");
+  inlineAudioPlayers.add(audio);
+  const release = () => releaseInlineAudio(audio);
+  audio.addEventListener("ended", release, { once: true });
+  audio.addEventListener("error", release, { once: true });
   audio.src = url;
   audio.preload = "auto";
   audio.playsInline = true;
@@ -2778,6 +2844,7 @@ async function fetchVtcAudio(w) {
   };
   vtcAudioCache[w.key] = entry;
   dictCache[w.key] = { ...(dictCache[w.key] || {}), ...entry };
+  trimPronunciationCaches();
   return entry;
 }
 
@@ -2888,8 +2955,11 @@ function startGame(mode, customPool) {
 
 function exitGame() {
   $("gameOverlay").classList.remove("show");
+  releasePracticeResources();
   game = null;
-  renderAll();
+  window.game = null;
+  $("gameBody").replaceChildren();
+  refreshVisiblePageAfterDataChange();
 }
 
 function renderGame() {
@@ -5970,6 +6040,10 @@ setTimeout(() => {
       const hasHistory = loadHistory().length > 0 || loadLastCfg();
       if (!hasHistory) wizard.step = 1;
     }
+    if (wizard.step === 0 && typeof window.renderPracticeHistoryPage === "function") {
+      window.renderPracticeHistoryPage(root);
+      return;
+    }
     if (wizard.step === 0) renderLayer0(root);
     else if (wizard.step === 1) renderLayer1(root);
     else if (wizard.step === 2) renderLayer2(root);
@@ -7306,7 +7380,7 @@ setTimeout(() => {
   window.persistActiveSession = function() {
     try {
       const g = window.game;
-      if (!g || !(g.totalAnswered > 0)) return;
+      if (!g || g.finalized || !(g.totalAnswered > 0)) return;
       localStorage.setItem(ACTIVE_SESSION_KEY, JSON.stringify(buildSessionRecord(g, false)));
     } catch (e) {}
   };
@@ -7327,7 +7401,9 @@ setTimeout(() => {
 
   function finishSessionAndSummary(completed) {
     const g = window.game;
-    if (!g) return;
+    if (!g || g.finalized) return;
+    g.finalized = true;
+    releasePracticeResources();
 
     // This session is finalized — clear the in-progress snapshot.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (e) {}
@@ -7489,7 +7565,11 @@ setTimeout(() => {
     if (meta) meta.remove();
 
     $("gameOverlay").classList.remove("show");
+    releasePracticeResources();
     window.game = null;
+    game = null;
+    $("gameBody").replaceChildren();
+    $("progressDots").replaceChildren();
 
     // After Done on a completed/summary practice, always show Practice Layer 0.
     wizard.step = 0;
@@ -7511,6 +7591,8 @@ setTimeout(() => {
     } else if (activePage === "progress" && typeof window.renderProgressTab === "function") {
       window.renderProgressTab();
     }
+    // Let the return to history paint before the full Drive merge starts.
+    window.cleanSyncV6?.schedule("practice-finished", 750);
   };
 
   // Override the practice-tab render so the legacy `renderPracticeAcc` (which
@@ -22259,7 +22341,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       </div>
     `;
   }
-  function phRenderPage(root) {
+  const PH_HISTORY_BATCH_SIZE = 20;
+  let phHistoryOffset = 0;
+  function phRenderPage(root, preserveOffset = false) {
     let history = [];
     try { history = JSON.parse(localStorage.getItem("ielts_vocab_practice_history_v1") || "[]"); }
     catch { history = []; }
@@ -22277,15 +22361,23 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       return;
     }
     const latest = history[0];
-    const rest = history.slice(1);
+    if (!preserveOffset) phHistoryOffset = 0;
+    phHistoryOffset = Math.min(phHistoryOffset, Math.max(0, Math.floor((history.length - 2) / PH_HISTORY_BATCH_SIZE) * PH_HISTORY_BATCH_SIZE));
+    const rest = history.slice(1 + phHistoryOffset, 1 + phHistoryOffset + PH_HISTORY_BATCH_SIZE);
     const restCardsHtml = rest.map(s => phRenderCard(s, false)).join("");
+    const controls = history.length > PH_HISTORY_BATCH_SIZE + 1 ? `
+      <div class="ph-actions">
+        <button class="ph-btn" onclick="practiceHistoryBatch(-1)" ${phHistoryOffset === 0 ? "disabled" : ""}>Newer sessions</button>
+        <span>${1 + phHistoryOffset}–${phHistoryOffset + rest.length} of ${history.length - 1} earlier sessions</span>
+        <button class="ph-btn" onclick="practiceHistoryBatch(1)" ${1 + phHistoryOffset + rest.length >= history.length ? "disabled" : ""}>Older sessions</button>
+      </div>` : "";
     root.innerHTML = `
       <div class="ph-page">
         <div class="ph-sticky-head">
           <div class="ph-title">Practice History</div>
           ${phRenderCard(latest, true)}
         </div>
-        <div class="ph-feed">${restCardsHtml}</div>
+        <div class="ph-feed">${restCardsHtml}${controls}</div>
         <div class="ph-feed-padding"></div>
       </div>
       <div class="ph-fab-bar">
@@ -22293,6 +22385,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       </div>
     `;
   }
+  window.renderPracticeHistoryPage = phRenderPage;
+  window.practiceHistoryBatch = function(direction) {
+    const root = document.getElementById("practiceRoot");
+    if (!root || !root.querySelector(".ph-page")) return;
+    phHistoryOffset = Math.max(0, phHistoryOffset + (direction < 0 ? -1 : 1) * PH_HISTORY_BATCH_SIZE);
+    phRenderPage(root, true);
+  };
   function phShouldTakeOver(root) {
     if (!root) return false;
     // Take over whenever legacy Layer 0 is rendered. Layer 1/2 have their own
@@ -25550,6 +25649,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     var manual = !!opts.redirect || /manual/.test(String(reason||""));
     // Never disrupt an open word card with a background sync's re-render. Defer
     // until the card is closed (closeSheet kicks a sync if changes are pending).
+    if (!manual && window.game && document.visibilityState !== "hidden") {
+      try { lsSet(K.PENDING, "1"); } catch(e){}
+      return Promise.resolve({ status:"deferred-practice-open", reason:reason });
+    }
     if (!manual && isWordSheetOpen()) {
       return Promise.resolve({ status:"deferred-sheet-open", reason:reason });
     }
@@ -25629,7 +25732,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     if (window.__v6Applying) return;                // don't sync our own apply
     // Ignore "changes" that don't actually change the data (boot/render re-saves,
     // goal recalcs, etc.) so we don't sync — and flash — for nothing.
-    try { if (lastSyncedSig !== null && payloadSig(buildPayload("dirty-check")) === lastSyncedSig) return; } catch(e){}
+    // Avoid parsing/stringifying the entire lifetime history on every answer.
+    // Answers still save immediately; Drive receives them after Done or on hide.
+    if (!window.game) {
+      try { if (lastSyncedSig !== null && payloadSig(buildPayload("dirty-check")) === lastSyncedSig) return; } catch(e){}
+    }
     try { lsSet(K.DATA_UPDATED, nowIso()); lsSet(K.PENDING, "1"); } catch(e){}
     if (timer) clearTimeout(timer);
     var delay = delayMs || (Date.now() < BOOT_UNTIL ? 6000 : 2500);
