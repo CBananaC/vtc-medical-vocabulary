@@ -1,4 +1,4 @@
-const CACHE_NAME = "ielts-vocab-pwa-v63-20261009-practice-sync-no-global-render-v1";
+const CACHE_NAME = "ielts-vocab-pwa-v64-20261014-practice-memory-v1";
 const VOCABULARY_MANIFEST_PATH = "/data/vocabulary-manifest.json";
 
 const APP_SHELL = [
@@ -10,8 +10,8 @@ const APP_SHELL = [
   "/apple-touch-icon.png",
   "/icon-192.png",
   "/icon-512.png",
-  "/app.js?v=20261009-practice-sync-no-global-render-v1",
-  "/styles.css?v=20261009-practice-sync-no-global-render-v1"
+  "/app.js?v=20261014-practice-memory-v1",
+  "/styles.css?v=20261014-practice-memory-v1"
 ];
 
 function manifestDatasetPaths(manifest) {
@@ -42,7 +42,7 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys().then(keys =>
-      Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key)))
+      Promise.all(keys.filter(key => key.startsWith("ielts-vocab-pwa-") && key !== CACHE_NAME).map(key => caches.delete(key)))
     )
   );
   self.clients.claim();
@@ -53,17 +53,30 @@ self.addEventListener("fetch", event => {
 
   if (request.method !== "GET") return;
 
-  if (new URL(request.url).pathname.startsWith("/api/")) {
-    return;
-  }
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin || url.pathname.startsWith("/api/")) return;
+  // Startup adds a fresh timestamp to every dataset request. Cache those under
+  // one stable key instead of accumulating another complete vocabulary copy.
+  const cacheUrl = new URL(url);
+  cacheUrl.searchParams.delete("ts");
+  const cacheKey = cacheUrl.href;
+  const cacheable = APP_SHELL.some(path => new URL(path, self.location.origin).pathname === url.pathname)
+    || /^\/data\/.+\.json$/i.test(url.pathname)
+    || /^\/whoami-assets\//.test(url.pathname);
 
   event.respondWith(
     fetch(request)
       .then(response => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then(cache => cache.put(request, copy)).catch(() => null);
+        if (cacheable && response.ok) {
+          const copy = response.clone();
+          event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.put(cacheKey, copy)).catch(() => null));
+        }
         return response;
       })
-      .catch(() => caches.match(request).then(cached => cached || caches.match("/index.html")))
+      .catch(() => caches.match(cacheKey).then(cached => {
+        if (cached) return cached;
+        if (request.mode === "navigate") return caches.match("/index.html");
+        return Response.error();
+      }))
   );
 });
