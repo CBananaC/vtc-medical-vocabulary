@@ -25734,7 +25734,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     // goal recalcs, etc.) so we don't sync — and flash — for nothing.
     // Avoid parsing/stringifying the entire lifetime history on every answer.
     // Answers still save immediately; Drive receives them after Done or on hide.
-    if (!window.game) {
+    if (!window.game && reason !== "practice-finished") {
       try { if (lastSyncedSig !== null && payloadSig(buildPayload("dirty-check")) === lastSyncedSig) return; } catch(e){}
     }
     try { lsSet(K.DATA_UPDATED, nowIso()); lsSet(K.PENDING, "1"); } catch(e){}
