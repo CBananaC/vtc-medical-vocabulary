@@ -22055,7 +22055,13 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
 
   function wordHasVisiblePathV2(w, exceptField = "") {
     const paths = typeof window.exactPracticePaths === "function" ? window.exactPracticePaths(w) : [];
-    if (!paths.length) return true;
+    if (!paths.length) {
+      if (exceptField === "course") return true;
+      if (selectedWordsCourses().length) return false;
+      if (exceptField !== "part" && wordsTaxonomyFilter.part.length) return false;
+      return ["course", "part"].includes(exceptField)
+        || ["lecture", "tutorial", "workshop"].every(field => field === exceptField || wordsTaxonomyFilter[field] === "__all");
+    }
     return paths.some(path => pathMatchesWordsTaxonomy(path, exceptField));
   }
 
