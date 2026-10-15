@@ -5465,10 +5465,10 @@ setTimeout(() => {
   const FILTER_DIMS = [
     { key: "levels",         field: "level",       title: "Level" },
     { key: "courses",        field: "course",      title: "Course" },
-    { key: "parts",          field: "part",        title: "Part" },
     { key: "lectures",       field: "lecture",     title: "Lecture" },
     { key: "tutorials",      field: "tutorial",    title: "Tutorial" },
     { key: "workshops",      field: "workshop",    title: "Workshop" },
+    { key: "parts",          field: "part",        title: "Part" },
     { key: "topicGroups",    field: "topicGroup",  title: "Topic Group" },
     { key: "skillViews",     field: "skillView",   title: "Skill View" },
     { key: "statuses",       field: "status",      title: "Practice Status" }
@@ -5883,7 +5883,7 @@ setTimeout(() => {
       ].map(normP);
       if (!filter.courses.some(value => courseValues.includes(normP(value)))) return false;
     }
-    if (exceptField !== "course" && exceptField !== "part" && filter.parts?.length) {
+    if (!["course", "part", "lecture", "tutorial", "workshop"].includes(exceptField) && filter.parts?.length) {
       if (!filter.parts.includes(partFilterValue(path))) return false;
     }
     const session = sessionInfoForPath(path);
@@ -5893,7 +5893,7 @@ setTimeout(() => {
       ["workshop", "workshops"]
     ];
     for (const [field, key] of sessionFacets) {
-      if (exceptField !== "course" && exceptField !== "part" && exceptField !== field && filter[key]?.length) {
+      if (exceptField !== "course" && exceptField !== field && filter[key]?.length) {
         if (!session || session.type !== field || !filter[key].map(normP).includes(normP(session.number))) return false;
       }
     }
@@ -5941,9 +5941,13 @@ setTimeout(() => {
       status: "statuses"
     }[field];
     if (groupKey) temp[groupKey] = [];
-    if (field === "course" || field === "part") {
+    if (field === "course") {
+      temp.parts = [];
       temp.lectures = []; temp.tutorials = []; temp.workshops = [];
-      if (field === "course") temp.parts = [];
+    } else if (field === "part") {
+      temp.parts = [];
+    } else if (["lecture", "tutorial", "workshop"].includes(field)) {
+      temp.parts = [];
     }
     if (field === "part" && !temp.courses.length) return [];
 
@@ -6228,7 +6232,9 @@ setTimeout(() => {
 
   // ── Layer 1: Filter / Word pool ──────────────────────────────
   function renderPracticePartGroups(selectedCourses) {
-    if (!selectedCourses.length) return `<div class="pw-section"><div class="pw-section-title">Part</div><div class="pw-filter-empty-note">Select a course to choose its parts.</div></div>`;
+    if (!selectedCourses.length) return `<div class="pw-section"><div class="pw-section-title">Part</div><div class="pw-filter-empty-note">Select a course and session to choose its parts.</div></div>`;
+    const hasSelectedSession = ["lectures", "tutorials", "workshops"].some(key => (wizard.filter[key] || []).length);
+    if (!hasSelectedSession) return `<div class="pw-section"><div class="pw-section-title">Part</div><div class="pw-filter-empty-note">Choose a session above to see its parts.</div></div>`;
     const selected = wizard.filter.parts || [];
     const groups = selectedCourses.map(course => {
       const scoped = cloneFilterConfig(wizard.filter);
@@ -6295,12 +6301,12 @@ setTimeout(() => {
     let chipGroups = "";
     const selectedCourses = wizard.filter.courses || [];
     for (const d of FILTER_DIMS) {
-      if (d.field === "part") { chipGroups += renderPracticePartGroups(selectedCourses); continue; }
       const isSessionDimension = ["lecture", "tutorial", "workshop"].includes(d.field);
       if (isSessionDimension) {
         if (d.field === "lecture") chipGroups += renderPracticeSessionGroups(selectedCourses);
         continue;
       }
+      if (d.field === "part") { chipGroups += renderPracticePartGroups(selectedCourses); continue; }
       const counts = optionCountsFor(d.field, wizard.filter);
       if (d.field === "topicGroup") {
         chipGroups += `
@@ -6530,11 +6536,13 @@ setTimeout(() => {
   window.practiceToggleFilter = function(dimKey, value) {
     if (value === "__all") {
       wizard.filter[dimKey] = [];
-      if (dimKey === "courses" || dimKey === "parts") {
-        if (dimKey === "courses") wizard.filter.parts = [];
+      if (dimKey === "courses") {
+        wizard.filter.parts = [];
         wizard.filter.lectures = [];
         wizard.filter.tutorials = [];
         wizard.filter.workshops = [];
+      } else if (["lectures", "tutorials", "workshops"].includes(dimKey)) {
+        wizard.filter.parts = [];
       }
       if (dimKey !== "skillViews") wizard.repeatPoolKeys = null;
       renderPracticeRoot();
@@ -6554,11 +6562,13 @@ setTimeout(() => {
     const arr = wizard.filter[dimKey] || (wizard.filter[dimKey] = []);
     const i = arr.indexOf(value);
     if (i >= 0) arr.splice(i, 1); else arr.push(value);
-    if (dimKey === "courses" || dimKey === "parts") {
-      if (dimKey === "courses") wizard.filter.parts = [];
+    if (dimKey === "courses") {
+      wizard.filter.parts = [];
       wizard.filter.lectures = [];
       wizard.filter.tutorials = [];
       wizard.filter.workshops = [];
+    } else if (["lectures", "tutorials", "workshops"].includes(dimKey)) {
+      wizard.filter.parts = [];
     }
     wizard.repeatPoolKeys = null;
     renderPracticeRoot();
@@ -22042,11 +22052,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       ].filter(Boolean).map(value => String(value).trim().toLowerCase());
       if (!selectedCourses.some(course => values.includes(String(course).trim().toLowerCase()))) return false;
     }
-    if (exceptField !== "course" && exceptField !== "part" && wordsTaxonomyFilter.part.length
+    if (!["course", "part", "lecture", "tutorial", "workshop"].includes(exceptField) && wordsTaxonomyFilter.part.length
       && !wordsTaxonomyFilter.part.includes(taxonomy.partFilterValue?.(path))) return false;
     const session = taxonomy.sessionInfoForPath?.(path);
     for (const field of ["lecture", "tutorial", "workshop"]) {
-      if (exceptField !== "course" && exceptField !== "part" && field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
+      if (exceptField !== "course" && field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
         if (!session || session.type !== field || session.number !== wordsTaxonomyFilter[field]) return false;
       }
     }
@@ -22096,9 +22106,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     } else if (field === "part") {
       const selected = wordsTaxonomyFilter.part;
       wordsTaxonomyFilter.part = value === "__all" ? [] : selected.includes(value) ? selected.filter(item => item !== value) : [...selected, String(value)];
-      for (const child of ["lecture", "tutorial", "workshop"]) wordsTaxonomyFilter[child] = "__all";
     } else {
       wordsTaxonomyFilter[field] = value === "__all" || wordsTaxonomyFilter[field] === value ? "__all" : String(value);
+      wordsTaxonomyFilter.part = [];
     }
     shuffledWordKeys = [];
     window.renderFilterPanel?.();
@@ -22153,7 +22163,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   }
 
   function wordsPartGroups(selectedCourses) {
-    if (!selectedCourses.length) return '<div class="filter-group"><div class="filter-group-title">Part</div><div class="filter-empty-note">Select a course to choose its parts.</div></div>';
+    if (!selectedCourses.length) return '<div class="filter-group"><div class="filter-group-title">Part</div><div class="filter-empty-note">Select a course and session to choose its parts.</div></div>';
+    const hasSelectedSession = ["lecture", "tutorial", "workshop"].some(field => wordsTaxonomyFilter[field] !== "__all");
+    if (!hasSelectedSession) return '<div class="filter-group"><div class="filter-group-title">Part</div><div class="filter-empty-note">Choose a session above to see its parts.</div></div>';
     return selectedCourses.map(course => {
       const counts = new Map();
       const scopedWords = wordsCountBase("part").filter(word => (window.exactPracticePaths?.(word) || []).some(path => pathMatchesWordsTaxonomy(path, "part", course)));
@@ -22205,8 +22217,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     return `<div class="filter-group"><div class="filter-group-title">${escapeHtml(title)}</div><div class="filter-chip-row">${chips}</div></div>`;
   }
 
-  // Final Words filter tree: Level → Course → session types → empty Topic
-  // Group placeholder → Skill View → Practice Status.
+  // Final Words filter tree: Level → Course → session types → Part → empty
+  // Topic Group placeholder → Skill View → Practice Status.
   window.renderFilterPanel = function() {
     const body = document.getElementById("filterPanelBody");
     if (!body) return;
@@ -22241,8 +22253,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         ["__all", "All", wordsCountBase("course").length],
         ...wordsCourseOptions().map(([value, count]) => [value, taxonomy.courseFilterLabel?.(value) || value, count])
       ], selectedCourses),
-      wordsPartGroups(selectedCourses),
       sessionGroups,
+      wordsPartGroups(selectedCourses),
       '<div class="filter-group"><div class="filter-group-title">Topic Group</div><div class="filter-empty-note">No topic groups yet.</div></div>',
       `<div class="filter-group"><div class="filter-group-title">Skill View</div><div class="filter-chip-row">
         <button class="filter-chip ${wordsSkill === "all" ? "active" : ""}" onclick="setWordsSkill('all')">All</button>
@@ -22301,10 +22313,10 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       const chips = [];
       if (wordsSkill !== "all") chips.push(wordsSkill[0].toUpperCase() + wordsSkill.slice(1));
       for (const courseValue of selectedWordsCourses()) chips.push(taxonomy.courseFilterLabel?.(courseValue) || "Course");
-      for (const value of wordsTaxonomyFilter.part) chips.push(taxonomy.partFilterLabel(value));
       for (const field of ["lecture", "tutorial", "workshop"]) {
         if (wordsTaxonomyFilter[field] !== "__all") chips.push(`${field[0].toUpperCase()}${field.slice(1)} ${wordsTaxonomyFilter[field]}`);
       }
+      for (const value of wordsTaxonomyFilter.part) chips.push(taxonomy.partFilterLabel(value));
       if (currentStatusFilter !== "__all") chips.push(currentStatusFilter.replace(/_/g, " "));
       if (shuffleActive) chips.push("shuffled");
       if (searchTerm) chips.push(`search: ${searchTerm}`);
