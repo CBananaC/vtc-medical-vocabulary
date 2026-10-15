@@ -5465,6 +5465,7 @@ setTimeout(() => {
   const FILTER_DIMS = [
     { key: "levels",         field: "level",       title: "Level" },
     { key: "courses",        field: "course",      title: "Course" },
+    { key: "parts",          field: "part",        title: "Part" },
     { key: "lectures",       field: "lecture",     title: "Lecture" },
     { key: "tutorials",      field: "tutorial",    title: "Tutorial" },
     { key: "workshops",      field: "workshop",    title: "Workshop" },
@@ -5566,6 +5567,10 @@ setTimeout(() => {
     // Level is intentionally a single “All” choice, and Topic Group is a
     // visible placeholder until topic metadata is ready.
     out.levels = [];
+    out.parts = out.parts.filter(value => out.courses.some(course => {
+      const parent = partCourseValue(value);
+      return normP(parent) === normP(course) || normP(parent).startsWith(normP(course) + "::");
+    }));
     out.topicGroups = [];
     delete out.sourceTypes;
     return out;
@@ -5743,7 +5748,7 @@ setTimeout(() => {
   }
   function canonLevelP(v) { const s = cleanP(v); return P_LEVELS.find(x => normP(x) === normP(s)) || ""; }
   function canonSubjectP(v) { const s = cleanP(v); return P_SUBJECTS.find(x => normP(x) === normP(s)) || ""; }
-  function pathKeyP(p) { return [p.level, p.subject, p.topic].map(normP).join("::"); }
+  function pathKeyP(p) { return [p.level, p.subject, p.topic, p.part || ""].map(normP).join("::"); }
 
   function exactPracticePaths(w) {
     const paths = [];
@@ -5763,7 +5768,9 @@ setTimeout(() => {
             topic: cleanP(p.topic),
             sourceTopic: cleanP(p.sourceTopic || p.source_topic || p.topic),
             courseTitle: cleanP(p.courseTitle || p.course_title || ""),
-            sessionLabel: cleanP(p.sessionLabel || p.session_label || "")
+            sessionLabel: cleanP(p.sessionLabel || p.session_label || ""),
+            part: cleanP(p.part || ""),
+            datasetPath: cleanP(p.datasetPath || "")
           });
           continue;
         }
@@ -5852,7 +5859,19 @@ setTimeout(() => {
     return null;
   }
 
-  window.vtcFilterTaxonomy = Object.freeze({ courseFilterValue, courseFilterLabel, sessionInfoForPath });
+  function partFilterValue(path) {
+    return JSON.stringify([courseFilterValue(path), cleanP(path?.part) || "Unassigned"]);
+  }
+  function partFilterLabel(value) {
+    try { const parts = JSON.parse(value); if (Array.isArray(parts) && parts.length === 2) return String(parts[1]); } catch {}
+    return String(value || "");
+  }
+  function partCourseValue(value) {
+    try { const parts = JSON.parse(value); if (Array.isArray(parts) && parts.length === 2) return String(parts[0]); } catch {}
+    return "";
+  }
+
+  window.vtcFilterTaxonomy = Object.freeze({ courseFilterValue, courseFilterLabel, sessionInfoForPath, partFilterValue, partFilterLabel, partCourseValue });
 
   function pathMatchesFilter(path, filter, exceptField) {
     if (!path) return false;
@@ -5864,6 +5883,9 @@ setTimeout(() => {
       ].map(normP);
       if (!filter.courses.some(value => courseValues.includes(normP(value)))) return false;
     }
+    if (exceptField !== "course" && exceptField !== "part" && filter.parts?.length) {
+      if (!filter.parts.includes(partFilterValue(path))) return false;
+    }
     const session = sessionInfoForPath(path);
     const sessionFacets = [
       ["lecture", "lectures"],
@@ -5871,7 +5893,7 @@ setTimeout(() => {
       ["workshop", "workshops"]
     ];
     for (const [field, key] of sessionFacets) {
-      if (exceptField !== field && filter[key]?.length) {
+      if (exceptField !== "course" && exceptField !== "part" && exceptField !== field && filter[key]?.length) {
         if (!session || session.type !== field || !filter[key].map(normP).includes(normP(session.number))) return false;
       }
     }
@@ -5880,7 +5902,7 @@ setTimeout(() => {
   }
 
   function filterHasPathCriteria(filter) {
-    return !!(filter.courses?.length || filter.lectures?.length || filter.tutorials?.length || filter.workshops?.length);
+    return !!(filter.courses?.length || filter.parts?.length || filter.lectures?.length || filter.tutorials?.length || filter.workshops?.length);
   }
 
   function wordMatchesPathFilter(w, filter, exceptField = "") {
@@ -5910,6 +5932,7 @@ setTimeout(() => {
     const temp = cloneFilterConfig(filter);
     const groupKey = {
       course: "courses",
+      part: "parts",
       lecture: "lectures",
       tutorial: "tutorials",
       workshop: "workshops",
@@ -5918,6 +5941,11 @@ setTimeout(() => {
       status: "statuses"
     }[field];
     if (groupKey) temp[groupKey] = [];
+    if (field === "course" || field === "part") {
+      temp.lectures = []; temp.tutorials = []; temp.workshops = [];
+      if (field === "course") temp.parts = [];
+    }
+    if (field === "part" && !temp.courses.length) return [];
 
     const view = selectedPracticeSkillView(temp);
     const passesBase = (word, { ignoreStatus = false, ignoreSkill = false } = {}) => {
@@ -5960,6 +5988,8 @@ setTimeout(() => {
         if (field === "course") {
           const value = courseFilterValue(path);
           if (value) values.add(value);
+        } else if (field === "part") {
+          values.add(partFilterValue(path));
         } else {
           const session = sessionInfoForPath(path);
           if (session?.type === field) values.add(session.number);
@@ -5970,6 +6000,7 @@ setTimeout(() => {
 
     return [...counts.entries()].sort((a, b) => {
       if (field === "course") return courseFilterLabel(a[0]).localeCompare(courseFilterLabel(b[0]));
+      if (field === "part") return (partFilterLabel(a[0]) === "Unassigned") - (partFilterLabel(b[0]) === "Unassigned") || partFilterLabel(a[0]).localeCompare(partFilterLabel(b[0]));
       return Number(a[0]) - Number(b[0]);
     });
   }
@@ -6005,6 +6036,7 @@ setTimeout(() => {
       const labels = d.field === "status" ? sel.map(s => STATUS_LABELS[s] || s)
                    : d.field === "skillView" ? sel.map(s => SKILL_VIEW_LABELS[s] || s)
                    : d.field === "course" ? sel.map(courseFilterLabel)
+                   : d.field === "part" ? sel.map(partFilterLabel)
                    : ["lecture", "tutorial", "workshop"].includes(d.field) ? sel.map(value => `${d.title} ${value}`)
                    : sel;
       parts.push(labels.join(", "));
@@ -6195,6 +6227,21 @@ setTimeout(() => {
   };
 
   // ── Layer 1: Filter / Word pool ──────────────────────────────
+  function renderPracticePartGroups(selectedCourses) {
+    if (!selectedCourses.length) return `<div class="pw-section"><div class="pw-section-title">Part</div><div class="pw-filter-empty-note">Select a course to choose its parts.</div></div>`;
+    const selected = wizard.filter.parts || [];
+    const groups = selectedCourses.map(course => {
+      const scoped = cloneFilterConfig(wizard.filter);
+      scoped.courses = [course];
+      const chips = optionCountsFor("part", scoped).map(([value, count]) => {
+        const safeValue = value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        return `<button class="pw-chip ${selected.includes(value) ? "active" : ""}" onclick="practiceToggleFilter('parts','${escapeHtml(safeValue)}')">${escapeHtml(partFilterLabel(value))}<span class="n">${count}</span></button>`;
+      }).join("");
+      return `<div class="pw-course-session-group"><div class="pw-course-session-title">${escapeHtml(courseFilterLabel(course))}</div><div class="pw-chip-row">${chips}</div></div>`;
+    }).join("");
+    return `<div class="pw-section pw-parts-section"><div class="pw-section-title">Part</div><div class="pw-chip-row"><button class="pw-chip ${selected.length ? "" : "active"}" onclick="practiceToggleFilter('parts','__all')">All parts</button></div>${groups}</div>`;
+  }
+
   function renderPracticeSessionGroups(selectedCourses) {
     if (!selectedCourses.length) {
       return `
@@ -6248,6 +6295,7 @@ setTimeout(() => {
     let chipGroups = "";
     const selectedCourses = wizard.filter.courses || [];
     for (const d of FILTER_DIMS) {
+      if (d.field === "part") { chipGroups += renderPracticePartGroups(selectedCourses); continue; }
       const isSessionDimension = ["lecture", "tutorial", "workshop"].includes(d.field);
       if (isSessionDimension) {
         if (d.field === "lecture") chipGroups += renderPracticeSessionGroups(selectedCourses);
@@ -6482,7 +6530,8 @@ setTimeout(() => {
   window.practiceToggleFilter = function(dimKey, value) {
     if (value === "__all") {
       wizard.filter[dimKey] = [];
-      if (dimKey === "courses") {
+      if (dimKey === "courses" || dimKey === "parts") {
+        if (dimKey === "courses") wizard.filter.parts = [];
         wizard.filter.lectures = [];
         wizard.filter.tutorials = [];
         wizard.filter.workshops = [];
@@ -6505,7 +6554,8 @@ setTimeout(() => {
     const arr = wizard.filter[dimKey] || (wizard.filter[dimKey] = []);
     const i = arr.indexOf(value);
     if (i >= 0) arr.splice(i, 1); else arr.push(value);
-    if (dimKey === "courses") {
+    if (dimKey === "courses" || dimKey === "parts") {
+      if (dimKey === "courses") wizard.filter.parts = [];
       wizard.filter.lectures = [];
       wizard.filter.tutorials = [];
       wizard.filter.workshops = [];
@@ -8910,7 +8960,7 @@ setTimeout(() => {
   }
 
   function pathKeyExact(p) {
-    return [p.level, p.subject, p.topic].map(normExact).join("::");
+    return [p.level, p.subject, p.topic, p.part || ""].map(normExact).join("::");
   }
 
   function uniqPathsExact(paths) {
@@ -9116,8 +9166,10 @@ setTimeout(() => {
         rec.categories.push(cat);
       }
 
-      if (!rec.exactSuggestedCombinedPaths.some(x => pathKeyExact(x) === pathKeyExact(p))) {
-        rec.exactSuggestedCombinedPaths.push(p);
+      const partNames = [...new Set((Array.isArray(item.parts) ? item.parts : item.part ? [item.part] : []).map(cleanExact).filter(Boolean))];
+      const sourcePaths = (partNames.length ? partNames : [""]).map(part => ({ ...p, part, datasetPath: datasetMeta?.path || "" }));
+      for (const sourcePath of sourcePaths) {
+        if (!rec.exactSuggestedCombinedPaths.some(x => pathKeyExact(x) === pathKeyExact(sourcePath))) rec.exactSuggestedCombinedPaths.push(sourcePath);
       }
     }
 
@@ -21372,6 +21424,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         if (!courseValue) continue;
         if (group === "course") {
           entries.set(courseValue, { key: courseValue, label: courseLabelFor(courseValue), course: courseValue });
+        } else if (group === "part") {
+          const key = taxonomy.partFilterValue(p);
+          entries.set(key, { key, label: `${courseLabelFor(courseValue)} · ${taxonomy.partFilterLabel(key)}`, course: courseValue, part: taxonomy.partFilterLabel(key) });
         } else if (group === "session") {
           const session = taxonomy.sessionInfoForPath?.(p);
           if (!session) continue;
@@ -21400,7 +21455,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     }
     const arr = [...buckets.values()].map(({ key, ...row }) => ({ name: key, ...row }));
     const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
-    if (group === "course") arr.sort((a, b) => collator.compare(a.label, b.label));
+    if (group === "course" || group === "part") arr.sort((a, b) => collator.compare(a.label, b.label));
     else arr.sort((a, b) => collator.compare(courseLabelFor(a.course), courseLabelFor(b.course))
       || (typeOrder[a.type] ?? 99) - (typeOrder[b.type] ?? 99)
       || a.number - b.number);
@@ -21425,6 +21480,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   function chartGroupLabel(group, name) {
     const taxonomy = window.vtcFilterTaxonomy || {};
     if (group === "course") return taxonomy.courseFilterLabel?.(name) || name;
+    if (group === "part") return `${taxonomy.courseFilterLabel(taxonomy.partCourseValue(name))} · ${taxonomy.partFilterLabel(name)}`;
     if (group === "session") {
       const parts = chartSessionParts(name);
       if (parts) {
@@ -21437,8 +21493,9 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   }
 
   function chartGroupFilter(group, name) {
-    const f = { levels: [], courses: [], lectures: [], tutorials: [], workshops: [], topicGroups: [], statuses: [] };
+    const f = { levels: [], courses: [], parts: [], lectures: [], tutorials: [], workshops: [], topicGroups: [], statuses: [] };
     if (group === "course") f.courses = [name];
+    else if (group === "part") { f.parts = [name]; f.courses = [window.vtcFilterTaxonomy.partCourseValue(name)]; }
     else if (group === "session") {
       const parts = chartSessionParts(name);
       if (parts && ["lecture", "tutorial", "workshop"].includes(parts.type)) {
@@ -21457,6 +21514,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       if (String(p?.level || "").trim().toLowerCase() !== "vtc") return false;
       const courseValue = taxonomy.courseFilterValue?.(p) || "";
       if (group === "course") return courseValue === name;
+      if (group === "part") return taxonomy.partFilterValue(p) === name;
       if (group === "session" && sessionParts) {
         const session = taxonomy.sessionInfoForPath?.(p);
         return courseValue === sessionParts.course && session?.type === sessionParts.type && String(session?.number) === sessionParts.number;
@@ -21512,7 +21570,8 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     const bookmarked = within(words.filter(isWordBookmarked).map(w => w.key));
     const filter = chartGroupFilter(group, name);
     const total = groupSet.size;
-    const labelPrefix = group === "course" ? "Course"
+    const labelPrefix = group === "part" ? "Part"
+                      : group === "course" ? "Course"
                       : group === "session" ? "Session"
                       : "";
     const displayName = chartGroupLabel(group, name);
@@ -21643,6 +21702,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         <div class="g-prog-chart-tabs tab-row" style="margin-top:6px;">
           <button class="${progressGroup === "all" ? "active" : ""}" onclick="progressGroupSet('all')">All</button>
           <button class="${progressGroup === "course" ? "active" : ""}" onclick="progressGroupSet('course')">Course</button>
+          <button class="${progressGroup === "part" ? "active" : ""}" onclick="progressGroupSet('part')">Part</button>
           <button class="${progressGroup === "session" ? "active" : ""}" onclick="progressGroupSet('session')">Session</button>
         </div>
         <div class="g-prog-chart-bars">${rowsHtml(rows, progressView)}</div>
@@ -21663,7 +21723,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     pgRefreshAfterChartTab();
   };
   window.progressGroupSet = function(g) {
-    if (!["all", "course", "session"].includes(g)) g = "all";
+    if (!["all", "course", "part", "session"].includes(g)) g = "all";
     progressGroup = g;
     pgRefreshAfterChartTab();
   };
@@ -21953,6 +22013,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
   const taxonomy = window.vtcFilterTaxonomy || {};
   const wordsTaxonomyFilter = {
     course: [],
+    part: [],
     lecture: "__all",
     tutorial: "__all",
     workshop: "__all"
@@ -21981,9 +22042,11 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       ].filter(Boolean).map(value => String(value).trim().toLowerCase());
       if (!selectedCourses.some(course => values.includes(String(course).trim().toLowerCase()))) return false;
     }
+    if (exceptField !== "course" && exceptField !== "part" && wordsTaxonomyFilter.part.length
+      && !wordsTaxonomyFilter.part.includes(taxonomy.partFilterValue?.(path))) return false;
     const session = taxonomy.sessionInfoForPath?.(path);
     for (const field of ["lecture", "tutorial", "workshop"]) {
-      if (field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
+      if (exceptField !== "course" && exceptField !== "part" && field !== exceptField && wordsTaxonomyFilter[field] !== "__all") {
         if (!session || session.type !== field || session.number !== wordsTaxonomyFilter[field]) return false;
       }
     }
@@ -22020,9 +22083,14 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         ? selected.filter(item => item !== String(value))
         : [...selected, String(value)]);
       wordsTaxonomyFilter.course = next;
+      wordsTaxonomyFilter.part = [];
       wordsTaxonomyFilter.lecture = "__all";
       wordsTaxonomyFilter.tutorial = "__all";
       wordsTaxonomyFilter.workshop = "__all";
+    } else if (field === "part") {
+      const selected = wordsTaxonomyFilter.part;
+      wordsTaxonomyFilter.part = value === "__all" ? [] : selected.includes(value) ? selected.filter(item => item !== value) : [...selected, String(value)];
+      for (const child of ["lecture", "tutorial", "workshop"]) wordsTaxonomyFilter[child] = "__all";
     } else {
       wordsTaxonomyFilter[field] = value === "__all" || wordsTaxonomyFilter[field] === value ? "__all" : String(value);
     }
@@ -22076,6 +22144,22 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => (taxonomy.courseFilterLabel?.(a[0]) || a[0]).localeCompare(taxonomy.courseFilterLabel?.(b[0]) || b[0]));
+  }
+
+  function wordsPartGroups(selectedCourses) {
+    if (!selectedCourses.length) return '<div class="filter-group"><div class="filter-group-title">Part</div><div class="filter-empty-note">Select a course to choose its parts.</div></div>';
+    return selectedCourses.map(course => {
+      const counts = new Map();
+      const scopedWords = wordsCountBase("part").filter(word => (window.exactPracticePaths?.(word) || []).some(path => pathMatchesWordsTaxonomy(path, "part", course)));
+      for (const word of scopedWords) {
+        const values = new Set((window.exactPracticePaths?.(word) || []).filter(path => pathMatchesWordsTaxonomy(path, "part", course)).map(path => taxonomy.partFilterValue?.(path)).filter(Boolean));
+        for (const value of values) counts.set(value, (counts.get(value) || 0) + 1);
+      }
+      const options = [...counts.entries()].sort((a,b) => (taxonomy.partFilterLabel(a[0]) === "Unassigned") - (taxonomy.partFilterLabel(b[0]) === "Unassigned") || taxonomy.partFilterLabel(a[0]).localeCompare(taxonomy.partFilterLabel(b[0])));
+      return wordsFilterGroup(selectedCourses.length === 1 ? "Part" : `Part · ${taxonomy.courseFilterLabel(course)}`, "part", [
+        ["__all", "All parts", scopedWords.length], ...options.map(([value,count]) => [value,taxonomy.partFilterLabel(value),count])
+      ], wordsTaxonomyFilter.part);
+    }).join("");
   }
 
   function wordsSessionOptions(field) {
@@ -22151,6 +22235,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
         ["__all", "All", wordsCountBase("course").length],
         ...wordsCourseOptions().map(([value, count]) => [value, taxonomy.courseFilterLabel?.(value) || value, count])
       ], selectedCourses),
+      wordsPartGroups(selectedCourses),
       sessionGroups,
       '<div class="filter-group"><div class="filter-group-title">Topic Group</div><div class="filter-empty-note">No topic groups yet.</div></div>',
       `<div class="filter-group"><div class="filter-group-title">Skill View</div><div class="filter-chip-row">
@@ -22178,6 +22263,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     return wordsSkill !== "all"
       || currentStatusFilter !== "__all"
       || selectedWordsCourses().length > 0
+      || wordsTaxonomyFilter.part.length > 0
       || ["lecture", "tutorial", "workshop"].some(field => wordsTaxonomyFilter[field] !== "__all");
   };
   try { hasActiveWordFilters = window.hasActiveWordFilters; } catch {}
@@ -22185,6 +22271,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
     wordsSkill = "all";
     try { localStorage.setItem(LS_KEYS.WORDS_SKILL, "all"); } catch {}
     wordsTaxonomyFilter.course = [];
+    wordsTaxonomyFilter.part = [];
     for (const field of ["lecture", "tutorial", "workshop"]) wordsTaxonomyFilter[field] = "__all";
     currentLevelFilter = currentTopHeaderFilter = currentBoxedBoldFilter = currentBoldTitleFilter = "__all";
     currentStatusFilter = "__all";
@@ -22208,6 +22295,7 @@ window.__reloadExactSuggestedCombinedVocabulary = async function() {
       const chips = [];
       if (wordsSkill !== "all") chips.push(wordsSkill[0].toUpperCase() + wordsSkill.slice(1));
       for (const courseValue of selectedWordsCourses()) chips.push(taxonomy.courseFilterLabel?.(courseValue) || "Course");
+      for (const value of wordsTaxonomyFilter.part) chips.push(taxonomy.partFilterLabel(value));
       for (const field of ["lecture", "tutorial", "workshop"]) {
         if (wordsTaxonomyFilter[field] !== "__all") chips.push(`${field[0].toUpperCase()}${field.slice(1)} ${wordsTaxonomyFilter[field]}`);
       }
